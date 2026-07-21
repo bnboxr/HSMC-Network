@@ -1,0 +1,21 @@
+# Astra-HSMC
+
+> Astra-HSMC is an independent Layer-1 crypto network (HSMC token) with a Rust node, Stratum V2 mining, on-chain staking, a payment gateway (HSMCPay), and cross-chain bridge to BSC/ETH. Built by Ifrim George / OXR.org.
+
+Astra-HSMC ships a full stack: a public Rust node (RocksDB, RingCT privacy, Dandelion++), BIP39 wallets with AES-256-GCM seed storage, a DEX-style swap and liquidity pools, staking with real APR, on-chain governance, merchant tools, and an AI co-pilot integrated in the user dashboard.
+
+## Pages
+
+- [Home](/): Overview of the Astra-HSMC network, HSMC token, and live network stats.
+- [Landing](/landing): Product landing page — features, tokenomics, and call-to-action to launch the app.
+- [Whitepaper](/whitepaper): Technical whitepaper covering consensus, privacy protocol, tokenomics, and legal disclaimers.
+- [Blockchain Node](/node): Live node telemetry, peers, mempool, and cryptographic test suite.
+- [Rust Node](/rust-node): Documentation for running the public Rust node (VPS setup, Cloudflare Tunnel, Stratum V2).
+- [Mainnet Hub](/mainnet): Mainnet launch command center with readiness checklist and deployment steps.
+- [Mainnet Readiness](/mainnet/readiness): Detailed readiness report — contracts, bridge, liquidity, listings.
+- [Investors](/investors): Investor portal — tokenomics, distribution schedule, and roadmap.
+- [Listing Kit](/listing-kit): Assets and metadata for exchange listings (CoinGecko, CoinMarketCap, MEXC, Gate).
+
+## Optional
+
+- [Onboarding](/onboarding): Account creation, wallet setup, and seed-phrase import flow.

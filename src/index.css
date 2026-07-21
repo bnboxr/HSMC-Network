@@ -1,0 +1,495 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ─── DARK MODE (default) — Fintech Terminal ─── */
+  :root,
+  html.dark {
+    --background: 240 10% 4%;
+    --foreground: 220 15% 85%;
+
+    --card: 240 10% 7%;
+    --card-foreground: 220 15% 85%;
+
+    --popover: 240 10% 8%;
+    --popover-foreground: 220 15% 85%;
+
+    /* Electric blue — refined, not neon */
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 98%;
+
+    /* Steel blue secondary */
+    --secondary: 215 25% 47%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 240 10% 12%;
+    --muted-foreground: 220 10% 55%;
+
+    /* Subtle accent — matches primary */
+    --accent: 217 91% 60%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62% 55%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 10% 16%;
+    --input: 240 10% 12%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.5rem;
+
+    /* Glass system */
+    --glass-bg: 240 10% 4%;
+    --glass-border: 240 10% 16%;
+
+    /* Gradients — sophisticated dark */
+    --gradient-primary: linear-gradient(135deg, hsl(217 91% 60%) 0%, hsl(215 25% 47%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(217 91% 60%) 0%, hsl(215 50% 35%) 100%);
+    --gradient-gold: linear-gradient(135deg, hsl(40 60% 55%) 0%, hsl(30 50% 45%) 100%);
+    --gradient-glow: radial-gradient(ellipse at center, hsl(217 91% 60% / 0.12) 0%, transparent 70%);
+    --gradient-hero: radial-gradient(ellipse at 30% 20%, hsl(217 91% 60% / 0.06) 0%, transparent 40%),
+                     radial-gradient(ellipse at 70% 80%, hsl(215 25% 47% / 0.04) 0%, transparent 40%);
+
+    /* Shadows — deep, subtle */
+    --shadow-neon: 0 0 24px hsl(217 91% 60% / 0.15), 0 0 48px hsl(217 91% 60% / 0.06);
+    --shadow-neon-green: 0 0 24px hsl(215 25% 47% / 0.15), 0 0 48px hsl(215 25% 47% / 0.06);
+    --shadow-neon-purple: 0 0 24px hsl(217 91% 60% / 0.15), 0 0 48px hsl(217 91% 60% / 0.06);
+    --shadow-card: 0 4px 32px hsl(240 10% 0% / 0.5), inset 0 1px 0 hsl(220 15% 85% / 0.04);
+
+    /* Sidebar */
+    --sidebar-background: 240 10% 5%;
+    --sidebar-foreground: 220 15% 85%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 10% 12%;
+    --sidebar-accent-foreground: 220 15% 85%;
+    --sidebar-border: 240 10% 14%;
+    --sidebar-ring: 217 91% 60%;
+
+    /* Charts */
+    --chart-1: 217 91% 60%;
+    --chart-2: 215 25% 47%;
+    --chart-3: 217 70% 50%;
+    --chart-4: 200 40% 55%;
+    --chart-5: 220 30% 60%;
+
+    /* Shadow tokens */
+    --shadow-2xs: 0 1px 2px hsl(240 10% 0% / 0.3);
+    --shadow-xs: 0 1px 4px hsl(240 10% 0% / 0.4);
+    --shadow-sm: 0 2px 8px hsl(240 10% 0% / 0.5);
+    --shadow-md: 0 4px 16px hsl(240 10% 0% / 0.6);
+    --shadow-lg: 0 8px 32px hsl(240 10% 0% / 0.6);
+    --shadow-xl: 0 16px 64px hsl(240 10% 0% / 0.7);
+    --shadow-2xl: 0 24px 96px hsl(240 10% 0% / 0.8);
+
+    --font-sans: 'Inter', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    --font-serif: 'Inter', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Space Mono', ui-monospace, monospace;
+
+    --tracking-normal: -0.01em;
+    --spacing: 0.25rem;
+  }
+
+  /* ─── LIGHT MODE ─── */
+  html.light {
+    --background: 220 15% 95%;
+    --foreground: 240 10% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 10%;
+
+    --primary: 217 80% 45%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 215 25% 40%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 220 15% 88%;
+    --muted-foreground: 220 10% 42%;
+
+    --accent: 217 80% 45%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 220 15% 78%;
+    --input: 220 15% 86%;
+    --ring: 217 80% 45%;
+
+    --glass-bg: 0 0% 100%;
+    --glass-border: 220 15% 74%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(217 80% 45%) 0%, hsl(215 25% 40%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(217 80% 45%) 0%, hsl(215 40% 30%) 100%);
+    --gradient-gold: linear-gradient(135deg, hsl(40 60% 48%) 0%, hsl(30 50% 42%) 100%);
+
+    --shadow-neon: 0 0 16px hsl(217 80% 45% / 0.15), 0 0 32px hsl(217 80% 45% / 0.06);
+    --shadow-neon-green: 0 0 16px hsl(215 25% 40% / 0.15), 0 0 32px hsl(215 25% 40% / 0.06);
+    --shadow-neon-purple: 0 0 16px hsl(217 80% 45% / 0.15), 0 0 32px hsl(217 80% 45% / 0.06);
+    --shadow-card: 0 4px 24px hsl(240 10% 20% / 0.1), 0 1px 4px hsl(240 10% 20% / 0.06);
+    --shadow-2xs: 0 1px 2px hsl(240 10% 20% / 0.06);
+    --shadow-xs: 0 1px 4px hsl(240 10% 20% / 0.08);
+    --shadow-sm: 0 2px 8px hsl(240 10% 20% / 0.10);
+    --shadow-md: 0 4px 16px hsl(240 10% 20% / 0.12);
+    --shadow-lg: 0 8px 32px hsl(240 10% 20% / 0.14);
+    --shadow-xl: 0 16px 64px hsl(240 10% 20% / 0.16);
+    --shadow-2xl: 0 24px 96px hsl(240 10% 20% / 0.18);
+
+    --sidebar-background: 220 15% 92%;
+    --sidebar-foreground: 240 10% 10%;
+    --sidebar-primary: 217 80% 45%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 86%;
+    --sidebar-accent-foreground: 240 10% 10%;
+    --sidebar-border: 220 15% 78%;
+    --sidebar-ring: 217 80% 45%;
+
+    --chart-1: 217 80% 45%;
+    --chart-2: 215 25% 40%;
+    --chart-3: 217 60% 38%;
+    --chart-4: 200 40% 42%;
+    --chart-5: 220 30% 48%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    letter-spacing: var(--tracking-normal);
+    /* Subtle dot-grid terminal background */
+    background-image:
+      radial-gradient(circle, hsl(217 91% 60% / 0.03) 1px, transparent 1px);
+    background-size: 24px 24px;
+    background-position: 0 0;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
+    color: hsl(var(--foreground));
+  }
+
+  /* Subtle scanline texture overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      hsl(var(--foreground) / 0.008) 2px,
+      hsl(var(--foreground) / 0.008) 3px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+}
+
+@layer components {
+  /* ─── Glass System — Fintech Terminal ─── */
+  .glass {
+    @apply backdrop-blur-md border;
+    background: hsl(var(--glass-bg) / 0.7);
+    border-color: hsl(var(--glass-border) / 0.6);
+  }
+
+  .glass-card {
+    @apply glass rounded-lg;
+    box-shadow: var(--shadow-card);
+    transition: border-color 0.25s, box-shadow 0.25s;
+  }
+
+  .glass-card:hover {
+    border-color: hsl(var(--primary) / 0.15);
+    box-shadow: var(--shadow-card), 0 0 30px hsl(var(--primary) / 0.06);
+  }
+
+  .glass-panel {
+    @apply glass rounded-lg p-6;
+    box-shadow: var(--shadow-card);
+    transition: border-color 0.25s, box-shadow 0.25s;
+  }
+
+  .glass-panel:hover {
+    border-color: hsl(var(--primary) / 0.12);
+    box-shadow: var(--shadow-card), 0 0 24px hsl(var(--primary) / 0.04);
+  }
+
+  /* ─── Text Effects — Refined ─── */
+  .neon-text {
+    color: hsl(var(--primary));
+    text-shadow:
+      0 0 8px hsl(var(--primary) / 0.4),
+      0 0 20px hsl(var(--primary) / 0.15);
+  }
+
+  .neon-text-green {
+    color: hsl(var(--secondary));
+    text-shadow:
+      0 0 8px hsl(var(--secondary) / 0.4),
+      0 0 20px hsl(var(--secondary) / 0.15);
+  }
+
+  .neon-text-purple {
+    color: hsl(var(--accent));
+    text-shadow:
+      0 0 8px hsl(var(--accent) / 0.4),
+      0 0 20px hsl(var(--accent) / 0.15);
+  }
+
+  .neon-border {
+    border-color: hsl(var(--primary) / 0.4);
+    box-shadow: var(--shadow-neon);
+  }
+
+  .neon-glow {
+    box-shadow: var(--shadow-neon);
+  }
+
+  /* ─── Gradient Text ─── */
+  .gradient-text {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .gradient-text-accent {
+    background: var(--gradient-accent);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .gradient-text-gold {
+    background: var(--gradient-gold);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* ─── Terminal ─── */
+  .terminal {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    border: 1px solid hsl(var(--border));
+    position: relative;
+  }
+
+  .terminal::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 18px,
+      hsl(var(--primary) / 0.02) 18px, hsl(var(--primary) / 0.02) 19px
+    );
+    pointer-events: none;
+    border-radius: inherit;
+  }
+
+  .terminal-prompt { color: hsl(var(--secondary)); }
+  .terminal-output { color: hsl(220 10% 60%); }
+  .terminal-error  { color: hsl(var(--destructive)); }
+  .terminal-success { color: hsl(var(--secondary)); }
+  .terminal-info   { color: hsl(var(--primary)); }
+  .terminal-dim    { color: hsl(215 10% 38%); }
+
+  /* ─── Status Chips — Blue/Steel ─── */
+  .status-syncing {
+    @apply border;
+    background: hsl(40 40% 50% / 0.12);
+    color: hsl(40 40% 65%);
+    border-color: hsl(40 40% 50% / 0.3);
+  }
+
+  .status-stable {
+    @apply border;
+    background: hsl(215 25% 47% / 0.12);
+    color: hsl(215 25% 60%);
+    border-color: hsl(215 25% 47% / 0.3);
+  }
+
+  .status-finalizing {
+    @apply border;
+    background: hsl(217 91% 60% / 0.12);
+    color: hsl(217 91% 68%);
+    border-color: hsl(217 91% 60% / 0.3);
+  }
+
+  .status-pending {
+    @apply border;
+    background: hsl(40 40% 50% / 0.12);
+    color: hsl(40 40% 65%);
+    border-color: hsl(40 40% 50% / 0.3);
+  }
+
+  .status-confirmed {
+    @apply border;
+    background: hsl(215 25% 47% / 0.12);
+    color: hsl(215 25% 60%);
+    border-color: hsl(215 25% 47% / 0.3);
+  }
+
+  /* ─── Section Headers ─── */
+  .section-eyebrow {
+    @apply text-xs font-mono uppercase tracking-widest;
+    color: hsl(var(--primary));
+    letter-spacing: 0.18em;
+  }
+
+  /* ─── Data Grid ─── */
+  .data-table { @apply w-full; }
+
+  .data-table th {
+    @apply text-left text-xs uppercase tracking-wider py-3 px-4 border-b;
+    font-family: var(--font-mono);
+    color: hsl(var(--muted-foreground));
+    border-color: hsl(var(--border));
+    letter-spacing: 0.1em;
+  }
+
+  .data-table td {
+    @apply py-3 px-4 text-sm;
+    border-bottom: 1px solid hsl(var(--border) / 0.5);
+  }
+
+  .data-table tr:hover td { background: hsl(var(--muted) / 0.4); }
+
+  /* ─── Hash display ─── */
+  .hash-display {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    max-width: 120px;
+    @apply truncate;
+    color: hsl(var(--primary));
+  }
+
+  /* ─── Gradient Backgrounds ─── */
+  .gradient-mesh {
+    background:
+      radial-gradient(ellipse at 15% 25%, hsl(var(--primary) / 0.04) 0%, transparent 45%),
+      radial-gradient(ellipse at 85% 75%, hsl(var(--accent) / 0.03) 0%, transparent 45%),
+      radial-gradient(ellipse at 50% 50%, hsl(var(--secondary) / 0.02) 0%, transparent 55%);
+  }
+
+  .gradient-hero {
+    background:
+      radial-gradient(ellipse at 25% 15%, hsl(var(--primary) / 0.06) 0%, transparent 40%),
+      radial-gradient(ellipse at 75% 85%, hsl(var(--accent) / 0.04) 0%, transparent 40%),
+      hsl(var(--background));
+  }
+
+  /* ─── Scrollbar — Thin & Minimal ─── */
+  .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: hsl(var(--muted) / 0.2); border-radius: 2px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.2); border-radius: 2px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: hsl(var(--primary) / 0.3); }
+
+  /* ─── Stat Card — Terminal Glass ─── */
+  .stat-card {
+    @apply glass-panel relative overflow-hidden;
+    transition: border-color 0.25s, box-shadow 0.25s;
+  }
+
+  .stat-card:hover {
+    border-color: hsl(var(--primary) / 0.2);
+    box-shadow: var(--shadow-card), 0 0 24px hsl(var(--primary) / 0.04);
+  }
+
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: var(--gradient-primary);
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+
+  .stat-card:hover::before { opacity: 1; }
+
+  /* ─── Terminal Dot Grid Background ─── */
+  .dot-grid-bg {
+    background-image: radial-gradient(circle, hsl(217 91% 60% / 0.04) 1px, transparent 1px);
+    background-size: 20px 20px;
+    background-position: 0 0;
+  }
+
+  /* ─── Empty State ─── */
+  .empty-state {
+    @apply flex flex-col items-center justify-center py-16 text-center gap-3;
+  }
+
+  .empty-state-icon {
+    @apply w-12 h-12 rounded-lg flex items-center justify-center mb-2;
+    background: hsl(var(--muted) / 0.5);
+    color: hsl(var(--muted-foreground));
+  }
+}
+
+@layer utilities {
+  .animate-float { animation: float 6s ease-in-out infinite; }
+  .animate-pulse-slow { animation: pulse 3s ease-in-out infinite; }
+  .animate-glow { animation: glow 3s ease-in-out infinite alternate; }
+  .animate-slide-up { animation: slideUp 0.3s ease-out; }
+  .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+  .animate-scale-in { animation: scaleIn 0.25s ease-out; }
+  .animate-scan { animation: scan 4s linear infinite; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes glow {
+  from { box-shadow: 0 0 8px hsl(var(--primary) / 0.2), 0 0 16px hsl(var(--primary) / 0.08); }
+  to   { box-shadow: 0 0 18px hsl(var(--primary) / 0.35), 0 0 36px hsl(var(--primary) / 0.12); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes scan {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(100vh); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

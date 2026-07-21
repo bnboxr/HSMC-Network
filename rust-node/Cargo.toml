@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+    "hsmc-core",
+    "hsmc-crypto",
+    "hsmc-p2p",
+    "hsmc-rpc",
+    "hsmc-storage",
+    "hsmc-node",
+    "hsmc-stratum",
+]
+
+[workspace.dependencies]
+tokio              = { version = "1", features = ["full", "rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+sha2               = "0.10"
+sha3               = "0.10"
+hex                = "0.4"
+rand               = "0.8"
+thiserror          = "1"
+anyhow             = "1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+chrono             = { version = "0.4", features = ["serde"] }
+uuid               = { version = "1", features = ["v4", "serde"] }
+axum               = { version = "0.7", features = ["macros", "ws"] }
+tower              = { version = "0.4", features = ["full"] }
+tower-http         = { version = "0.5", features = ["cors", "trace", "compression-gzip", "limit"] }
+reqwest            = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+tokio-tungstenite  = { version = "0.23", features = ["native-tls"] }
+futures-util       = "0.3"
+curve25519-dalek   = { version = "4", features = ["rand_core", "serde"] }
+bulletproofs       = "4"
+merlin             = "3"
+rocksdb            = { version = "0.22", default-features = false, features = ["lz4", "snappy"] }
+hmac               = { version = "0.12", features = ["std"] }
+pbkdf2             = "0.12"
+zeroize            = { version = "1", features = ["derive"] }
+subtle             = "2"
+bincode            = "1"
+lru                = "0.12"
+dashmap            = "5"
+parking_lot        = "0.12"
+once_cell          = "1"
+bytes              = "1"
+bitflags           = "2"
+indexmap           = { version = "2", features = ["serde"] }
+num-traits         = "0.2"
+num_cpus           = "1"
+itertools          = "0.12"
+smallvec           = { version = "1", features = ["serde"] }
+flate2             = "1"
+base64             = "0.22"
+rayon              = "1"
+crossbeam-channel  = "0.5"

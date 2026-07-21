@@ -1,0 +1,23 @@
+{
+  "name": "hsmc-bridge-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "wHSMC + BridgeMinter — production-ready BEP-20/ERC-20 bridge contracts",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:bsc-testnet": "hardhat run scripts/deploy.ts --network bscTestnet",
+    "deploy:bsc": "hardhat run scripts/deploy.ts --network bsc",
+    "deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia",
+    "verify:bsc": "hardhat verify --network bsc",
+    "create-pancake-pool": "hardhat run scripts/createPancakePool.ts --network bsc"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0",
+    "@openzeppelin/contracts": "^5.0.2",
+    "dotenv": "^16.4.5",
+    "typescript": "^5.4.0",
+    "ts-node": "^10.9.2"
+  }
+}

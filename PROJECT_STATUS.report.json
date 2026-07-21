@@ -1,0 +1,1451 @@
+{
+  "counts": {
+    "📦": 6,
+    "🔵": 92,
+    "🟡": 19,
+    "✅": 171
+  },
+  "mocks": [],
+  "report": [
+    {
+      "path": ".env",
+      "status": "📦",
+      "reason": "auto-generated"
+    },
+    {
+      "path": "PROJECT_STATUS.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "PROJECT_STATUS.report.json",
+      "status": "🟡",
+      "reason": "external execution: /mainnet.*deploy/i"
+    },
+    {
+      "path": "README.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "bun.lock",
+      "status": "📦",
+      "reason": "auto-generated"
+    },
+    {
+      "path": "bun.lockb",
+      "status": "📦",
+      "reason": "auto-generated"
+    },
+    {
+      "path": "components.json",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "contracts/.env.example",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "contracts/DEPLOY_GUIDE.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "contracts/Makefile",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "contracts/README.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "contracts/bridge/BridgeMinter.sol",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "contracts/bridge/WHSMC.sol",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "contracts/hardhat.config.ts",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "contracts/package.json",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "contracts/relayer/relayer.ts",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "contracts/test/WHSMC.test.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "eslint.config.js",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "index.html",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "ipfs-publish/publish.sh",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "legal/LEGAL_NOTICE.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "legal/Privacy_Policy_TEMPLATE.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "legal/README.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "legal/Terms_of_Service_TEMPLATE.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "legal/Token_Disclaimer.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "listings/MEXC_GATE_README.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "listings/coingecko.json",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "listings/coinmarketcap.json",
+      "status": "🟡",
+      "reason": "external execution: /mainnet.*deploy/i"
+    },
+    {
+      "path": "package-lock.json",
+      "status": "📦",
+      "reason": "auto-generated"
+    },
+    {
+      "path": "package.json",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "postcss.config.js",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "public/PROJECT_STATUS.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "public/favicon.ico",
+      "status": "🔵",
+      "reason": "asset"
+    },
+    {
+      "path": "public/favicon.png",
+      "status": "🔵",
+      "reason": "asset"
+    },
+    {
+      "path": "public/hsmc-logo.png",
+      "status": "🔵",
+      "reason": "asset"
+    },
+    {
+      "path": "public/placeholder.svg",
+      "status": "🔵",
+      "reason": "asset"
+    },
+    {
+      "path": "public/robots.txt",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "public/sitemap.xml",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/.env.example",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "rust-node/Cargo.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/Dockerfile",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "rust-node/PUBLIC_MAINNET.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/README.md",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/deploy.sh",
+      "status": "🟡",
+      "reason": "external execution: /VPS/i"
+    },
+    {
+      "path": "rust-node/docker-compose.yml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/hsmc-core/Cargo.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/block.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/chain.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/fee.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/governance.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/lib.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/mempool.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/script.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/state.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/transaction.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/validator.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-core/src/wallet.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/Cargo.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/ecdsa.rs",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/hd_keys.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/lib.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/pow.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/ring_sig.rs",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/ringct.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/schnorr.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/stealth.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-crypto/src/threshold.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-node/Cargo.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/hsmc-node/src/main.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-p2p/Cargo.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/hsmc-p2p/src/dandelion.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-p2p/src/discovery.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-p2p/src/gossip.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-p2p/src/lib.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-p2p/src/message.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-p2p/src/peer.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-p2p/src/sync.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-rpc/Cargo.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/hsmc-rpc/src/bridge.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-rpc/src/handlers.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-rpc/src/lib.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-rpc/src/server.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-rpc/src/types.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-storage/Cargo.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/hsmc-storage/src/block_store.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-storage/src/lib.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-storage/src/mempool_store.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-storage/src/state_store.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-storage/src/tx_store.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-storage/src/utxo_store.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/hsmc-stratum/Cargo.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "rust-node/hsmc-stratum/src/lib.rs",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/seed-bootstrap.sh",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/setup-local.sh",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "rust-node/start.sh",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/App.css",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/App.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/assets/hsmc-logo.png",
+      "status": "🔵",
+      "reason": "asset"
+    },
+    {
+      "path": "src/components/AuthModal.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/BIP39WalletSetup.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/CreatePoolDialog.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/Dashboard.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/Documentation.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/ErrorBoundary.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/Explorer.tsx",
+      "status": "🟡",
+      "reason": "external execution: /VPS/i"
+    },
+    {
+      "path": "src/components/FeaturesSection.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/Footer.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/GovernanceSection.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/HSMCPay.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/HeroSection.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/LiquidityPoolPanel.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/Mempool.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/MerchantAnalytics.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/MerchantPanel.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/MiningDashboard.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/MiningRPCClient.tsx",
+      "status": "🟡",
+      "reason": "external execution: /VPS/i"
+    },
+    {
+      "path": "src/components/MultiWalletManager.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/NavLink.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/Navbar.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/NetworkSection.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/NetworkVisualization.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/NodeStatusBadge.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/NotificationsPanel.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/PriceChart.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/PrivacySection.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/ReferralPanel.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/SEO.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/SeedPhraseRecovery.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/SmartContractsExplorer.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/StakingDashboard.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/SwapPanel.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/Terminal.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/TokenomicsSection.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/TwoFactorSetup.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/WalletSection.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/WelcomeChecklist.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/components/ui/accordion.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/alert-dialog.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/alert.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/aspect-ratio.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/avatar.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/badge.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/breadcrumb.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/button.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/calendar.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/card.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/carousel.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/chart.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/checkbox.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/collapsible.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/command.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/context-menu.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/dialog.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/drawer.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/dropdown-menu.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/form.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/hover-card.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/input-otp.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/input.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/label.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/menubar.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/navigation-menu.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/pagination.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/popover.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/progress.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/radio-group.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/resizable.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/scroll-area.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/select.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/separator.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/sheet.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/sidebar.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/skeleton.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/slider.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/sonner.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/switch.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/table.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/tabs.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/textarea.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/toast.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/toaster.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/toggle-group.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/toggle.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/tooltip.tsx",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/components/ui/use-toast.ts",
+      "status": "🔵",
+      "reason": "shadcn/ui"
+    },
+    {
+      "path": "src/hooks/use-mobile.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/use-toast.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useAuth.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useAutoBackup.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useBlockchain.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useMultiWallet.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useNetworkPresence.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useNodeHealth.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useNotifications.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/usePushNotifications.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useStaking.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/hooks/useWallet.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/index.css",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/integrations/lovable/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/integrations/supabase/client.ts",
+      "status": "📦",
+      "reason": "auto-generated"
+    },
+    {
+      "path": "src/integrations/supabase/types.ts",
+      "status": "📦",
+      "reason": "auto-generated"
+    },
+    {
+      "path": "src/lib/utils.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/main.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/AppPage.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/BlockchainNode.tsx",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "src/pages/ForgotPassword.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/Index.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/InvestorsPage.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/LandingPage.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/ListingKitPage.tsx",
+      "status": "🟡",
+      "reason": "external execution: /relayer/i"
+    },
+    {
+      "path": "src/pages/MainnetHub.tsx",
+      "status": "🟡",
+      "reason": "external execution: /VPS/i"
+    },
+    {
+      "path": "src/pages/MainnetReadiness.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/NotFound.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/Onboarding.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/PayPage.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/ProfilePage.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/ResetPassword.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/RustNodePage.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/SettingsPage.tsx",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "src/pages/WalletAuth.tsx",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/pages/WhitepaperPage.tsx",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "src/test/example.test.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/test/setup.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/types/blockchain.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/utils/bip39-wallet.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/utils/blockchain-generator.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/utils/seed-auth.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/utils/wallet-backup.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/utils/wallet-scanner.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/utils/wallet-seed-db.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "src/vite-env.d.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/config.toml",
+      "status": "🔵",
+      "reason": "config/docs"
+    },
+    {
+      "path": "supabase/functions/advanced-notifications/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/apply-referral-bonus/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/auto-fill-settings/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/blockchain-engine/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/hsmc-bridge-lock/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/hsmcpay-checkout/index.ts",
+      "status": "🟡",
+      "reason": "external execution: /VPS/i"
+    },
+    {
+      "path": "supabase/functions/node-proxy/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/node-sync/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/pool-engine/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/price-engine/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/settings-status/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/test-connection/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/update-token-metrics/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/functions/vapid-generate/index.ts",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "supabase/functions/wallet-signin/index.ts",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260120025730_842481d7-db6a-4262-b9d7-545ba2410033.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260120025835_382c310b-e2e7-4ff9-826b-b063d244d894.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260218101113_7eea92bc-1b37-41fb-8e6b-35afea068947.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260219091123_6f280ac1-44f7-446a-a1bc-88daeaa354a5.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260219091505_abb3b622-9e5a-416d-bceb-cddc81699c3d.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260301194141_9ffa0c74-5be1-4f1c-b46e-f0869d2af856.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260301194149_b77c7070-d65d-4687-887a-600c5f33d35c.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260302180828_22f9e86a-df86-4d75-bb21-8eebda468d2b.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260302180840_be5a90a5-f55c-4633-ae56-6b6d2af97450.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260306204840_833c2d0c-9287-4ae8-a90c-07fd67795d2a.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308071849_e423e80b-b2ff-48a3-b530-e947cae53175.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308080901_be491cb1-f72e-45b0-a2f3-a1fee69361c6.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308081801_76dfb5ea-1cc8-45e8-b76a-897278014265.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308093836_b7dabcca-9249-4930-b8d1-93c8d09af8ae.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308094531_df3258ee-5c1f-469c-83a0-390b2ddfd7d7.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308094835_e936900f-0161-40cd-96e6-bbbdf4099b0d.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308114318_aff5420c-6c72-4e6e-bce6-33039101b217.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308130542_053884eb-5761-49ab-9f12-b00940d28f06.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308133922_b2b68a4e-63d3-4055-8db3-cfd9f3e14041.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308134306_ec50c180-7353-4666-9cec-a984e9d2a43c.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308135117_f8acc94d-5353-45a4-8bf1-ed116408cc33.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308154712_3d0f7188-d697-4c5a-b033-cd55a2ff2c06.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308155210_417be4f2-e509-47db-b27f-7d9e04a89b1d.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308155316_e91c94ed-3de6-4537-ae6d-966442d125a8.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308203818_1ce170af-ca68-4769-9cd5-2fd882cbfe70.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308204638_67db0053-180c-49ef-8898-35e7122fbe7a.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308205645_d95996cb-7499-4f0f-998d-14f940ba81d5.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260308233213_8d822e72-9a0c-43a9-a0d9-eb5f2ee67913.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260411165857_3e911130-212a-4fdf-a6bc-345ca853314b.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260416100620_390c3687-bc8f-4fff-8d59-5ec4c7ccfb14.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260416102207_353a3e83-ccfc-4e93-bf61-ed33c682160f.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260417071146_6ea892c6-b4f4-413d-9d38-e2fe41ec4433.sql",
+      "status": "🟡",
+      "reason": "external execution: /private[_\\s-]?key/i"
+    },
+    {
+      "path": "supabase/migrations/20260419154806_6c77ff8a-f76b-4df7-9765-2226bf1473e9.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260503152032_10bcfdd2-a34b-4edd-8b3d-216f0abab167.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "supabase/migrations/20260506062013_c6ce7a8a-105e-43e4-990b-12c21592a845.sql",
+      "status": "✅",
+      "reason": "real"
+    },
+    {
+      "path": "tailwind.config.ts",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "tsconfig.app.json",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "tsconfig.json",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "tsconfig.node.json",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "vite.config.ts",
+      "status": "🔵",
+      "reason": "config"
+    },
+    {
+      "path": "vitest.config.ts",
+      "status": "🔵",
+      "reason": "config"
+    }
+  ]
+}

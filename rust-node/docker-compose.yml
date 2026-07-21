@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  hsmc-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hsmc-node
+    restart: always
+    ports:
+      - "8080:8080"   # JSON-RPC HTTP
+      - "3333:3333"   # Stratum WebSocket (miners)
+    volumes:
+      - hsmc-data:/home/hsmc/hsmc-data
+    environment:
+      # ── Required ──────────────────────────────────────────────────
+      MINER_ADDRESS: ${MINER_ADDRESS:-HSMC_NODE_MINER_000000000000000000000000000000000000000}
+
+      # ── Optional tuning ───────────────────────────────────────────
+      RUST_LOG: ${RUST_LOG:-info}
+      RPC_PORT: ${RPC_PORT:-8080}
+      STRATUM_PORT: ${STRATUM_PORT:-3333}
+      HSMC_DATA_DIR: /home/hsmc/hsmc-data
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  hsmc-data:
+    driver: local

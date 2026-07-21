@@ -1,0 +1,31 @@
+{
+  "_meta": "CoinGecko coin listing form (https://www.coingecko.com/en/coins/new). Paste each field into the corresponding input.",
+  "name": "HSMC",
+  "symbol": "HSMC",
+  "is_token": false,
+  "blockchain": "HSMC (native L1) — also wrapped on BSC/ETH/Polygon as wHSMC",
+  "platforms": {
+    "binance-smart-chain": "TBD: wHSMC BEP-20 address",
+    "ethereum":            "TBD: wHSMC ERC-20 address",
+    "polygon-pos":         "TBD: wHSMC ERC-20 address"
+  },
+  "links": {
+    "homepage":          "https://hsmc.network",
+    "whitepaper":        "https://hsmc.network/whitepaper",
+    "blockchain_site":   ["https://explorer.hsmc.network"],
+    "official_forum":    "TBD",
+    "chat_url":          ["TBD: discord/telegram"],
+    "announcement_url":  ["TBD"],
+    "twitter_screen_name": "TBD",
+    "github":            ["https://github.com/XMC-OXR/astranet-network-hub"]
+  },
+  "image_url": "https://hsmc.network/hsmc-logo.png",
+  "country_origin": "Romania (founder jurisdiction)",
+  "genesis_date":   "TBD",
+  "max_supply":     1000000000000,
+  "ticker_pair_examples": [
+    {"target": "USDT", "exchange": "TBD",         "url": "TBD"},
+    {"target": "BNB",  "exchange": "PancakeSwap", "url": "TBD: pair URL after createPancakePool.ts"}
+  ],
+  "additional_notes": "Privacy chain (RingCT/CLSAG). Wrapped token on EVM allows DEX listings while native chain handles confidential transfers."
+}

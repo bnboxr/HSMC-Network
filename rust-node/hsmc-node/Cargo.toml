@@ -1,0 +1,27 @@
+[package]
+name = "hsmc-node"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hsmc-node"
+path = "src/main.rs"
+
+[dependencies]
+tokio              = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow             = { workspace = true }
+chrono             = { workspace = true }
+num_cpus           = { workspace = true }
+rand               = { workspace = true }
+sha2               = { workspace = true }
+hex                = { workspace = true }
+hsmc-core          = { path = "../hsmc-core" }
+hsmc-crypto        = { path = "../hsmc-crypto" }
+hsmc-p2p           = { path = "../hsmc-p2p" }
+hsmc-rpc           = { path = "../hsmc-rpc" }
+hsmc-storage       = { path = "../hsmc-storage" }
+hsmc-stratum       = { path = "../hsmc-stratum" }

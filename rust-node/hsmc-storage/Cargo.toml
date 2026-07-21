@@ -1,0 +1,19 @@
+[package]
+name = "hsmc-storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+tracing     = { workspace = true }
+anyhow      = { workspace = true }
+thiserror   = { workspace = true }
+bincode     = { workspace = true }
+sha2        = { workspace = true }
+hex         = { workspace = true }
+chrono      = { workspace = true }
+lru         = { workspace = true }
+parking_lot = { workspace = true }
+rocksdb     = { workspace = true }
+hsmc-core   = { path = "../hsmc-core" }

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="shortcut icon" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Fonts: Inter (body/headings) + JetBrains Mono (code/terminal) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+    <!-- Primary SEO (sitewide fallback — per-route values set via react-helmet-async) -->
+    <title>HSMC — Privacy-First Blockchain Network</title>
+    <meta name="description" content="HSMC is a privacy-first Layer 1 blockchain with cross-chain bridge to BSC and Ethereum, native fiat payments via HSMCPay and Stripe, and self-custody BIP39 wallet." />
+    <meta name="keywords" content="HSMC, blockchain, privacy, Ring Signatures, RingCT, Stealth Addresses, staking, DeFi, multichain, crypto, wHSMC" />
+    <meta name="author" content="Ifrim George & OXR.org" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- Open Graph / Facebook (sitewide fallback) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="HSMC — Privacy-First Blockchain Network" />
+    <meta property="og:description" content="Privacy-first Layer 1 blockchain with cross-chain bridge, native fiat payments, and self-custody BIP39 wallet." />
+    <meta property="og:image" content="https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/8ed76a75-c96d-4976-903d-3410d4e98a40">
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="HSMC" />
+    <meta property="og:locale" content="en_US" />
+
+    <!-- Twitter Card (sitewide fallback) -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@HSMC" />
+    <meta name="twitter:creator" content="@HSMC" />
+    <meta name="twitter:title" content="HSMC — Privacy-First Blockchain Network" />
+    <meta name="twitter:description" content="Privacy-first Layer 1 blockchain with cross-chain bridge, native fiat payments, and self-custody BIP39 wallet." />
+    <meta name="twitter:image" content="https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/8ed76a75-c96d-4976-903d-3410d4e98a40">
+
+    <!-- Theme color for mobile browsers -->
+    <meta name="theme-color" content="#0d0d0d" />
+    <meta name="msapplication-TileColor" content="#0d0d0d" />
+
+    <!-- M4 FIX: Content-Security-Policy — prevent XSS, restrict script sources -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:* https://*.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';" />
+
+    <!-- Structured Data — Organization -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "HSMC",
+      "url": "https://astranet-pulse.lovable.app",
+      "logo": "https://astranet-pulse.lovable.app/favicon.png",
+      "description": "Privacy-first blockchain network with Ring Signatures, Stealth Addresses and RingCT.",
+      "sameAs": ["https://github.com/XMC-OXR"],
+      "foundingDate": "2024",
+      "founders": [
+        { "@type": "Person", "name": "Ifrim George" },
+        { "@type": "Person", "name": "OXR.org" }
+      ]
+    }
+    </script>
+
+    <!-- Structured Data — SoftwareApplication -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "HSMC Chain",
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "Web",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "description": "Privacy blockchain with Ring Signatures, RingCT, multi-chain bridge and BIP39 HD wallet.",
+      "url": "https://astranet-pulse.lovable.app/app"
+    }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "hsmc-bridge-connectors",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-chain bridge connectors for HSMC Network — BTC, ETH, BSC",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.11.0"
+  }
+}

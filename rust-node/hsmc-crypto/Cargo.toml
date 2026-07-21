@@ -1,0 +1,29 @@
+[package]
+name = "hsmc-crypto"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sha2             = { workspace = true }
+sha3             = { workspace = true }
+hex              = { workspace = true }
+rand             = { workspace = true }
+thiserror        = { workspace = true }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+anyhow           = { workspace = true }
+tracing          = { workspace = true }
+tokio            = { workspace = true }
+zeroize          = { workspace = true }
+subtle           = { workspace = true }
+hmac             = { workspace = true }
+pbkdf2           = { workspace = true }
+num-traits       = { workspace = true }
+curve25519-dalek = { workspace = true }
+bulletproofs     = { workspace = true }
+merlin           = { workspace = true }
+once_cell        = { workspace = true }
+rayon            = { workspace = true }
+num_cpus         = { workspace = true }
+hsmc-core        = { path = "../hsmc-core" }
+

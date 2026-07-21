@@ -1,0 +1,22 @@
+[package]
+name = "hsmc-stratum"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio             = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util      = { workspace = true }
+tracing           = { workspace = true }
+anyhow            = { workspace = true }
+sha2              = { workspace = true }
+hex               = { workspace = true }
+uuid              = { workspace = true }
+rand              = { workspace = true }
+num_cpus          = { workspace = true }
+parking_lot       = { workspace = true }
+dashmap           = { workspace = true }
+hsmc-core         = { path = "../hsmc-core" }
+hsmc-crypto       = { path = "../hsmc-crypto" }

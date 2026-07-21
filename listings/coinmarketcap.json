@@ -1,0 +1,48 @@
+{
+  "_meta": "Pre-filled CoinMarketCap listing application. Submit at https://coinmarketcap.com/request/ → 'Add Cryptoasset'. Replace TBD fields after mainnet launch & wHSMC deployment.",
+  "project_name": "HSMC",
+  "ticker_symbol": "HSMC",
+  "wrapped_ticker": "wHSMC",
+  "category": "Privacy / Layer 1 / PoW",
+  "description": "HSMC is a privacy-first Layer-1 blockchain implementing Monero-inspired RingCT, stealth addresses, and CLSAG ring signatures, secured by a parallel SHA3 PoW with Stratum V2. Built in Rust, with a hybrid AMM bridge to BSC/ETH/Polygon via the wHSMC ERC-20 wrapper.",
+  "official_website": "https://hsmc.network",
+  "whitepaper_url": "https://hsmc.network/whitepaper",
+  "block_explorer_urls": [
+    "https://explorer.hsmc.network",
+    "TBD: backup explorer (e.g. mempool-style)"
+  ],
+  "source_code": "https://github.com/XMC-OXR/astranet-network-hub",
+  "technical_doc": "https://hsmc.network/whitepaper#technical",
+  "contract_addresses": {
+    "BSC":      "TBD: 0x… (deploy via contracts/scripts/deploy.ts)",
+    "Ethereum": "TBD: 0x…",
+    "Polygon":  "TBD: 0x…"
+  },
+  "supply": {
+    "max_supply":         "1000000000000",
+    "total_supply":       "TBD: query token_metrics.total_supply",
+    "circulating_supply": "TBD: query token_metrics.circulating_supply",
+    "circulating_supply_proof_url": "https://hsmc.network/api/supply"
+  },
+  "launch_date_utc": "TBD: mainnet genesis timestamp",
+  "ico_status": "No public ICO. Fair-launch via PoW mining.",
+  "consensus": "Proof of Work (SHA3 + Bulletproofs aggregation)",
+  "block_time_seconds": 60,
+  "premine": "0",
+  "founder": "Ifrim George (OXR.org)",
+  "team_kyc": "TBD: upload signed KYC PDF (CMC requirement)",
+  "social": {
+    "twitter":   "TBD",
+    "telegram":  "TBD",
+    "discord":   "TBD",
+    "github":    "https://github.com/XMC-OXR/astranet-network-hub",
+    "reddit":    "TBD"
+  },
+  "exchanges_listed": [],
+  "audit_reports": [
+    "TBD: Trail of Bits report URL",
+    "TBD: Certik report URL"
+  ],
+  "tags": ["Privacy", "Layer 1", "PoW", "Mineable", "Bridge", "DEX"],
+  "self_reported_market_data_endpoint": "https://hsmc.network/api/market"
+}
