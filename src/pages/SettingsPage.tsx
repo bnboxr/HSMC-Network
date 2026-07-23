@@ -20,6 +20,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/hooks/use-toast';
 import Navbar from '@/components/Navbar';
 import HSMCPayAdminToggle from '@/components/HSMCPayAdminToggle';
+import WebAuthnSetup from '@/components/WebAuthnSetup';
 
 interface SchemaRow {
   key: string;
@@ -434,6 +435,13 @@ const SettingsPage = () => {
             </TabsContent>
           ))}
         </Tabs>
+
+        {/* ── Biometric (WebAuthn) Setup ──────────────────────────────────────── */}
+        {user && (
+          <div className="mt-8">
+            <WebAuthnSetup userId={user.id} />
+          </div>
+        )}
 
         {/* Manual / docs */}
         <div className="mt-10 p-5 rounded-lg border border-border bg-muted/20">
