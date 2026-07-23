@@ -7,6 +7,9 @@
  * for Ethereum, etc. All connectors satisfy the `ChainConnector` interface
  * so bridge logic can be chain-agnostic.
  *
+ * Supported chains (10 total):
+ *   BTC, ETH, BSC, Solana, Polygon, Avalanche, Arbitrum, Optimism, Base, Cosmos
+ *
  * Usage:
  *   import { getConnector, listConnectors } from "./bridge/src/index";
  *
@@ -68,6 +71,84 @@ function defaultConfig(chain: ChainId): ChainConfig {
         bridgeMinterAddress: process.env.BRIDGE_MINTER_ADDRESS_BSC,
         whsmcAddress: process.env.WHSMC_ADDRESS_BSC,
       };
+    case "sol":
+      return {
+        chain: "sol",
+        rpcUrl: process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
+        minConfirmations: Number(process.env.SOLANA_MIN_CONF || "32"),
+        pollIntervalMs: Number(process.env.SOLANA_POLL_MS || "30000"),
+        maxRetries: 3,
+        retryBaseDelayMs: 2000,
+      };
+    case "polygon":
+      return {
+        chain: "polygon",
+        rpcUrl: process.env.POLYGON_RPC_URL || "https://polygon-rpc.com",
+        minConfirmations: 256,
+        pollIntervalMs: 15000,
+        maxRetries: 3,
+        retryBaseDelayMs: 2000,
+        chainId: 137,
+        bridgeMinterAddress: process.env.BRIDGE_MINTER_ADDRESS_POLYGON,
+        whsmcAddress: process.env.WHSMC_ADDRESS_POLYGON,
+      };
+    case "avalanche":
+      return {
+        chain: "avalanche",
+        rpcUrl: process.env.AVALANCHE_RPC_URL || "https://api.avax.network/ext/bc/C/rpc",
+        minConfirmations: 12,
+        pollIntervalMs: 15000,
+        maxRetries: 3,
+        retryBaseDelayMs: 2000,
+        chainId: 43114,
+        bridgeMinterAddress: process.env.BRIDGE_MINTER_ADDRESS_AVALANCHE,
+        whsmcAddress: process.env.WHSMC_ADDRESS_AVALANCHE,
+      };
+    case "arbitrum":
+      return {
+        chain: "arbitrum",
+        rpcUrl: process.env.ARBITRUM_RPC_URL || "https://arb1.arbitrum.io/rpc",
+        minConfirmations: 12,
+        pollIntervalMs: 15000,
+        maxRetries: 3,
+        retryBaseDelayMs: 2000,
+        chainId: 42161,
+        bridgeMinterAddress: process.env.BRIDGE_MINTER_ADDRESS_ARBITRUM,
+        whsmcAddress: process.env.WHSMC_ADDRESS_ARBITRUM,
+      };
+    case "optimism":
+      return {
+        chain: "optimism",
+        rpcUrl: process.env.OPTIMISM_RPC_URL || "https://mainnet.optimism.io",
+        minConfirmations: 12,
+        pollIntervalMs: 15000,
+        maxRetries: 3,
+        retryBaseDelayMs: 2000,
+        chainId: 10,
+        bridgeMinterAddress: process.env.BRIDGE_MINTER_ADDRESS_OPTIMISM,
+        whsmcAddress: process.env.WHSMC_ADDRESS_OPTIMISM,
+      };
+    case "base":
+      return {
+        chain: "base",
+        rpcUrl: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+        minConfirmations: 12,
+        pollIntervalMs: 15000,
+        maxRetries: 3,
+        retryBaseDelayMs: 2000,
+        chainId: 8453,
+        bridgeMinterAddress: process.env.BRIDGE_MINTER_ADDRESS_BASE,
+        whsmcAddress: process.env.WHSMC_ADDRESS_BASE,
+      };
+    case "cosmos":
+      return {
+        chain: "cosmos",
+        rpcUrl: process.env.COSMOS_RPC_URL || "https://cosmos-rest.publicnode.com",
+        minConfirmations: Number(process.env.COSMOS_MIN_CONF || "6"),
+        pollIntervalMs: Number(process.env.COSMOS_POLL_MS || "30000"),
+        maxRetries: 3,
+        retryBaseDelayMs: 2000,
+      };
     default: {
       // Exhaustiveness check
       const _exhaustive: never = chain;
@@ -86,8 +167,8 @@ function defaultConfig(chain: ChainId): ChainConfig {
  *
  * @example
  * ```ts
- * configureChain("bsc", {
- *   rpcUrl: "https://bsc-dataseed2.binance.org",
+ * configureChain("polygon", {
+ *   rpcUrl: "https://rpc-mainnet.maticvigil.com",
  *   bridgeMinterAddress: "0x1234…",
  *   whsmcAddress: "0xabcd…",
  * });
@@ -104,7 +185,7 @@ export function configureChain(chain: ChainId, config: Partial<ChainConfig>): vo
 /**
  * Get (or lazily create) a chain connector.
  *
- * @param chain  "btc" | "eth" | "bsc"
+ * @param chain  Any supported ChainId
  * @returns A ChainConnector instance for the requested chain.
  * @throws If the chain config is missing required fields (e.g. contract addresses for EVM).
  */
@@ -154,7 +235,6 @@ export function evictConnector(chain: ChainId): void {
 function createConnector(config: ChainConfig): ChainConnector {
   switch (config.chain) {
     case "btc": {
-      // Dynamic import to keep dependencies optional
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { BitcoinConnector } = require("./connectors/bitcoin");
       return new BitcoinConnector(config);
@@ -170,6 +250,41 @@ function createConnector(config: ChainConfig): ChainConnector {
         );
       }
       return new EvmConnector(config as ChainConfig & { chain: "eth" | "bsc" });
+    }
+    case "sol": {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { SolanaConnector } = require("./connectors/solana");
+      return new SolanaConnector(config);
+    }
+    case "polygon": {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { PolygonConnector } = require("./connectors/polygon");
+      return new PolygonConnector(config);
+    }
+    case "avalanche": {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { AvalancheConnector } = require("./connectors/avalanche");
+      return new AvalancheConnector(config);
+    }
+    case "arbitrum": {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { ArbitrumConnector } = require("./connectors/arbitrum");
+      return new ArbitrumConnector(config);
+    }
+    case "optimism": {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { OptimismConnector } = require("./connectors/optimism");
+      return new OptimismConnector(config);
+    }
+    case "base": {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { BaseConnector } = require("./connectors/base");
+      return new BaseConnector(config);
+    }
+    case "cosmos": {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { CosmosConnector } = require("./connectors/cosmos");
+      return new CosmosConnector(config);
     }
     default: {
       const _exhaustive: never = config.chain;

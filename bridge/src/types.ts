@@ -16,7 +16,17 @@
 
 // ─── Chain identifiers ─────────────────────────────────────────────────
 
-export type ChainId = "btc" | "eth" | "bsc";
+export type ChainId =
+  | "btc"
+  | "eth"
+  | "bsc"
+  | "sol"
+  | "polygon"
+  | "avalanche"
+  | "arbitrum"
+  | "optimism"
+  | "base"
+  | "cosmos";
 
 // ─── Core event types ──────────────────────────────────────────────────
 

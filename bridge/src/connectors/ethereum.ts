@@ -140,12 +140,59 @@ const CHAIN_PRESETS: Record<string, Partial<ChainConfig>> = {
     retryBaseDelayMs: 2_000,
     chainId: 56,
   },
+  polygon: {
+    chain: "polygon",
+    rpcUrl: process.env.POLYGON_RPC_URL || "https://polygon-rpc.com",
+    minConfirmations: 256,
+    pollIntervalMs: 15_000,
+    maxRetries: 3,
+    retryBaseDelayMs: 2_000,
+    chainId: 137,
+  },
+  avalanche: {
+    chain: "avalanche",
+    rpcUrl: process.env.AVALANCHE_RPC_URL || "https://api.avax.network/ext/bc/C/rpc",
+    minConfirmations: 12,
+    pollIntervalMs: 15_000,
+    maxRetries: 3,
+    retryBaseDelayMs: 2_000,
+    chainId: 43114,
+  },
+  arbitrum: {
+    chain: "arbitrum",
+    rpcUrl: process.env.ARBITRUM_RPC_URL || "https://arb1.arbitrum.io/rpc",
+    minConfirmations: 12,
+    pollIntervalMs: 15_000,
+    maxRetries: 3,
+    retryBaseDelayMs: 2_000,
+    chainId: 42161,
+  },
+  optimism: {
+    chain: "optimism",
+    rpcUrl: process.env.OPTIMISM_RPC_URL || "https://mainnet.optimism.io",
+    minConfirmations: 12,
+    pollIntervalMs: 15_000,
+    maxRetries: 3,
+    retryBaseDelayMs: 2_000,
+    chainId: 10,
+  },
+  base: {
+    chain: "base",
+    rpcUrl: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+    minConfirmations: 12,
+    pollIntervalMs: 15_000,
+    maxRetries: 3,
+    retryBaseDelayMs: 2_000,
+    chainId: 8453,
+  },
 };
 
 // ─── EVM Connector class ─────────────────────────────────────────────────
 
+export type EvmChainId = "eth" | "bsc" | "polygon" | "avalanche" | "arbitrum" | "optimism" | "base";
+
 export class EvmConnector implements ChainConnector {
-  readonly chain: "eth" | "bsc";
+  readonly chain: EvmChainId;
 
   private readonly provider: ethers.JsonRpcProvider;
   private readonly bridgeContract: ethers.Contract;
@@ -155,12 +202,13 @@ export class EvmConnector implements ChainConnector {
   private readonly retryOptions: RetryOptions;
 
   constructor(config: ChainConfig) {
-    if (config.chain !== "eth" && config.chain !== "bsc") {
+    const validChains: EvmChainId[] = ["eth", "bsc", "polygon", "avalanche", "arbitrum", "optimism", "base"];
+    if (!validChains.includes(config.chain as EvmChainId)) {
       throw new Error(
-        `EvmConnector only supports "eth" and "bsc", got "${config.chain}"`,
+        `EvmConnector only supports EVM chains, got "${config.chain}"`,
       );
     }
-    this.chain = config.chain;
+    this.chain = config.chain as EvmChainId;
 
     // Merge defaults → user overrides
     const preset = CHAIN_PRESETS[config.chain] ?? {};
