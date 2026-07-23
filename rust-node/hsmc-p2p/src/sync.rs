@@ -208,7 +208,8 @@ impl SyncService {
             .max_by(|a, b| {
                 let score_a = a.best_height as f64 - a.last_ping_ms as f64 * 0.01;
                 let score_b = b.best_height as f64 - b.last_ping_ms as f64 * 0.01;
-                score_a.partial_cmp(&score_b).unwrap()
+                // Scores derived from u64 values; NaN impossible in practice
+                score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
             })
             .cloned()
     }

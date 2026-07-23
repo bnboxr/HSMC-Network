@@ -577,49 +577,57 @@ fn generate_scalar_rng(rng: &mut OsRng) -> Scalar {
 mod tests {
     use super::*;
 
+    fn get_blinding(c: &PedersenCommitment) -> anyhow::Result<Scalar> {
+        c.blinding.ok_or_else(|| anyhow::anyhow!("Commitment blinding factor is None"))
+    }
+
     #[test]
-    fn test_pedersen_commit_verify() {
+    fn test_pedersen_commit_verify() -> anyhow::Result<()> {
         let amount = 100_000_000u64; // 1 HSMC
-        let c = PedersenCommitment::commit(amount).unwrap();
-        let r = c.blinding.unwrap();
+        let c = PedersenCommitment::commit(amount)?;
+        let r = get_blinding(&c)?;
         assert!(c.verify_opening(amount, r), "Opening must verify");
         assert!(!c.verify_opening(amount + 1, r), "Wrong amount must fail");
+        Ok(())
     }
 
     #[test]
-    fn test_commitment_homomorphic_add() {
-        let c1 = PedersenCommitment::commit(50_000_000).unwrap();
-        let c2 = PedersenCommitment::commit(50_000_000).unwrap();
-        let sum = c1.add(&c2).unwrap();
-        let r_sum = c1.blinding.unwrap() + c2.blinding.unwrap();
+    fn test_commitment_homomorphic_add() -> anyhow::Result<()> {
+        let c1 = PedersenCommitment::commit(50_000_000)?;
+        let c2 = PedersenCommitment::commit(50_000_000)?;
+        let sum = c1.add(&c2)?;
+        let r_sum = get_blinding(&c1)? + get_blinding(&c2)?;
         assert!(sum.verify_opening(100_000_000, r_sum));
+        Ok(())
     }
 
     #[test]
-    fn test_balance_verification() {
-        let in1 = PedersenCommitment::commit(100_000_000).unwrap();
-        let in2 = PedersenCommitment::commit(50_000_000).unwrap();
+    fn test_balance_verification() -> anyhow::Result<()> {
+        let in1 = PedersenCommitment::commit(100_000_000)?;
+        let in2 = PedersenCommitment::commit(50_000_000)?;
 
         let fee = 1_000_000u64; // 0.01 HSMC
         let out_amount = 100_000_000 + 50_000_000 - fee;
 
         // Change blinding = r_in1 + r_in2
         let r_change = compute_change_blinding(
-            &[in1.blinding.unwrap(), in2.blinding.unwrap()],
+            &[get_blinding(&in1)?, get_blinding(&in2)?],
             &[],
         );
-        let out1 = PedersenCommitment::commit_with_blinding(out_amount, r_change).unwrap();
+        let out1 = PedersenCommitment::commit_with_blinding(out_amount, r_change)?;
 
-        let result = verify_rct_balance(&[in1, in2], &[out1], fee).unwrap();
+        let result = verify_rct_balance(&[in1, in2], &[out1], fee)?;
         assert!(result, "Balance equation must hold");
+        Ok(())
     }
 
     #[test]
-    fn test_range_proof_roundtrip() {
+    fn test_range_proof_roundtrip() -> anyhow::Result<()> {
         let amount = 1_234_567u64;
-        let c = PedersenCommitment::commit(amount).unwrap();
-        let proof = BulletproofRangeProof::prove(amount, &c).unwrap();
+        let c = PedersenCommitment::commit(amount)?;
+        let proof = BulletproofRangeProof::prove(amount, &c)?;
         assert!(proof.verify(), "Range proof must verify");
+        Ok(())
     }
 
     #[test]
@@ -632,11 +640,12 @@ mod tests {
     }
 
     #[test]
-    fn test_rct_output_create_verify() {
+    fn test_rct_output_create_verify() -> anyhow::Result<()> {
         let shared = [0x55u8; 32];
         let stealth = [0x77u8; 32];
-        let output = RctOutput::create(50_000_000, &shared, stealth).unwrap();
+        let output = RctOutput::create(50_000_000, &shared, stealth)?;
         assert!(output.verify_range(), "RCT output range proof must be valid");
+        Ok(())
     }
 
     #[test]
@@ -646,11 +655,13 @@ mod tests {
     }
 
     #[test]
-    fn test_commitment_serialization() {
-        let c = PedersenCommitment::commit(1_000_000).unwrap();
+    fn test_commitment_serialization() -> anyhow::Result<()> {
+        let c = PedersenCommitment::commit(1_000_000)?;
         let hex = c.to_hex();
         assert_eq!(hex.len(), 64);
-        let recovered = PedersenCommitment::from_hex(&hex).unwrap();
+        let recovered = PedersenCommitment::from_hex(&hex)
+            .ok_or_else(|| anyhow::anyhow!("Failed to deserialize commitment from hex"))?;
         assert_eq!(recovered.bytes, c.bytes);
+        Ok(())
     }
 }

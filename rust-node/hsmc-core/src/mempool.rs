@@ -540,9 +540,10 @@ impl Mempool {
     // ── Statistics ────────────────────────────────────────────────────────────
 
     /// Compute and return current mempool statistics
-    pub fn stats(&mut self) -> &MempoolStats {
+    pub fn stats(&mut self) -> anyhow::Result<&MempoolStats> {
         if !self.stats_dirty && self.cached_stats.is_some() {
-            return self.cached_stats.as_ref().unwrap();
+            return self.cached_stats.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Mempool cached_stats inconsistent: is_some=true but as_ref returned None"));
         }
 
         let mut fpb_vals: Vec<f64> = vec![];
@@ -608,7 +609,8 @@ impl Mempool {
             fee_histogram:           histogram,
         });
         self.stats_dirty = false;
-        self.cached_stats.as_ref().unwrap()
+        self.cached_stats.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Mempool cached_stats not set after stats computation"))
     }
 
     // ── Utility ───────────────────────────────────────────────────────────────
@@ -707,62 +709,67 @@ mod tests {
     }
 
     #[test]
-    fn test_add_and_get() {
+    fn test_add_and_get() -> anyhow::Result<()> {
         let mut pool = Mempool::new();
         let tx = make_tx("ADDR_A", "ADDR_B", 0.001);
         let hash = tx.hash.clone();
-        pool.add(tx).unwrap();
+        pool.add(tx)?;
         assert!(pool.get_by_hash(&hash).is_some());
         assert_eq!(pool.size(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_reject_duplicate() {
+    fn test_reject_duplicate() -> anyhow::Result<()> {
         let mut pool = Mempool::new();
         let tx = make_tx("ADDR_A", "ADDR_B", 0.001);
-        pool.add(tx.clone()).unwrap();
+        pool.add(tx.clone())?;
         let result = pool.add(tx);
         assert!(matches!(result, Err(MempoolError::Duplicate { .. })));
+        Ok(())
     }
 
     #[test]
-    fn test_remove() {
+    fn test_remove() -> anyhow::Result<()> {
         let mut pool = Mempool::new();
         let tx = make_tx("ADDR_A", "ADDR_B", 0.001);
         let hash = tx.hash.clone();
-        pool.add(tx).unwrap();
+        pool.add(tx)?;
         pool.remove(&hash);
         assert!(pool.get_by_hash(&hash).is_none());
         assert_eq!(pool.size(), 0);
+        Ok(())
     }
 
     #[test]
-    fn test_select_for_block_order() {
+    fn test_select_for_block_order() -> anyhow::Result<()> {
         let mut pool = Mempool::new();
         let tx_low  = make_tx("ADDR_A", "ADDR_B", 0.001);
         let tx_high = make_tx("ADDR_C", "ADDR_D", 0.01);
-        pool.add(tx_low).unwrap();
-        pool.add(tx_high.clone()).unwrap();
+        pool.add(tx_low)?;
+        pool.add(tx_high.clone())?;
         let selected = pool.select_for_block(2);
         assert_eq!(selected.len(), 2);
         // Highest fee should come first
         assert_eq!(selected[0].hash, tx_high.hash);
+        Ok(())
     }
 
     #[test]
-    fn test_address_limit() {
+    fn test_address_limit() -> anyhow::Result<()> {
         let mut pool = Mempool::with_max_size(Mempool::new(), MAX_TX_PER_ADDRESS + 5);
         for i in 0..(MAX_TX_PER_ADDRESS) {
             let tx = Transaction::new(
                 "SAME_ADDR", &format!("ADDR_{}", i), 0.001 + i as f64 * 0.0001,
                 0.001 + i as f64 * 0.0001, PrivacyLevel::Transparent,
             );
-            pool.add(tx).unwrap();
+            pool.add(tx)?;
         }
         // One more should fail
         let overflow = Transaction::new("SAME_ADDR", "ADDR_999", 0.999, 0.999, PrivacyLevel::Transparent);
         let result = pool.add(overflow);
         assert!(matches!(result, Err(MempoolError::AddressLimitExceeded { .. })));
+        Ok(())
     }
 
     #[test]
@@ -775,15 +782,16 @@ mod tests {
     }
 
     #[test]
-    fn test_key_image_double_spend() {
+    fn test_key_image_double_spend() -> anyhow::Result<()> {
         let mut pool = Mempool::new();
         let mut tx1 = make_tx("ADDR_A", "ADDR_B", 0.005);
         tx1.key_image = Some("ki:deadbeef".repeat(2));
         let mut tx2 = make_tx("ADDR_C", "ADDR_D", 0.005);
         tx2.key_image = Some("ki:deadbeef".repeat(2));
-        pool.add(tx1).unwrap();
+        pool.add(tx1)?;
         let result = pool.add(tx2);
         assert!(matches!(result, Err(MempoolError::KeyImageDoubleSpend { .. })));
+        Ok(())
     }
 
     #[test]
@@ -793,11 +801,11 @@ mod tests {
     }
 
     #[test]
-    fn test_stem_phase() {
+    fn test_stem_phase() -> anyhow::Result<()> {
         let mut pool = Mempool::new();
         let tx = make_tx("ADDR_A", "ADDR_B", 0.001);
         let hash = tx.hash.clone();
-        pool.add_stem(tx).unwrap();
+        pool.add_stem(tx)?;
         // Stem-phase tx should not be selected for block
         let selected = pool.select_for_block(10);
         assert!(selected.is_empty(), "Stem-phase tx must not be selected for block");
@@ -805,36 +813,41 @@ mod tests {
         pool.promote_from_stem(&hash);
         let selected = pool.select_for_block(10);
         assert_eq!(selected.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_evict_expired() {
+    fn test_evict_expired() -> anyhow::Result<()> {
         let mut pool = Mempool::new();
-        let mut tx = make_tx("ADDR_A", "ADDR_B", 0.001);
-        pool.add(tx).unwrap();
+        let tx = make_tx("ADDR_A", "ADDR_B", 0.001);
+        pool.add(tx)?;
         // Manually expire by adjusting the added_at (via entry mutation)
-        let hash = pool.entries.keys().next().unwrap().clone();
+        let hash = pool.entries.keys().next()
+            .ok_or_else(|| anyhow::anyhow!("Mempool entries empty in evict_expired test"))?
+            .clone();
         if let Some(entry) = pool.entries.get_mut(&hash) {
             entry.added_at = Utc::now().timestamp() - MAX_TX_AGE_SECS - 1;
         }
         let count = pool.evict_expired();
         assert_eq!(count, 1);
         assert_eq!(pool.size(), 0);
+        Ok(())
     }
 
     #[test]
-    fn test_top_by_fee() {
+    fn test_top_by_fee() -> anyhow::Result<()> {
         let mut pool = Mempool::new();
         for i in 1..=5 {
             let tx = Transaction::new(
                 &format!("FROM_{}", i), &format!("TO_{}", i),
                 1.0, i as f64 * 0.001, PrivacyLevel::Transparent,
             );
-            pool.add(tx).unwrap();
+            pool.add(tx)?;
         }
         let top3 = pool.top_by_fee(3);
         assert_eq!(top3.len(), 3);
         assert!(top3[0].fee >= top3[1].fee);
         assert!(top3[1].fee >= top3[2].fee);
+        Ok(())
     }
 }

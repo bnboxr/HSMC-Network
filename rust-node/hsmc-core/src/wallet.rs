@@ -6,6 +6,7 @@ use sha3::Keccak256;
 use hmac::{Hmac, Mac};
 use std::collections::{HashMap, BTreeMap, HashSet};
 use chrono::Utc;
+use anyhow::Context;
 
 type HmacSha512 = Hmac<Sha512>;
 type HmacSha256 = Hmac<Sha256>;
@@ -563,7 +564,7 @@ impl UtxoSet {
     }
 
     /// All spendable UTXOs for an address, sorted by amount descending
-    pub fn spendable_utxos_for(&self, address: &Address, current_height: u64) -> Vec<&Utxo> {
+    pub fn spendable_utxos_for(&self, address: &Address, current_height: u64) -> anyhow::Result<Vec<&Utxo>> {
         let mut utxos: Vec<&Utxo> = self.by_address
             .get(address)
             .map(|keys| {
@@ -573,8 +574,10 @@ impl UtxoSet {
                     .collect()
             })
             .unwrap_or_default();
-        utxos.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap());
-        utxos
+        // Sort by amount descending; amounts are validated at creation, NaN impossible
+        utxos.sort_by(|a, b| b.amount.partial_cmp(&a.amount)
+            .unwrap_or(std::cmp::Ordering::Equal));
+        Ok(utxos)
     }
 
     pub fn total_supply(&self) -> f64 {
@@ -708,7 +711,9 @@ impl CoinSelector {
         fee_per_utxo: f64,
     ) -> Result<CoinSelectionResult, WalletError> {
         let mut sorted = available.to_vec();
-        sorted.sort_by(|a, b| b.amount.partial_cmp(&a.amount).unwrap());
+        // Sort by amount descending for largest-first selection
+        sorted.sort_by(|a, b| b.amount.partial_cmp(&a.amount)
+            .unwrap_or(std::cmp::Ordering::Equal));
         Self::accumulate(sorted, target, fee_per_utxo, CoinSelectionAlgo::LargestFirst)
     }
 
@@ -718,7 +723,9 @@ impl CoinSelector {
         fee_per_utxo: f64,
     ) -> Result<CoinSelectionResult, WalletError> {
         let mut sorted = available.to_vec();
-        sorted.sort_by(|a, b| a.amount.partial_cmp(&b.amount).unwrap());
+        // Sort by amount ascending for smallest-first selection
+        sorted.sort_by(|a, b| a.amount.partial_cmp(&b.amount)
+            .unwrap_or(std::cmp::Ordering::Equal));
         Self::accumulate(sorted, target, fee_per_utxo, CoinSelectionAlgo::SmallestFirst)
     }
 
@@ -787,7 +794,7 @@ impl CoinSelector {
         sorted.sort_by(|a, b| {
             let da = (a.amount - target).abs();
             let db = (b.amount - target).abs();
-            da.partial_cmp(&db).unwrap()
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
         Self::accumulate(sorted, target, fee_per_utxo, CoinSelectionAlgo::Knapsack)
     }
@@ -989,24 +996,26 @@ mod tests {
     }
 
     #[test]
-    fn test_hd_wallet_derivation_deterministic() {
+    fn test_hd_wallet_derivation_deterministic() -> anyhow::Result<()> {
         let seed = [0x42u8; 64];
-        let mut w1 = HdWallet::from_seed(&seed, Network::Mainnet).unwrap();
-        let mut w2 = HdWallet::from_seed(&seed, Network::Mainnet).unwrap();
-        let addr1 = w1.address_at(0, 0, 0).unwrap();
-        let addr2 = w2.address_at(0, 0, 0).unwrap();
+        let mut w1 = HdWallet::from_seed(&seed, Network::Mainnet)?;
+        let mut w2 = HdWallet::from_seed(&seed, Network::Mainnet)?;
+        let addr1 = w1.address_at(0, 0, 0)?;
+        let addr2 = w2.address_at(0, 0, 0)?;
         assert_eq!(addr1, addr2, "Same seed must produce same address");
+        Ok(())
     }
 
     #[test]
-    fn test_different_indices_produce_different_addresses() {
+    fn test_different_indices_produce_different_addresses() -> anyhow::Result<()> {
         let seed = [0x11u8; 64];
-        let mut wallet = HdWallet::from_seed(&seed, Network::Mainnet).unwrap();
-        let a0 = wallet.address_at(0, 0, 0).unwrap();
-        let a1 = wallet.address_at(0, 0, 1).unwrap();
-        let a2 = wallet.address_at(0, 1, 0).unwrap(); // change
+        let mut wallet = HdWallet::from_seed(&seed, Network::Mainnet)?;
+        let a0 = wallet.address_at(0, 0, 0)?;
+        let a1 = wallet.address_at(0, 0, 1)?;
+        let a2 = wallet.address_at(0, 1, 0)?; // change
         assert_ne!(a0, a1, "Different indices must differ");
         assert_ne!(a0, a2, "External vs internal must differ");
+        Ok(())
     }
 
     #[test]
@@ -1032,37 +1041,40 @@ mod tests {
     }
 
     #[test]
-    fn test_coin_selection_largest_first() {
+    fn test_coin_selection_largest_first() -> anyhow::Result<()> {
         let addr = Address::from_pubkey_bytes(&[3u8; 32]);
         let utxos: Vec<Utxo> = (1..=5)
             .map(|i| Utxo::new(format!("tx{}", i), 0, i as f64, addr.clone(), i as u64))
             .collect();
-        let result = CoinSelector::select(&utxos, 3.0, 0.01, CoinSelectionAlgo::LargestFirst).unwrap();
+        let result = CoinSelector::select(&utxos, 3.0, 0.01, CoinSelectionAlgo::LargestFirst)?;
         assert!(result.total_input >= 3.0);
         assert_eq!(result.algorithm, CoinSelectionAlgo::LargestFirst);
+        Ok(())
     }
 
     #[test]
-    fn test_multisig_descriptor() {
+    fn test_multisig_descriptor() -> anyhow::Result<()> {
         let keys = vec![
             hex::encode([1u8; 33]),
             hex::encode([2u8; 33]),
             hex::encode([3u8; 33]),
         ];
-        let desc = MultiSigDescriptor::new(2, keys).unwrap();
+        let desc = MultiSigDescriptor::new(2, keys)?;
         assert_eq!(desc.threshold, 2);
         assert!(Address::is_valid(&desc.script_hash));
+        Ok(())
     }
 
     #[test]
-    fn test_address_pool_generation() {
+    fn test_address_pool_generation() -> anyhow::Result<()> {
         let seed = [0xABu8; 64];
-        let mut wallet = HdWallet::from_seed(&seed, Network::Mainnet).unwrap();
-        let pool = wallet.generate_address_pool(0, 5).unwrap();
+        let mut wallet = HdWallet::from_seed(&seed, Network::Mainnet)?;
+        let pool = wallet.generate_address_pool(0, 5)?;
         assert_eq!(pool.len(), 10); // 5 external + 5 internal
         // All addresses must be valid and unique
         let unique: HashSet<_> = pool.iter().map(|a| a.as_str().to_string()).collect();
         assert_eq!(unique.len(), 10);
+        Ok(())
     }
 
     #[test]

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use subtle::ConstantTimeEq;
+use anyhow::Context;
 
 // ─── Key types ────────────────────────────────────────────────────────────────
 
@@ -53,10 +54,11 @@ impl KeyPair {
 
     /// Sign a message using RFC6979-like deterministic nonce
     /// RFC6979: k = HMAC-DRBG(private_key || H(message))
-    pub fn sign_deterministic(&self, message: &[u8]) -> EcdsaSignature {
+    pub fn sign_deterministic(&self, message: &[u8]) -> anyhow::Result<EcdsaSignature> {
         let msg_hash = Sha256::digest(message);
-        let k = self.rfc6979_nonce(&msg_hash);
-        self.sign_with_nonce(message, &k)
+        let k = self.rfc6979_nonce(&msg_hash)
+            .context("RFC6979 deterministic nonce generation failed")?;
+        Ok(self.sign_with_nonce(message, &k))
     }
 
     /// Sign a message with a random nonce
@@ -94,7 +96,7 @@ impl KeyPair {
     }
 
     /// Deterministic nonce generation per RFC6979
-    fn rfc6979_nonce(&self, msg_hash: &[u8]) -> Scalar {
+    fn rfc6979_nonce(&self, msg_hash: &[u8]) -> anyhow::Result<Scalar> {
         use hmac::{Hmac, Mac};
         type HmacSha256 = Hmac<Sha256>;
 
@@ -104,34 +106,39 @@ impl KeyPair {
         let mut k_key = [0x00u8; 32];
 
         // K = HMAC_K(V || 0x00 || int2octets(x) || bits2octets(h1))
-        let mut mac = HmacSha256::new_from_slice(&k_key).unwrap();
+        let mut mac = HmacSha256::new_from_slice(&k_key)
+            .map_err(|e| anyhow::anyhow!("HMAC init failed for RFC6979 K computation: {}", e))?;
         mac.update(&v); mac.update(&[0x00]); mac.update(&sk_bytes); mac.update(msg_hash);
         k_key.copy_from_slice(&mac.finalize().into_bytes());
 
         // V = HMAC_K(V)
-        let mut mac = HmacSha256::new_from_slice(&k_key).unwrap();
+        let mut mac = HmacSha256::new_from_slice(&k_key)
+            .map_err(|e| anyhow::anyhow!("HMAC init failed for RFC6979 V update 1: {}", e))?;
         mac.update(&v);
         v.copy_from_slice(&mac.finalize().into_bytes());
 
         // K = HMAC_K(V || 0x01 || ...)
-        let mut mac = HmacSha256::new_from_slice(&k_key).unwrap();
+        let mut mac = HmacSha256::new_from_slice(&k_key)
+            .map_err(|e| anyhow::anyhow!("HMAC init failed for RFC6979 K refinement: {}", e))?;
         mac.update(&v); mac.update(&[0x01]); mac.update(&sk_bytes); mac.update(msg_hash);
         k_key.copy_from_slice(&mac.finalize().into_bytes());
 
         // V = HMAC_K(V)
-        let mut mac = HmacSha256::new_from_slice(&k_key).unwrap();
+        let mut mac = HmacSha256::new_from_slice(&k_key)
+            .map_err(|e| anyhow::anyhow!("HMAC init failed for RFC6979 V update 2: {}", e))?;
         mac.update(&v);
         v.copy_from_slice(&mac.finalize().into_bytes());
 
         // Generate k
-        let mut mac = HmacSha256::new_from_slice(&k_key).unwrap();
+        let mut mac = HmacSha256::new_from_slice(&k_key)
+            .map_err(|e| anyhow::anyhow!("HMAC init failed for RFC6979 final k generation: {}", e))?;
         mac.update(&v);
         let t: [u8; 32] = mac.finalize().into_bytes().into();
 
         let mut wide = [0u8; 64];
         wide[..32].copy_from_slice(&t);
         let k = Scalar::from_bytes_mod_order_wide(&wide);
-        if k == Scalar::ZERO { Scalar::ONE } else { k }
+        Ok(if k == Scalar::ZERO { Scalar::ONE } else { k })
     }
 
     fn compute_signature_hash(&self, message: &[u8], pk_bytes: &[u8], r_bytes: &[u8]) -> Scalar {
@@ -396,45 +403,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sign_verify_roundtrip() {
+    fn test_sign_verify_roundtrip() -> anyhow::Result<()> {
         let kp = KeyPair::generate();
         let msg = b"Transfer 10.0 HSMC from ADDR_A to ADDR_B";
-        let sig = kp.sign_deterministic(msg);
+        let sig = kp.sign_deterministic(msg)?;
         assert!(sig.verify(msg), "Signature should verify");
+        Ok(())
     }
 
     #[test]
-    fn test_reject_tampered_message() {
+    fn test_reject_tampered_message() -> anyhow::Result<()> {
         let kp = KeyPair::generate();
-        let sig = kp.sign_deterministic(b"original message");
+        let sig = kp.sign_deterministic(b"original message")?;
         assert!(!sig.verify(b"tampered message"), "Should reject tampered message");
+        Ok(())
     }
 
     #[test]
-    fn test_deterministic_nonce() {
+    fn test_deterministic_nonce() -> anyhow::Result<()> {
         let kp = KeyPair::generate();
         let msg = b"deterministic signing test";
-        let sig1 = kp.sign_deterministic(msg);
-        let sig2 = kp.sign_deterministic(msg);
+        let sig1 = kp.sign_deterministic(msg)?;
+        let sig2 = kp.sign_deterministic(msg)?;
         // Same message → same nonce → same signature
         assert_eq!(sig1.r, sig2.r);
         assert_eq!(sig1.s, sig2.s);
+        Ok(())
     }
 
     #[test]
-    fn test_hex_roundtrip() {
+    fn test_hex_roundtrip() -> anyhow::Result<()> {
         let kp = KeyPair::generate();
-        let sig = kp.sign_deterministic(b"test");
+        let sig = kp.sign_deterministic(b"test")?;
         let hex = sig.to_hex();
-        let recovered = EcdsaSignature::from_hex(&hex).unwrap();
+        let recovered = EcdsaSignature::from_hex(&hex)
+            .ok_or_else(|| anyhow::anyhow!("Failed to deserialize ECDSA signature from hex"))?;
         assert_eq!(sig.r, recovered.r);
         assert_eq!(sig.s, recovered.s);
+        Ok(())
     }
 
     #[test]
-    fn test_der_roundtrip() {
+    fn test_der_roundtrip() -> anyhow::Result<()> {
         let kp = KeyPair::generate();
-        let sig = kp.sign_deterministic(b"DER encoding test");
+        let sig = kp.sign_deterministic(b"DER encoding test")?;
         let der = sig.to_der();
         assert!(der.len() >= 8);
         assert_eq!(der[0], 0x30); // SEQUENCE tag

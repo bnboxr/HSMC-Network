@@ -309,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn test_musig2_session_2of2() {
+    fn test_musig2_session_2of2() -> anyhow::Result<()> {
         let mut rng = OsRng;
         let sk1 = Scalar::random(&mut rng);
         let sk2 = Scalar::random(&mut rng);
@@ -325,10 +325,11 @@ mod tests {
         session.add_nonce_commitment(0, r1_1, r1_2);
         session.add_nonce_commitment(1, r2_1, r2_2);
 
-        let s1 = session.partial_sign(0, &sk1, &k1_1, &k1_2).unwrap();
-        let s2 = session.partial_sign(1, &sk2, &k2_1, &k2_2).unwrap();
+        let s1 = session.partial_sign(0, &sk1, &k1_1, &k1_2)?;
+        let s2 = session.partial_sign(1, &sk2, &k2_1, &k2_2)?;
 
-        let final_sig = session.aggregate_signatures(&[s1, s2]).unwrap();
+        let final_sig = session.aggregate_signatures(&[s1, s2])?;
         assert!(final_sig.verify(&session.aggregated_public_key, &msg));
+        Ok(())
     }
 }

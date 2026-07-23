@@ -475,43 +475,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_stealth_send_receive() {
+    fn test_stealth_send_receive() -> anyhow::Result<()> {
         let wallet = DualKeyWallet::generate();
         let addr = wallet.primary_address();
 
         // Sender generates output
-        let sender_out = StealthOutputSender::generate(&addr, 0).unwrap();
+        let sender_out = StealthOutputSender::generate(&addr, 0)?;
 
         // Receiver scans
         let scanner = StealthScanner::full(&wallet);
         let owned = scanner.scan_output(&sender_out.output);
         assert!(owned.is_some(), "Receiver must find their output");
+        Ok(())
     }
 
     #[test]
-    fn test_stealth_negative_scan() {
+    fn test_stealth_negative_scan() -> anyhow::Result<()> {
         let wallet1 = DualKeyWallet::generate();
         let wallet2 = DualKeyWallet::generate();
         let addr1 = wallet1.primary_address();
 
-        let sender_out = StealthOutputSender::generate(&addr1, 0).unwrap();
+        let sender_out = StealthOutputSender::generate(&addr1, 0)?;
         let scanner2 = StealthScanner::full(&wallet2);
         let owned = scanner2.scan_output(&sender_out.output);
         assert!(owned.is_none(), "Different wallet must NOT find the output");
+        Ok(())
     }
 
     #[test]
-    fn test_stealth_address_encoding() {
+    fn test_stealth_address_encoding() -> anyhow::Result<()> {
         let wallet = DualKeyWallet::generate();
         let addr = wallet.primary_address();
         let encoded = addr.to_string();
         assert!(encoded.starts_with("HSMCst"));
         assert_eq!(encoded.len(), 6 + 128); // "HSMCst" + 64+64 hex
-        let decoded = StealthAddress::from_string(&encoded).unwrap();
+        let decoded = StealthAddress::from_string(&encoded)
+            .ok_or_else(|| anyhow::anyhow!("Failed to decode stealth address from string"))?;
         assert_eq!(
             decoded.spend_public.compress().to_bytes(),
             addr.spend_public.compress().to_bytes()
         );
+        Ok(())
     }
 
     #[test]
@@ -527,33 +531,37 @@ mod tests {
     }
 
     #[test]
-    fn test_key_image_deterministic() {
+    fn test_key_image_deterministic() -> anyhow::Result<()> {
         let wallet = DualKeyWallet::generate();
         let addr = wallet.primary_address();
-        let out = StealthOutputSender::generate(&addr, 0).unwrap();
+        let out = StealthOutputSender::generate(&addr, 0)?;
         let scanner = StealthScanner::full(&wallet);
-        let owned = scanner.scan_output(&out.output).unwrap();
+        let owned = scanner.scan_output(&out.output)
+            .ok_or_else(|| anyhow::anyhow!("Failed to scan own stealth output"))?;
 
         let ki1 = scanner.compute_key_image(&owned);
         let ki2 = scanner.compute_key_image(&owned);
         assert_eq!(ki1, ki2, "Key image must be deterministic");
+        Ok(())
     }
 
     #[test]
-    fn test_payment_id_roundtrip() {
+    fn test_payment_id_roundtrip() -> anyhow::Result<()> {
         let wallet = DualKeyWallet::generate();
         let addr = wallet.primary_address();
         let pid = [0x01, 0x02, 0x03, 0x04, 0xAB, 0xCD, 0xEF, 0x99];
 
-        let out = StealthOutputSender::generate_with_payment_id(&addr, 0, pid).unwrap();
+        let out = StealthOutputSender::generate_with_payment_id(&addr, 0, pid)?;
         let scanner = StealthScanner::full(&wallet);
-        let owned = scanner.scan_output(&out.output).unwrap();
+        let owned = scanner.scan_output(&out.output)
+            .ok_or_else(|| anyhow::anyhow!("Failed to scan stealth output with payment ID"))?;
 
         assert_eq!(owned.payment_id, Some(pid), "Payment ID must decrypt correctly");
+        Ok(())
     }
 
     #[test]
-    fn test_batch_scan_performance() {
+    fn test_batch_scan_performance() -> anyhow::Result<()> {
         let wallet = DualKeyWallet::generate();
         let addr = wallet.primary_address();
         let scanner = StealthScanner::full(&wallet);
@@ -562,13 +570,17 @@ mod tests {
         let mut outputs: Vec<OneTimeOutput> = (0..49).map(|i| {
             let other_wallet = DualKeyWallet::generate();
             let other_addr = other_wallet.primary_address();
-            StealthOutputSender::generate(&other_addr, i).unwrap().output
-        }).collect();
-        let ours = StealthOutputSender::generate(&addr, 49).unwrap();
+            StealthOutputSender::generate(&other_addr, i)
+        }).collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|s| s.output)
+            .collect();
+        let ours = StealthOutputSender::generate(&addr, 49)?;
         outputs.push(ours.output);
 
         let found = scanner.scan_batch(&outputs);
         assert_eq!(found.len(), 1, "Should find exactly 1 owned output");
         assert_eq!(found[0].output_index, 49);
+        Ok(())
     }
 }

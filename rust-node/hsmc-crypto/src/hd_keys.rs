@@ -373,54 +373,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_master_key_generation() {
-        let seed = hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
-        let master = ExtendedPrivKey::from_seed(&seed, Network::Mainnet).unwrap();
+    fn test_master_key_generation() -> anyhow::Result<()> {
+        let seed = hex::decode("000102030405060708090a0b0c0d0e0f")
+            .map_err(|e| anyhow::anyhow!("hex decode failed: {}", e))?;
+        let master = ExtendedPrivKey::from_seed(&seed, Network::Mainnet)?;
         assert_eq!(master.depth, 0);
         assert!(master.secret_key != [0u8; 32]);
+        Ok(())
     }
 
     #[test]
-    fn test_bip44_path_derivation() {
+    fn test_bip44_path_derivation() -> anyhow::Result<()> {
         let seed = b"HSMC test seed for BIP44 derivation path";
-        let master = ExtendedPrivKey::from_seed(seed, Network::Mainnet).unwrap();
+        let master = ExtendedPrivKey::from_seed(seed, Network::Mainnet)?;
         let path = DerivationPath::hsmc_account(0, 0, 0);
-        let child = master.derive_path(&path).unwrap();
+        let child = master.derive_path(&path)?;
         assert_eq!(child.depth, 5);
         let address = child.to_hsmc_address();
         assert!(address.starts_with("0x"));
         assert_eq!(address.len(), 42);
+        Ok(())
     }
 
     #[test]
-    fn test_path_parsing() {
-        let path = DerivationPath::parse("m/44'/8888'/0'/0/0").unwrap();
+    fn test_path_parsing() -> anyhow::Result<()> {
+        let path = DerivationPath::parse("m/44'/8888'/0'/0/0")?;
         assert_eq!(path.components.len(), 5);
         assert!(path.components[0].hardened);
         assert!(!path.components[3].hardened);
         assert_eq!(path.to_string(), "m/44'/8888'/0'/0/0");
+        Ok(())
     }
 
     #[test]
-    fn test_non_hardened_xpub_derivation() {
+    fn test_non_hardened_xpub_derivation() -> anyhow::Result<()> {
         let seed = b"test seed for xpub derivation HSMC";
-        let master = ExtendedPrivKey::from_seed(seed, Network::Mainnet).unwrap();
-        let path = DerivationPath::parse("m/44'/8888'/0'").unwrap();
-        let account_key = master.derive_path(&path).unwrap();
+        let master = ExtendedPrivKey::from_seed(seed, Network::Mainnet)?;
+        let path = DerivationPath::parse("m/44'/8888'/0'")?;
+        let account_key = master.derive_path(&path)?;
         let xpub = account_key.to_extended_pubkey();
 
         // Derive address 0 from xpub (non-hardened)
-        let child_pub = xpub.derive_child(0).unwrap().derive_child(0).unwrap();
+        let child_pub = xpub.derive_child(0)?.derive_child(0)?;
         let addr = child_pub.to_hsmc_address();
         assert!(addr.starts_with("0x"));
+        Ok(())
     }
 
     #[test]
-    fn test_hardened_from_public_fails() {
+    fn test_hardened_from_public_fails() -> anyhow::Result<()> {
         let seed = b"test seed";
-        let master = ExtendedPrivKey::from_seed(seed, Network::Mainnet).unwrap();
+        let master = ExtendedPrivKey::from_seed(seed, Network::Mainnet)?;
         let xpub = master.to_extended_pubkey();
         let result = xpub.derive_child(HARDENED_OFFSET + 0);
         assert!(result.is_err());
+        Ok(())
     }
 }

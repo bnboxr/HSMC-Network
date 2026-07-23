@@ -299,11 +299,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_staking_lifecycle() {
+    fn test_staking_lifecycle() -> anyhow::Result<()> {
         let mut reg = StakingRegistry::new();
         let addr = "0xstaker1".to_string();
 
-        reg.stake(addr.clone(), 500 * 100_000_000, 100, 100, None).unwrap();
+        reg.stake(addr.clone(), 500 * 100_000_000, 100, 100, None)?;
         assert_eq!(reg.total_staked, 500 * 100_000_000);
 
         // Distribute reward
@@ -316,21 +316,25 @@ mod tests {
         assert!(result.is_err());
 
         // Can unstake after lock
-        reg.unstake(&addr, 100 * 100_000_000, 201).unwrap();
+        reg.unstake(&addr, 100 * 100_000_000, 201)?;
         assert_eq!(reg.total_staked, 400 * 100_000_000);
+        Ok(())
     }
 
     #[test]
-    fn test_validator_slashing() {
+    fn test_validator_slashing() -> anyhow::Result<()> {
         let mut reg = StakingRegistry::new();
         reg.register_validator(
             "0xval1".into(), "pubkey".into(), 500, 10_000 * 100_000_000
-        ).unwrap();
-        reg.validators.get_mut("0xval1").unwrap().total_delegated = 100_000 * 100_000_000;
+        )?;
+        reg.validators.get_mut("0xval1")
+            .ok_or_else(|| anyhow::anyhow!("Validator 0xval1 not found after registration"))?
+            .total_delegated = 100_000 * 100_000_000;
         reg.total_staked = 100_000 * 100_000_000;
 
-        let slashed = reg.slash_validator("0xval1", 5, 1000).unwrap();
+        let slashed = reg.slash_validator("0xval1", 5, 1000)?;
         assert_eq!(slashed, 5_000 * 100_000_000);
         assert_eq!(reg.validators["0xval1"].status, ValidatorStatus::Jailed);
+        Ok(())
     }
 }

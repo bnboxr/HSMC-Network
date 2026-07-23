@@ -143,9 +143,10 @@ impl AddressBook {
 
             if self.tried_table.len() >= self.max_tried {
                 if let Some(worst) = self.find_worst_tried() {
-                    let evicted = self.tried_table.remove(&worst).unwrap();
-                    // Move evicted back to new table
-                    self.new_table.insert(worst, evicted);
+                    if let Some(evicted) = self.tried_table.remove(&worst) {
+                        // Move evicted back to new table
+                        self.new_table.insert(worst, evicted);
+                    }
                 }
             }
             self.tried_table.insert(key, tried_entry);

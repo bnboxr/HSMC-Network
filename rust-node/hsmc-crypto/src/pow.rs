@@ -476,14 +476,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mine_parallel_low_difficulty() {
+    async fn test_mine_parallel_low_difficulty() -> anyhow::Result<()> {
         let mut block = Block::new(1, "0".repeat(64), "HSMCtest".into(), 1, vec![]);
         block.difficulty = 1; // easy difficulty
         let stop = Arc::new(AtomicBool::new(false));
         let result = mine_parallel(block, 2, stop).await;
         assert!(result.is_some(), "Should find a solution with difficulty 1");
-        let (mined, res) = result.unwrap();
+        let (mined, res) = result
+            .ok_or_else(|| anyhow::anyhow!("Mining failed to find solution at difficulty 1"))?;
         assert!(meets_target(&mined.hash, 1));
         assert!(res.total_hashes > 0);
+        Ok(())
     }
 }

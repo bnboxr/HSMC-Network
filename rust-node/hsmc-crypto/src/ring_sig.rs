@@ -656,24 +656,27 @@ mod tests {
     }
 
     #[test]
-    fn test_lsag_sign_verify() {
+    fn test_lsag_sign_verify() -> anyhow::Result<()> {
         let (pks, sks) = make_ring(11);
         let signer_idx = 3;
         let message = b"HSMC transfer 10.0 to HSMC_DEST_ADDR";
 
         let sig = LsagSignature::sign(message, &sks[signer_idx], &pks[signer_idx], pks.clone(), signer_idx)
-            .expect("Sign should succeed");
+            .map_err(|e| anyhow::anyhow!("Sign failed: {}", e))?;
 
-        assert!(sig.verify(message).expect("Verify should not error"), "Signature must verify");
+        assert!(sig.verify(message)
+            .map_err(|e| anyhow::anyhow!("Verify failed: {}", e))?, "Signature must verify");
+        Ok(())
     }
 
     #[test]
-    fn test_lsag_reject_wrong_message() {
+    fn test_lsag_reject_wrong_message() -> anyhow::Result<()> {
         let (pks, sks) = make_ring(5);
         let signer_idx = 0;
-        let sig = LsagSignature::sign(b"original", &sks[0], &pks[0], pks, 0).unwrap();
-        let result = sig.verify(b"tampered").unwrap();
+        let sig = LsagSignature::sign(b"original", &sks[0], &pks[0], pks, 0)?;
+        let result = sig.verify(b"tampered")?;
         assert!(!result, "Must reject tampered message");
+        Ok(())
     }
 
     #[test]
@@ -685,30 +688,32 @@ mod tests {
     }
 
     #[test]
-    fn test_decoy_selection() {
+    fn test_decoy_selection() -> anyhow::Result<()> {
         let keys: Vec<RingPublicKey> = (0..100).map(|i| {
             let (pk, _) = RingPublicKey::generate();
             pk
         }).collect();
-        let (ring, signer_pos) = select_decoys(&keys, &keys[0], 11, 42).unwrap();
+        let (ring, signer_pos) = select_decoys(&keys, &keys[0], 11, 42)?;
         assert_eq!(ring.len(), 11);
         assert_eq!(ring[signer_pos], keys[0]);
+        Ok(())
     }
 
     #[test]
-    fn test_batch_verifier_key_image_dedup() {
+    fn test_batch_verifier_key_image_dedup() -> anyhow::Result<()> {
         let (pks, sks) = make_ring(4);
         let msg = b"test_message";
-        let sig1 = LsagSignature::sign(msg, &sks[0], &pks[0], pks.clone(), 0).unwrap();
+        let sig1 = LsagSignature::sign(msg, &sks[0], &pks[0], pks.clone(), 0)?;
         let sig2 = sig1.clone(); // same key image
 
         let mut bv = RingBatchVerifier::new();
         assert!(bv.add("tx1".into(), msg.to_vec(), sig1));
         assert!(!bv.add("tx2".into(), msg.to_vec(), sig2)); // duplicate key image rejected
+        Ok(())
     }
 
     #[test]
-    fn test_mlsag_sign_verify() {
+    fn test_mlsag_sign_verify() -> anyhow::Result<()> {
         let (pks, sks) = make_ring(7);
         let msg = b"mlsag multi-input test";
         let inputs = vec![
@@ -717,7 +722,8 @@ mod tests {
         ];
         // For simplicity test with single input
         let single_input = vec![(sks[1].clone(), pks[1].clone(), 1)];
-        let sig = MlsagSignature::sign_multi(msg, single_input, pks).unwrap();
-        assert!(sig.verify(msg).unwrap());
+        let sig = MlsagSignature::sign_multi(msg, single_input, pks)?;
+        assert!(sig.verify(msg)?);
+        Ok(())
     }
 }

@@ -249,7 +249,8 @@ impl GovernanceEngine {
         };
 
         self.proposals.insert(id.clone(), proposal);
-        Ok(self.proposals.get(&id).unwrap())
+        self.proposals.get(&id)
+            .ok_or_else(|| GovernanceError::ProposalNotFound(id.clone()))
     }
 
     /// Cast a vote on a proposal
@@ -270,7 +271,8 @@ impl GovernanceEngine {
 
         if proposal.votes.contains_key(&voter) {
             // Allow vote change — remove old tally
-            let old_vote = proposal.votes.remove(&voter).unwrap();
+            let old_vote = proposal.votes.remove(&voter)
+                .ok_or_else(|| GovernanceError::VoterNotFound(voter.clone()))?;
             Self::subtract_tally(&mut proposal.tally, old_vote.choice, old_vote.weight);
         }
 
@@ -367,7 +369,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_proposal_submission_and_vote() {
+    fn test_proposal_submission_and_vote() -> anyhow::Result<()> {
         let mut gov = GovernanceEngine::new();
         let id = "prop-001".to_string();
 
@@ -385,33 +387,35 @@ mod tests {
 
         // Vote yes with 60% of staking power
         let total_staked = 1_000_000_000u64;
-        gov.vote(&id, "voter1".into(), VoteOption::Yes, 600_000_000, "sig1".into()).unwrap();
-        gov.vote(&id, "voter2".into(), VoteOption::No, 200_000_000, "sig2".into()).unwrap();
-        gov.vote(&id, "voter3".into(), VoteOption::Abstain, 200_000_000, "sig3".into()).unwrap();
+        gov.vote(&id, "voter1".into(), VoteOption::Yes, 600_000_000, "sig1".into())?;
+        gov.vote(&id, "voter2".into(), VoteOption::No, 200_000_000, "sig2".into())?;
+        gov.vote(&id, "voter3".into(), VoteOption::Abstain, 200_000_000, "sig3".into())?;
 
-        let status = gov.tally_and_finalize(&id, total_staked).unwrap();
+        let status = gov.tally_and_finalize(&id, total_staked)?;
         assert_eq!(status, ProposalStatus::Passed);
 
         // Timelock created; parameter NOT yet enacted
         assert!(gov.timelocks.contains_key(&id));
         assert!(!gov.timelocks[&id].is_executable()); // 48h timelock not yet expired
         assert_eq!(gov.get_param_u64("min_fee_rate"), Some(1000)); // still old value
+        Ok(())
     }
 
     #[test]
-    fn test_veto_threshold() {
+    fn test_veto_threshold() -> anyhow::Result<()> {
         let mut gov = GovernanceEngine::new();
         let id = "prop-002".to_string();
         gov.submit_proposal(id.clone(), "0xp".into(),
             ProposalType::TextProposal { title: "test".into(), description: "d".into() },
             gov.params.min_deposit_hsmc,
-        ).unwrap();
+        )?;
 
         let total = 1_000_000_000u64;
-        gov.vote(&id, "v1".into(), VoteOption::NoWithVeto, 400_000_000, "s1".into()).unwrap();
-        gov.vote(&id, "v2".into(), VoteOption::Yes, 600_000_000, "s2".into()).unwrap();
+        gov.vote(&id, "v1".into(), VoteOption::NoWithVeto, 400_000_000, "s1".into())?;
+        gov.vote(&id, "v2".into(), VoteOption::Yes, 600_000_000, "s2".into())?;
 
-        let status = gov.tally_and_finalize(&id, total).unwrap();
+        let status = gov.tally_and_finalize(&id, total)?;
         assert_eq!(status, ProposalStatus::Vetoed);
+        Ok(())
     }
 }

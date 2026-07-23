@@ -228,21 +228,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_shamir_2of3() {
+    fn test_shamir_2of3() -> anyhow::Result<()> {
         let mut rng = OsRng;
         let secret = Scalar::random(&mut rng);
         let shares = split_secret(&secret, 2, 3);
         assert_eq!(shares.len(), 3);
 
         // Reconstruct from any 2 shares
-        let reconstructed = reconstruct_secret(&shares[..2]).unwrap();
+        let reconstructed = reconstruct_secret(&shares[..2])?;
         assert_eq!(secret, reconstructed);
 
-        let reconstructed2 = reconstruct_secret(&[shares[0].clone(), shares[2].clone()]).unwrap();
+        let reconstructed2 = reconstruct_secret(&[shares[0].clone(), shares[2].clone()])?;
         assert_eq!(secret, reconstructed2);
 
-        let reconstructed3 = reconstruct_secret(&[shares[1].clone(), shares[2].clone()]).unwrap();
+        let reconstructed3 = reconstruct_secret(&[shares[1].clone(), shares[2].clone()])?;
         assert_eq!(secret, reconstructed3);
+        Ok(())
     }
 
     #[test]
@@ -268,14 +269,15 @@ mod tests {
     }
 
     #[test]
-    fn test_3of5_reconstruction() {
+    fn test_3of5_reconstruction() -> anyhow::Result<()> {
         let mut rng = OsRng;
         let secret = Scalar::random(&mut rng);
         let shares = split_secret(&secret, 3, 5);
 
         // Pick shares 1, 3, 5
         let selected = vec![shares[0].clone(), shares[2].clone(), shares[4].clone()];
-        let reconstructed = reconstruct_secret(&selected).unwrap();
+        let reconstructed = reconstruct_secret(&selected)?;
         assert_eq!(secret, reconstructed);
+        Ok(())
     }
 }

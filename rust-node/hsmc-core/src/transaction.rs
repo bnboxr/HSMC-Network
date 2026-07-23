@@ -1302,17 +1302,18 @@ mod tests {
     }
 
     #[test]
-    fn test_bridge_lock_valid() {
+    fn test_bridge_lock_valid() -> anyhow::Result<()> {
         let tx = Transaction::new_bridge_lock(
             "HSMC_sender",
             10.0,
             BridgeChain::Bsc,
             "0xRecipient000000000000000000000000000000",
             1,
-        ).unwrap();
+        )?;
         assert_eq!(tx.bridge_dest_chain.as_deref(), Some("bsc"));
         assert!(tx.fee > 0.0);
         assert!(tx.fee < tx.amount);
+        Ok(())
     }
 
     #[test]
