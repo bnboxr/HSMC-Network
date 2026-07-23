@@ -286,6 +286,20 @@ export async function generateRingSignature(
   keyImage: string;
   ringSize: number;
 }> {
+  // ⚠️ SECURITY: The spend private key is sent to the Rust node for signing.
+  // The Rust node MUST be running on the same machine (localhost) over TLS.
+  // NEVER send the private key over an unencrypted or remote connection.
+  // See: /home/team/shared/attack-surface-map.md §3.2
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+  if (apiUrl.startsWith('http://') && !apiUrl.includes('localhost') && !apiUrl.includes('127.0.0.1')) {
+    throw new Error(
+      '❌ SECURITY: Privacy features require a LOCAL TLS connection. ' +
+      'The spend private key is about to be transmitted and MUST be encrypted. ' +
+      'Set VITE_API_URL=https://localhost:3001 or use the local API server. ' +
+      'Refusing to send private key over plaintext remote connection.'
+    );
+  }
+  
   const signerSecretHex = bytesToHex(wallet.spendPrivate);
 
   const result = await callNodeCryptoOrThrow(
