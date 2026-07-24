@@ -577,10 +577,17 @@ const tables = db
   .all() as { name: string }[];
 for (const t of tables) ALLOWED_TABLES.add(t.name);
 
-// ── Rate Limiting ────────────────────────────────────────────────────────────
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 100;
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+// ── Rate Limiting (Token Bucket, tiered per-path) ────────────────────────────
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute window
+
+interface RateLimitBucket {
+  tokens: number;
+  maxTokens: number;
+  resetAt: number;
+  lastRefill: number;
+}
+
+const rateLimitBuckets = new Map<string, RateLimitBucket>();
 
 function getClientIP(req: Request): string {
   return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
@@ -588,34 +595,74 @@ function getClientIP(req: Request): string {
          "127.0.0.1";
 }
 
-function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
-  const now = Date.now();
-  const entry = rateLimitMap.get(ip);
+/** Determine rate limit (req/min) based on the request path */
+function getRateLimitForPath(path: string): number {
+  if (path === "/health" || path === "/") return Infinity; // exempt
+  if (path.startsWith("/auth/")) return 20;
+  if (path.startsWith("/stripe/")) return 10;
+  return 100; // default REST endpoints
+}
 
-  if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+/** Per-IP token bucket rate limiter. Refills 1 token per (window / limit) ms.
+ *  Returns { allowed: false, retryAfter } on rate limit exceeded. */
+function checkRateLimit(ip: string, path: string): { allowed: boolean; retryAfter?: number } {
+  const limit = getRateLimitForPath(path);
+  if (!isFinite(limit)) return { allowed: true }; // exempt paths
+
+  const now = Date.now();
+  const refillInterval = Math.floor(RATE_LIMIT_WINDOW_MS / limit); // ms per token
+
+  let bucket = rateLimitBuckets.get(ip);
+
+  if (!bucket) {
+    bucket = { tokens: limit - 1, maxTokens: limit, resetAt: now + RATE_LIMIT_WINDOW_MS, lastRefill: now };
+    rateLimitBuckets.set(ip, bucket);
     return { allowed: true };
   }
 
-  if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
-    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
-    return { allowed: false, retryAfter };
+  // Reset entire bucket if the window has expired
+  if (now > bucket.resetAt) {
+    bucket.tokens = limit - 1;
+    bucket.maxTokens = limit;
+    bucket.resetAt = now + RATE_LIMIT_WINDOW_MS;
+    bucket.lastRefill = now;
+    return { allowed: true };
   }
 
-  entry.count++;
+  // Refill tokens based on elapsed time
+  const elapsed = now - bucket.lastRefill;
+  const tokensToAdd = Math.floor(elapsed / refillInterval);
+  if (tokensToAdd > 0) {
+    bucket.tokens = Math.min(bucket.maxTokens, bucket.tokens + tokensToAdd);
+    bucket.lastRefill += tokensToAdd * refillInterval;
+  }
+
+  if (bucket.tokens <= 0) {
+    const retryAfter = Math.ceil((bucket.resetAt - now) / 1000);
+    return { allowed: false, retryAfter: Math.max(retryAfter, 1) };
+  }
+
+  bucket.tokens--;
   return { allowed: true };
 }
 
-// Periodic cleanup of expired rate limit entries
+// Periodic cleanup of expired rate limit buckets (every 2 min)
 setInterval(() => {
   const now = Date.now();
-  for (const [ip, entry] of rateLimitMap) {
-    if (now > entry.resetAt) rateLimitMap.delete(ip);
+  for (const [ip, bucket] of rateLimitBuckets) {
+    if (now > bucket.resetAt) rateLimitBuckets.delete(ip);
   }
 }, 120_000);
 
 // ── Input Validation ─────────────────────────────────────────────────────────
-const MAX_BODY_SIZE = 1024 * 1024; // 1 MB
+const MAX_BODY_SIZE_DEFAULT = 10 * 1024 * 1024; // 10 MB
+const MAX_BODY_SIZE_AUTH = 1 * 1024 * 1024;    // 1 MB for auth endpoints
+
+/** Get max body size for a given request path */
+function getMaxBodySize(path: string): number {
+  if (path.startsWith("/auth/")) return MAX_BODY_SIZE_AUTH;
+  return MAX_BODY_SIZE_DEFAULT;
+}
 
 /** Validate column names against SQL injection patterns */
 function isValidColumnName(name: string): boolean {
@@ -690,13 +737,29 @@ function errorResponse(message: string, status = 400, details?: string): Respons
 
 function rateLimitResponse(retryAfter: number): Response {
   return new Response(
-    JSON.stringify({ error: "Rate limit exceeded", retry_after_seconds: retryAfter }),
+    JSON.stringify({ error: `Too many requests. Try again in ${retryAfter} seconds.` }),
     {
       status: 429,
       headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": CORS_ORIGIN,
         "Retry-After": String(retryAfter),
+        ...securityHeaders(USING_TLS),
+      },
+    }
+  );
+}
+
+function bodyTooLargeResponse(path: string): Response {
+  const maxSize = getMaxBodySize(path);
+  const mb = (maxSize / (1024 * 1024)).toFixed(0);
+  return new Response(
+    JSON.stringify({ error: `Request body too large. Maximum is ${mb} MB for this endpoint.` }),
+    {
+      status: 413,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": CORS_ORIGIN,
         ...securityHeaders(USING_TLS),
       },
     }
@@ -1884,12 +1947,78 @@ async function handleAuthLogin(req: Request): Promise<Response> {
 
 // ── Request Handler ──────────────────────────────────────────────────────────
 
+const REQUEST_TIMEOUT_MS = 30_000; // 30 seconds
+
 async function handleRequest(req: Request): Promise<Response> {
-  // ── Rate limiting ──────────────────────────────────────────────────────────
+  // ── Timeout wrapper: abort if request takes > 30s ──────────────────────────
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => timeoutController.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const signal = timeoutController.signal;
+
+    // Clone the request with the abort signal so body reading can be aborted
+    const reqWithSignal = new Request(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      signal,
+    });
+
+    return await handleRequestInner(reqWithSignal);
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      return new Response(
+        JSON.stringify({ error: "Request timeout — connection closed after 30 seconds" }),
+        {
+          status: 408,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": CORS_ORIGIN,
+            ...securityHeaders(USING_TLS),
+          },
+        }
+      );
+    }
+    console.error("[API] Unhandled error:", err instanceof Error ? err.message : String(err));
+    return errorResponse("Internal server error", 500);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function handleRequestInner(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const path = url.pathname;
+
+  // ── User-Agent required ────────────────────────────────────────────────────
+  const userAgent = req.headers.get("user-agent");
+  if (!userAgent) {
+    return new Response(
+      JSON.stringify({ error: "User-Agent header is required" }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": CORS_ORIGIN,
+          ...securityHeaders(USING_TLS),
+        },
+      }
+    );
+  }
+
+  // ── Rate limiting (tiered per-path, per-IP token bucket) ────────────────────
   const clientIP = getClientIP(req);
-  const rateCheck = checkRateLimit(clientIP);
+  const rateCheck = checkRateLimit(clientIP, path);
   if (!rateCheck.allowed) {
     return rateLimitResponse(rateCheck.retryAfter ?? 60);
+  }
+
+  // ── Body size check (before any body parsing) ──────────────────────────────
+  const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+  const maxBodySize = getMaxBodySize(path);
+  if (contentLength > maxBodySize) {
+    return bodyTooLargeResponse(path);
   }
 
   // ── CORS preflight ─────────────────────────────────────────────────────────
@@ -1903,9 +2032,6 @@ async function handleRequest(req: Request): Promise<Response> {
       },
     });
   }
-
-  const url = new URL(req.url);
-  const path = url.pathname;
 
   // ── Authentication ────────────────────────────────────────────────────────
   if (!isPublicPath(path)) {
@@ -2014,10 +2140,10 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       if (req.method === "POST") {
-        // Check content length
-        const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
-        if (contentLength > MAX_BODY_SIZE) {
-          return errorResponse("Request body too large", 413);
+        // Check content length (also enforced globally, but belt-and-suspenders)
+        const clen = parseInt(req.headers.get("content-length") || "0", 10);
+        if (clen > getMaxBodySize(path)) {
+          return bodyTooLargeResponse(path);
         }
 
         let body: unknown;
@@ -2184,7 +2310,9 @@ console.log(`   Stripe Sell: ${protocol}://localhost:${PORT}/stripe/payout`);
 console.log(`   Payout Webhook: ${protocol}://localhost:${PORT}/stripe/payout/webhook`);
 console.log(`   Treasury Balance: ${protocol}://localhost:${PORT}/treasury/balance`);
 console.log(`   Treasury Tx: ${protocol}://localhost:${PORT}/treasury/transactions`);
-console.log(`   Rate limit: ${RATE_LIMIT_MAX_REQUESTS} req/min per IP`);
+console.log(`   Rate limit: 100 req/min (REST), 20 req/min (/auth/*), 10 req/min (/stripe/*)`);
+console.log(`   Max body size: 10 MB (default), 1 MB (/auth/*)`);
+console.log(`   Request timeout: 30s`);
 console.log(`   Auth mode: ${IS_DEV_MODE ? "DEV (no API key required)" : "PROTECTED (API key required)"}`);
 console.log(`   TLS: ${USING_TLS ? "ENABLED" : "DISABLED"}`);
 console.log(`   CORS origin: ${CORS_ORIGIN}`);
