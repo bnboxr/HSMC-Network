@@ -23,7 +23,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { randomUUID } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 
 const DB_PATH = "/home/team/shared/hsmc.db";
 const PORT = 3001;
@@ -224,6 +224,23 @@ CREATE TABLE IF NOT EXISTS treasury_transactions (
   status TEXT CHECK(status IN ('pending', 'settled', 'failed')) DEFAULT 'settled',
   notes TEXT
 );
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  last_used_at TEXT,
+  device_name TEXT
+);
 `;
 
 // ── Seed Data (from Supabase extraction) ─────────────────────────────────────
@@ -256,7 +273,7 @@ VALUES ('a26b1814-82a1-4863-8b27-8b79647c042e', 'Beta Validator', '0xvalidator_b
 
 -- Token metrics
 INSERT OR IGNORE INTO token_metrics (id, price, price_change_24h, market_cap, market_cap_change_24h, volume_24h, volume_change_24h, fully_diluted_valuation, circulating_supply, total_supply, staked_supply, all_time_high, all_time_high_date, token_holders, ytd_return, updated_at)
-VALUES ('b9fe8407-b131-4235-9584-848f3367249a', 0.045, 2.5, 2925000, 1.8, 125000, -3.2, 45000000, 65000000, 1000000000000, 0, 0.089, 'Mar 2026', 4, 15.0, '2026-07-21T18:52:06.753+00:00');
+VALUES ('b9fe8407-b131-4235-9584-848f3367249a', 0.045, 2.5, 2925000, 1.8, 125000, -3.2, 22500000, 65000000, 500000000, 0, 0.089, 'Mar 2026', 4, 15.0, '2026-07-21T18:52:06.753+00:00');
 
 -- Price history: 4+ rows
 INSERT OR IGNORE INTO price_history (id, price, volume, timestamp)
@@ -303,6 +320,148 @@ console.log("✅ Created 35 tables");
 // Seed data
 db.exec(SEED_SQL);
 console.log("✅ Seeded test data");
+
+// ── Auth Configuration ───────────────────────────────────────────────────────
+const HSMC_API_KEY = process.env.HSMC_API_KEY || "";
+const JWT_SECRET = process.env.JWT_SECRET || "";
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
+const TLS_CERT = process.env.TLS_CERT || "";
+const TLS_KEY = process.env.TLS_KEY || "";
+const IS_DEV_MODE = !HSMC_API_KEY;
+const USING_TLS = !!(TLS_CERT && TLS_KEY);
+const JWT_EXPIRY_SECONDS = 3600; // 1 hour
+
+if (IS_DEV_MODE) {
+  console.warn("⚠️  WARNING: HSMC_API_KEY not set — API server running in DEV MODE (no auth required).");
+}
+
+if (!JWT_SECRET) {
+  console.warn("⚠️  WARNING: JWT_SECRET not set — JWT auth will fail. Set JWT_SECRET env var.");
+}
+
+// ── Constant-time string comparison ──────────────────────────────────────────
+function constantTimeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf-8");
+  const bBuf = Buffer.from(b, "utf-8");
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
+}
+
+// ── Password hashing (PBKDF2-SHA256) ─────────────────────────────────────────
+async function hashPassword(password: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey(
+    "raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+    key, 256
+  );
+  const hashHex = Buffer.from(new Uint8Array(bits)).toString("hex");
+  const saltHex = Buffer.from(salt).toString("hex");
+  return `${saltHex}:${hashHex}`;
+}
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [saltHex, hashHex] = stored.split(":");
+  if (!saltHex || !hashHex) return false;
+  const salt = Buffer.from(saltHex, "hex");
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+    key, 256
+  );
+  const computed = Buffer.from(new Uint8Array(bits)).toString("hex");
+  return constantTimeEqual(computed, hashHex);
+}
+
+// ── JWT (HMAC-SHA256) ────────────────────────────────────────────────────────
+function base64urlEncode(buf: Buffer): string {
+  return buf.toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+async function signJWT(payload: Record<string, unknown>): Promise<string> {
+  const encoder = new TextEncoder();
+  const header = base64urlEncode(Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+  const body = base64urlEncode(Buffer.from(JSON.stringify(payload)));
+  const data = `${header}.${body}`;
+
+  const key = await crypto.subtle.importKey(
+    "raw", encoder.encode(JWT_SECRET),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
+  const signature = base64urlEncode(Buffer.from(new Uint8Array(sig)));
+
+  return `${data}.${signature}`;
+}
+
+async function verifyJWT(token: string): Promise<Record<string, unknown> | null> {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+
+    const encoder = new TextEncoder();
+    const data = `${parts[0]}.${parts[1]}`;
+    const key = await crypto.subtle.importKey(
+      "raw", encoder.encode(JWT_SECRET),
+      { name: "HMAC", hash: "SHA-256" }, false, ["verify"]
+    );
+
+    // Decode signature
+    const sigStr = parts[2].replace(/-/g, "+").replace(/_/g, "/");
+    const sigBuf = Buffer.from(sigStr, "base64");
+
+    const valid = await crypto.subtle.verify("HMAC", key, sigBuf, encoder.encode(data));
+    if (!valid) return null;
+
+    // Decode payload
+    const payloadStr = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const payloadJson = Buffer.from(payloadStr, "base64").toString("utf-8");
+    const payload = JSON.parse(payloadJson) as Record<string, unknown>;
+
+    // Check expiry
+    if (payload.exp && typeof payload.exp === "number" && Date.now() > payload.exp * 1000) {
+      return null; // expired
+    }
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// ── API Key Authentication ───────────────────────────────────────────────────
+function extractApiKey(req: Request): string | null {
+  // Check Authorization: Bearer <key>
+  const authHeader = req.headers.get("authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+    // If it's a JWT (contains two dots), it's not an API key
+    if (token.split(".").length === 3) return null;
+    return token;
+  }
+  // Check x-api-key header
+  return req.headers.get("x-api-key");
+}
+
+function checkApiKey(req: Request): boolean {
+  if (IS_DEV_MODE) return true;
+  const key = extractApiKey(req);
+  if (!key) return false;
+  return constantTimeEqual(key, HSMC_API_KEY);
+}
+
+// ── Health check paths (no auth required) ────────────────────────────────────
+const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge"]);
+
+function isPublicPath(path: string): boolean {
+  return PUBLIC_PATHS.has(path);
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 type ParsedQuery = {
@@ -500,16 +659,25 @@ function calculateHsmcFee(amountUsd: number): HsmcFeeResult {
 }
 
 // ── Response Helpers ─────────────────────────────────────────────────────────
-const DEV_CORS_ORIGIN = "*"; // Keep * for dev — restrict in production via env
+function securityHeaders(isHttps: boolean): Record<string, string> {
+  const headers: Record<string, string> = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-XSS-Protection": "1; mode=block",
+  };
+  if (isHttps) {
+    headers["Strict-Transport-Security"] = "max-age=31536000";
+  }
+  return headers;
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": DEV_CORS_ORIGIN,
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": CORS_ORIGIN,
+    ...securityHeaders(USING_TLS),
+  };
+  return new Response(JSON.stringify(body), { status, headers });
 }
 
 function errorResponse(message: string, status = 400, details?: string): Response {
@@ -525,8 +693,9 @@ function rateLimitResponse(retryAfter: number): Response {
       status: 429,
       headers: {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": DEV_CORS_ORIGIN,
+        "Access-Control-Allow-Origin": CORS_ORIGIN,
         "Retry-After": String(retryAfter),
+        ...securityHeaders(USING_TLS),
       },
     }
   );
@@ -1054,6 +1223,663 @@ function handleTreasuryTransactions(req: Request): Response {
   return jsonResponse(transactions);
 }
 
+// ── WebAuthn Challenge Store ─────────────────────────────────────────────────
+const CHALLENGE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const challengeStore = new Map<string, { challenge: string; userId: string; createdAt: number }>();
+
+function storeChallenge(userId: string, challenge: string): void {
+  challengeStore.set(challenge, { challenge, userId, createdAt: Date.now() });
+  // Clean expired challenges periodically
+  if (challengeStore.size > 1000) {
+    const now = Date.now();
+    for (const [key, entry] of challengeStore) {
+      if (now - entry.createdAt > CHALLENGE_TTL_MS) challengeStore.delete(key);
+    }
+  }
+}
+
+function consumeChallenge(challenge: string): { userId: string } | null {
+  const entry = challengeStore.get(challenge);
+  if (!entry) return null;
+  if (Date.now() - entry.createdAt > CHALLENGE_TTL_MS) {
+    challengeStore.delete(challenge);
+    return null;
+  }
+  challengeStore.delete(challenge);
+  return { userId: entry.userId };
+}
+
+// ── Minimal CBOR Parser (for WebAuthn attestationObject) ─────────────────────
+// WebAuthn attestationObject is a CBOR map: { "fmt": tstr, "attStmt": map, "authData": bstr }
+// We only need to extract authData and the COSE public key from it.
+
+type CborValue = 
+  | { type: 'uint'; value: number }
+  | { type: 'nint'; value: number }
+  | { type: 'bstr'; value: Uint8Array }
+  | { type: 'tstr'; value: string }
+  | { type: 'array'; value: CborValue[] }
+  | { type: 'map'; value: Map<CborValue, CborValue> }
+  | { type: 'simple'; value: number };
+
+function decodeCbor(buf: Uint8Array): { value: CborValue; offset: number } {
+  if (buf.length === 0) throw new Error('Empty CBOR data');
+  const majorType = buf[0] >> 5;
+  const additionalInfo = buf[0] & 0x1f;
+  let offset = 1;
+
+  function readLength(): number {
+    if (additionalInfo < 24) return additionalInfo;
+    if (additionalInfo === 24) { const v = buf[offset++]; return v; }
+    if (additionalInfo === 25) { const v = (buf[offset] << 8) | buf[offset + 1]; offset += 2; return v; }
+    if (additionalInfo === 26) { const v = (buf[offset] << 24) | (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3]; offset += 4; return v; }
+    if (additionalInfo === 27) {
+      const hi = (buf[offset] << 24) | (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3];
+      const lo = (buf[offset + 4] << 24) | (buf[offset + 5] << 16) | (buf[offset + 6] << 8) | buf[offset + 7];
+      offset += 8;
+      return hi * 0x100000000 + lo;
+    }
+    throw new Error('Unsupported CBOR length encoding');
+  }
+
+  if (majorType === 0) return { value: { type: 'uint', value: readLength() }, offset };
+  if (majorType === 1) return { value: { type: 'nint', value: -1 - readLength() }, offset };
+  if (majorType === 2) {
+    const len = readLength();
+    const bytes = buf.slice(offset, offset + len);
+    offset += len;
+    return { value: { type: 'bstr', value: bytes }, offset };
+  }
+  if (majorType === 3) {
+    const len = readLength();
+    const str = new TextDecoder().decode(buf.slice(offset, offset + len));
+    offset += len;
+    return { value: { type: 'tstr', value: str }, offset };
+  }
+  if (majorType === 4) {
+    const len = readLength();
+    const arr: CborValue[] = [];
+    let remaining = len;
+    while (remaining > 0) {
+      const item = decodeCbor(buf.slice(offset));
+      arr.push(item.value);
+      offset += item.offset;
+      remaining--;
+    }
+    return { value: { type: 'array', value: arr }, offset };
+  }
+  if (majorType === 5) {
+    const len = readLength();
+    const map = new Map<CborValue, CborValue>();
+    let remaining = len;
+    while (remaining > 0) {
+      const key = decodeCbor(buf.slice(offset));
+      offset += key.offset;
+      const val = decodeCbor(buf.slice(offset));
+      offset += val.offset;
+      map.set(key.value, val.value);
+      remaining--;
+    }
+    return { value: { type: 'map', value: map }, offset };
+  }
+  if (majorType === 7 && additionalInfo < 24) {
+    return { value: { type: 'simple', value: additionalInfo }, offset };
+  }
+
+  throw new Error(`Unsupported CBOR major type ${majorType}`);
+}
+
+function cborMapGet(map: CborValue, key: string | number): CborValue | undefined {
+  if (map.type !== 'map') return undefined;
+  for (const [k, v] of map.value) {
+    if (k.type === 'tstr' && k.value === key) return v;
+    if (k.type === 'uint' && k.value === key) return v;
+    if (k.type === 'nint' && k.value === key) return v;
+  }
+  return undefined;
+}
+
+// ── Parse COSE Public Key (EC2/P-256/ES256) ─────────────────────────────────
+interface ParsedPublicKey {
+  x: Uint8Array;
+  y: Uint8Array;
+}
+
+function parseCosePublicKey(authData: Uint8Array): ParsedPublicKey | null {
+  try {
+    // Skip rpIdHash (32) + flags (1) + signCount (4) = 37 bytes
+    if (authData.length < 37) return null;
+    const flags = authData[32];
+    const AT_FLAG = 0x40; // Attested credential data included
+    if (!(flags & AT_FLAG)) return null;
+
+    let offset = 37; // Skip to attestedCredentialData
+    // Skip AAGUID (16 bytes)
+    offset += 16;
+    // credentialIdLength (2 bytes big-endian)
+    const credIdLen = (authData[offset] << 8) | authData[offset + 1];
+    offset += 2;
+    // Skip credentialId
+    offset += credIdLen;
+
+    // Remaining bytes are the COSE_Key
+    const coseKeyBuf = authData.slice(offset);
+    const decoded = decodeCbor(coseKeyBuf);
+
+    if (decoded.value.type !== 'map') return null;
+    const coseKey = decoded.value;
+
+    // COSE Key fields: 1=kty(EC2=2), 3=alg(ES256=-7), -1=crv(P-256=1), -2=x, -3=y
+    const kty = cborMapGet(coseKey, 1);
+    const alg = cborMapGet(coseKey, 3);
+    const xField = cborMapGet(coseKey, -2);
+    const yField = cborMapGet(coseKey, -3);
+
+    if (!xField || xField.type !== 'bstr' || !yField || yField.type !== 'bstr') return null;
+
+    return {
+      x: xField.value,
+      y: yField.value,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── Convert raw P-256 public key (x || y, 64 bytes) to SPKI DER ────────────
+function rawP256ToSpki(x: Uint8Array, y: Uint8Array): Uint8Array {
+  // Uncompressed point: 04 || x || y
+  const point = new Uint8Array(65);
+  point[0] = 0x04;
+  point.set(x, 1);
+  point.set(y, 33);
+
+  // SPKI DER for P-256: SEQUENCE { SEQUENCE { OID 1.2.840.10045.2.1 (ecPublicKey), OID 1.2.840.10045.3.1.7 (P-256) }, BIT STRING uncompressed point }
+  const ecPublicKeyOid = new Uint8Array([0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]); // 1.2.840.10045.2.1
+  const p256Oid = new Uint8Array([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]); // 1.2.840.10045.3.1.7
+  const algorithmSeq = new Uint8Array(ecPublicKeyOid.length + p256Oid.length + 2);
+  algorithmSeq[0] = 0x30; algorithmSeq[1] = ecPublicKeyOid.length + p256Oid.length;
+  algorithmSeq.set(ecPublicKeyOid, 2);
+  algorithmSeq.set(p256Oid, 2 + ecPublicKeyOid.length);
+
+  // BIT STRING with 1 unused bit byte
+  const bitString = new Uint8Array(point.length + 1);
+  bitString[0] = 0x00; // 0 unused bits
+  bitString.set(point, 1);
+
+  const totalLen = algorithmSeq.length + bitString.length;
+  const spki = new Uint8Array(totalLen + 2);
+  spki[0] = 0x30; spki[1] = totalLen;
+  spki.set(algorithmSeq, 2);
+  spki.set(bitString, 2 + algorithmSeq.length);
+
+  return spki;
+}
+
+// ── DER ECDSA signature to raw (r||s) for Web Crypto ────────────────────────
+function derSignatureToRaw(derSig: Uint8Array): Uint8Array | null {
+  try {
+    // DER: 0x30 LEN 0x02 rLen rBytes 0x02 sLen sBytes
+    if (derSig[0] !== 0x30) return null;
+    let offset = 2;
+    if (derSig[offset] !== 0x02) return null;
+    offset++;
+    const rLen = derSig[offset];
+    offset++;
+    let rBytes = derSig.slice(offset, offset + rLen);
+    offset += rLen;
+    if (derSig[offset] !== 0x02) return null;
+    offset++;
+    const sLen = derSig[offset];
+    offset++;
+    let sBytes = derSig.slice(offset, offset + sLen);
+
+    // Ensure r and s are 32 bytes (strip leading zeros, pad if necessary)
+    if (rBytes.length > 32 && rBytes[0] === 0) rBytes = rBytes.slice(1);
+    if (sBytes.length > 32 && sBytes[0] === 0) sBytes = sBytes.slice(1);
+
+    const r = new Uint8Array(32);
+    const s = new Uint8Array(32);
+    r.set(rBytes.slice(Math.max(0, rBytes.length - 32)), 32 - Math.min(32, rBytes.length));
+    s.set(sBytes.slice(Math.max(0, sBytes.length - 32)), 32 - Math.min(32, sBytes.length));
+
+    const raw = new Uint8Array(64);
+    raw.set(r, 0);
+    raw.set(s, 32);
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+// ── WebAuthn Handlers ────────────────────────────────────────────────────────
+
+/** POST /auth/webauthn/register — store a biometric credential */
+async function handleWebAuthnRegister(req: Request): Promise<Response> {
+  if (!JWT_SECRET) {
+    return errorResponse("JWT auth not configured — set JWT_SECRET env var", 500);
+  }
+
+  let body: {
+    credential?: {
+      id?: string;
+      rawId?: string;
+      response?: { attestationObject?: string; clientDataJSON?: string };
+      type?: string;
+    };
+    userId?: string;
+    deviceName?: string;
+  };
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  const cred = body.credential;
+  const userId = body.userId;
+  const deviceName = body.deviceName || "Unknown Device";
+
+  if (!cred || !cred.id || !cred.response?.attestationObject || !cred.response?.clientDataJSON) {
+    return errorResponse("credential.id, attestationObject, and clientDataJSON are required", 400);
+  }
+  if (!userId) {
+    return errorResponse("userId is required", 400);
+  }
+  if (cred.type !== "public-key") {
+    return errorResponse("credential.type must be 'public-key'", 400);
+  }
+
+  // Verify user exists
+  const user = db.query("SELECT id FROM users WHERE id = ?").get(userId) as { id: string } | null;
+  if (!user) {
+    return errorResponse("User not found", 404);
+  }
+
+  // Decode attestationObject (base64url → CBOR)
+  const attestationB64 = cred.response.attestationObject.replace(/-/g, "+").replace(/_/g, "/");
+  let attestationBuf: Uint8Array;
+  try {
+    attestationBuf = new Uint8Array(Buffer.from(attestationB64, "base64"));
+  } catch {
+    return errorResponse("Invalid attestationObject base64 encoding", 400);
+  }
+
+  let attestationObj: CborValue;
+  try {
+    attestationObj = decodeCbor(attestationBuf).value;
+  } catch (e: unknown) {
+    return errorResponse("Failed to parse attestationObject CBOR", 400, e instanceof Error ? e.message : String(e));
+  }
+
+  const authDataField = cborMapGet(attestationObj, "authData");
+  if (!authDataField || authDataField.type !== 'bstr') {
+    return errorResponse("authData not found in attestationObject", 400);
+  }
+
+  const authData = authDataField.value;
+
+  // Verify rpIdHash (first 32 bytes of authData)
+  // In production we'd verify against the RP ID, but we accept any valid authData
+
+  // Parse public key from authData
+  const parsedKey = parseCosePublicKey(authData);
+  if (!parsedKey) {
+    return errorResponse("Failed to parse COSE public key from authData", 400);
+  }
+
+  // Convert to SPKI format and encode as base64 for storage
+  const spki = rawP256ToSpki(parsedKey.x, parsedKey.y);
+  const publicKeyBase64 = Buffer.from(spki).toString("base64");
+
+  // Decode clientDataJSON to verify challenge
+  const clientDataB64 = cred.response.clientDataJSON.replace(/-/g, "+").replace(/_/g, "/");
+  let clientDataJson: string;
+  try {
+    clientDataJson = Buffer.from(clientDataB64, "base64").toString("utf-8");
+  } catch {
+    return errorResponse("Invalid clientDataJSON base64 encoding", 400);
+  }
+
+  let clientData: { challenge?: string; type?: string; origin?: string };
+  try {
+    clientData = JSON.parse(clientDataJson);
+  } catch {
+    return errorResponse("Invalid clientDataJSON format", 400);
+  }
+
+  // Verify challenge (anti-replay)
+  if (!clientData.challenge) {
+    return errorResponse("Missing challenge in clientDataJSON", 400);
+  }
+
+  const consumed = consumeChallenge(clientData.challenge);
+  if (!consumed) {
+    return errorResponse("Invalid or expired challenge", 400);
+  }
+
+  if (consumed.userId !== userId) {
+    return errorResponse("Challenge does not match user", 400);
+  }
+
+  // Store credential
+  const now = new Date().toISOString();
+  const credentialId = cred.id;
+
+  // Check for duplicate
+  const existing = db.query("SELECT id FROM webauthn_credentials WHERE id = ?").get(credentialId) as { id: string } | null;
+  if (existing) {
+    // Update existing
+    db.run(
+      "UPDATE webauthn_credentials SET public_key = ?, device_name = ?, last_used_at = ? WHERE id = ?",
+      publicKeyBase64, deviceName, now, credentialId
+    );
+  } else {
+    db.run(
+      "INSERT INTO webauthn_credentials (id, user_id, public_key, created_at, last_used_at, device_name) VALUES (?, ?, ?, ?, ?, ?)",
+      credentialId, userId, publicKeyBase64, now, now, deviceName
+    );
+  }
+
+  return jsonResponse({ success: true, credential_id: credentialId }, 201);
+}
+
+/** POST /auth/webauthn/login — authenticate with biometric */
+async function handleWebAuthnLogin(req: Request): Promise<Response> {
+  if (!JWT_SECRET) {
+    return errorResponse("JWT auth not configured — set JWT_SECRET env var", 500);
+  }
+
+  let body: {
+    credential?: {
+      id?: string;
+      rawId?: string;
+      response?: { authenticatorData?: string; clientDataJSON?: string; signature?: string; userHandle?: string };
+      type?: string;
+    };
+  };
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  const cred = body.credential;
+  if (!cred || !cred.id || !cred.response?.authenticatorData || !cred.response?.clientDataJSON || !cred.response?.signature) {
+    return errorResponse("credential.id, authenticatorData, clientDataJSON, and signature are required", 400);
+  }
+  if (cred.type !== "public-key") {
+    return errorResponse("credential.type must be 'public-key'", 400);
+  }
+
+  // Decode base64url fields
+  const decodeB64u = (s: string): Uint8Array => {
+    const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+    return new Uint8Array(Buffer.from(b64, "base64"));
+  };
+
+  let authenticatorData: Uint8Array, clientDataJSON: Uint8Array, signature: Uint8Array;
+  try {
+    authenticatorData = decodeB64u(cred.response.authenticatorData);
+    clientDataJSON = decodeB64u(cred.response.clientDataJSON);
+    signature = decodeB64u(cred.response.signature);
+  } catch {
+    return errorResponse("Invalid base64url encoding in credential fields", 400);
+  }
+
+  // Verify challenge
+  let clientData: { challenge?: string; type?: string };
+  try {
+    clientData = JSON.parse(new TextDecoder().decode(clientDataJSON));
+  } catch {
+    return errorResponse("Invalid clientDataJSON format", 400);
+  }
+
+  if (!clientData.challenge) {
+    return errorResponse("Missing challenge in clientDataJSON", 400);
+  }
+
+  const consumed = consumeChallenge(clientData.challenge);
+  if (!consumed) {
+    return errorResponse("Invalid or expired challenge", 400);
+  }
+
+  // Find credential in DB
+  const storedCred = db.query(
+    "SELECT * FROM webauthn_credentials WHERE id = ?"
+  ).get(cred.id) as { id: string; user_id: string; public_key: string } | null;
+
+  if (!storedCred) {
+    return errorResponse("Credential not found. Register first.", 404);
+  }
+
+  // Decode stored public key (SPKI base64)
+  let publicKeySpki: Uint8Array;
+  try {
+    publicKeySpki = new Uint8Array(Buffer.from(storedCred.public_key, "base64"));
+  } catch {
+    return errorResponse("Stored public key is invalid", 500);
+  }
+
+  // Verify signature: signed data = authenticatorData || SHA-256(clientDataJSON)
+  const clientDataHash = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", clientDataJSON)
+  );
+  const signedData = new Uint8Array(authenticatorData.length + clientDataHash.length);
+  signedData.set(authenticatorData, 0);
+  signedData.set(clientDataHash, authenticatorData.length);
+
+  // Convert DER signature to raw format for Web Crypto
+  const rawSignature = derSignatureToRaw(signature);
+  if (!rawSignature) {
+    return errorResponse("Failed to parse ECDSA DER signature", 400);
+  }
+
+  // Import public key
+  let cryptoKey: CryptoKey;
+  try {
+    cryptoKey = await crypto.subtle.importKey(
+      "spki",
+      publicKeySpki,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"]
+    );
+  } catch (e: unknown) {
+    return errorResponse("Failed to import stored public key", 500, e instanceof Error ? e.message : String(e));
+  }
+
+  // Verify
+  let valid: boolean;
+  try {
+    valid = await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      cryptoKey,
+      rawSignature,
+      signedData
+    );
+  } catch {
+    return errorResponse("Signature verification failed", 401);
+  }
+
+  if (!valid) {
+    return errorResponse("Invalid signature", 401);
+  }
+
+  // Update last_used_at
+  const now = new Date().toISOString();
+  db.run("UPDATE webauthn_credentials SET last_used_at = ? WHERE id = ?", now, cred.id);
+
+  // Get user info and issue JWT
+  const user = db.query("SELECT id, email, created_at FROM users WHERE id = ?").get(storedCred.user_id) as {
+    id: string; email: string; created_at: string;
+  } | null;
+
+  if (!user) {
+    return errorResponse("User not found", 404);
+  }
+
+  const token = await signJWT({
+    userId: user.id,
+    email: user.email,
+    exp: Math.floor(Date.now() / 1000) + JWT_EXPIRY_SECONDS,
+  });
+
+  return jsonResponse({
+    token,
+    user: { id: user.id, email: user.email, created_at: user.created_at },
+  });
+}
+
+/** POST /auth/webauthn/unregister — remove biometric credential */
+async function handleWebAuthnUnregister(req: Request): Promise<Response> {
+  let body: { userId?: string; credentialId?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  const { userId, credentialId } = body;
+
+  if (credentialId) {
+    // Delete a specific credential
+    const cred = db.query(
+      "SELECT id FROM webauthn_credentials WHERE id = ? AND user_id = ?"
+    ).get(credentialId, userId) as { id: string } | null;
+    if (!cred) {
+      return errorResponse("Credential not found", 404);
+    }
+    db.run("DELETE FROM webauthn_credentials WHERE id = ?", credentialId);
+  } else if (userId) {
+    // Delete all credentials for user
+    db.run("DELETE FROM webauthn_credentials WHERE user_id = ?", userId);
+  } else {
+    return errorResponse("userId or credentialId is required", 400);
+  }
+
+  return jsonResponse({ success: true });
+}
+
+/** POST /auth/webauthn/challenge — generate a challenge for registration/login */
+async function handleWebAuthnChallenge(req: Request): Promise<Response> {
+  let body: { userId?: string };
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
+  }
+
+  const userId = body.userId || "anonymous";
+  const challengeBytes = crypto.getRandomValues(new Uint8Array(32));
+  const challenge = Buffer.from(challengeBytes).toString("base64url");
+
+  storeChallenge(userId, challenge);
+
+  return jsonResponse({ challenge });
+}
+
+// ── Auth Handlers ────────────────────────────────────────────────────────────
+
+/** POST /auth/register — create a new user account */
+async function handleAuthRegister(req: Request): Promise<Response> {
+  if (!JWT_SECRET) {
+    return errorResponse("JWT auth not configured — set JWT_SECRET env var", 500);
+  }
+
+  let body: { email?: string; password?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  const email = (body.email || "").trim().toLowerCase();
+  const password = body.password || "";
+
+  if (!email || !password) {
+    return errorResponse("email and password are required", 400);
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return errorResponse("Invalid email format", 400);
+  }
+
+  if (password.length < 8) {
+    return errorResponse("Password must be at least 8 characters", 400);
+  }
+
+  // Check if user already exists
+  const existing = db.query("SELECT id FROM users WHERE email = ?").get(email) as { id: string } | null;
+  if (existing) {
+    return errorResponse("A user with this email already exists", 409);
+  }
+
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  const passwordHash = await hashPassword(password);
+
+  db.run(
+    "INSERT INTO users (id, email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+    id, email, passwordHash, now, now
+  );
+
+  const token = await signJWT({
+    userId: id,
+    email,
+    exp: Math.floor(Date.now() / 1000) + JWT_EXPIRY_SECONDS,
+  });
+
+  return jsonResponse({
+    token,
+    user: { id, email, created_at: now },
+  }, 201);
+}
+
+/** POST /auth/login — authenticate and return JWT */
+async function handleAuthLogin(req: Request): Promise<Response> {
+  if (!JWT_SECRET) {
+    return errorResponse("JWT auth not configured — set JWT_SECRET env var", 500);
+  }
+
+  let body: { email?: string; password?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  const email = (body.email || "").trim().toLowerCase();
+  const password = body.password || "";
+
+  if (!email || !password) {
+    return errorResponse("email and password are required", 400);
+  }
+
+  const user = db.query("SELECT id, email, password_hash, created_at FROM users WHERE email = ?")
+    .get(email) as { id: string; email: string; password_hash: string; created_at: string } | null;
+
+  if (!user) {
+    return errorResponse("Invalid email or password", 401);
+  }
+
+  const valid = await verifyPassword(password, user.password_hash);
+  if (!valid) {
+    return errorResponse("Invalid email or password", 401);
+  }
+
+  const token = await signJWT({
+    userId: user.id,
+    email: user.email,
+    exp: Math.floor(Date.now() / 1000) + JWT_EXPIRY_SECONDS,
+  });
+
+  return jsonResponse({
+    token,
+    user: { id: user.id, email: user.email, created_at: user.created_at },
+  });
+}
+
 // ── Request Handler ──────────────────────────────────────────────────────────
 
 async function handleRequest(req: Request): Promise<Response> {
@@ -1069,9 +1895,9 @@ async function handleRequest(req: Request): Promise<Response> {
     return new Response(null, {
       status: 204,
       headers: {
-        "Access-Control-Allow-Origin": DEV_CORS_ORIGIN,
+        "Access-Control-Allow-Origin": CORS_ORIGIN,
         "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, Prefer, stripe-signature",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, Prefer, stripe-signature",
       },
     });
   }
@@ -1079,9 +1905,42 @@ async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
 
-  // Health check
+  // ── Authentication ────────────────────────────────────────────────────────
+  if (!isPublicPath(path)) {
+    if (!checkApiKey(req)) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+  }
+
+  // Health check (public, no auth)
   if (path === "/health" || path === "/") {
-    return jsonResponse({ status: "ok", tables: ALLOWED_TABLES.size });
+    return jsonResponse({ status: "ok", tables: ALLOWED_TABLES.size, auth_mode: IS_DEV_MODE ? "dev" : "api_key" });
+  }
+
+  // ── Auth Endpoints ────────────────────────────────────────────────────────
+  if (path === "/auth/login" && req.method === "POST") {
+    return handleAuthLogin(req);
+  }
+
+  if (path === "/auth/register" && req.method === "POST") {
+    return handleAuthRegister(req);
+  }
+
+  // ── WebAuthn (Biometric) Endpoints ─────────────────────────────────────────
+  if (path === "/auth/webauthn/challenge" && req.method === "POST") {
+    return handleWebAuthnChallenge(req);
+  }
+
+  if (path === "/auth/webauthn/register" && req.method === "POST") {
+    return handleWebAuthnRegister(req);
+  }
+
+  if (path === "/auth/webauthn/login" && req.method === "POST") {
+    return handleWebAuthnLogin(req);
+  }
+
+  if (path === "/auth/webauthn/unregister" && req.method === "POST") {
+    return handleWebAuthnUnregister(req);
   }
 
   // Stripe checkout endpoint for HSMCPay
@@ -1291,18 +2150,40 @@ async function handleRequest(req: Request): Promise<Response> {
   return errorResponse("Not found", 404);
 }
 
-const server = Bun.serve({
+// ── Start Server ──────────────────────────────────────────────────────────────
+const serverOptions: Record<string, unknown> = {
   port: PORT,
   fetch: handleRequest,
-});
+};
 
-console.log(`🚀 HSMC Local API server running on http://localhost:${PORT}`);
-console.log(`   REST: http://localhost:${PORT}/rest/v1/:table`);
-console.log(`   Health: http://localhost:${PORT}/health`);
-console.log(`   Stripe Buy: http://localhost:${PORT}/stripe/checkout`);
-console.log(`   Stripe Sell: http://localhost:${PORT}/stripe/payout`);
-console.log(`   Payout Webhook: http://localhost:${PORT}/stripe/payout/webhook`);
-console.log(`   Treasury Balance: http://localhost:${PORT}/treasury/balance`);
-console.log(`   Treasury Tx: http://localhost:${PORT}/treasury/transactions`);
+if (USING_TLS) {
+  serverOptions.tls = {
+    cert: Bun.file(TLS_CERT),
+    key: Bun.file(TLS_KEY),
+  };
+}
+
+const server = Bun.serve(serverOptions as Parameters<typeof Bun.serve>[0]);
+
+const protocol = USING_TLS ? "https" : "http";
+if (!USING_TLS) {
+  console.warn("⚠️  WARNING: API server running WITHOUT TLS encryption. All traffic is visible on the network.");
+  console.warn("   To enable TLS, set TLS_CERT and TLS_KEY env vars pointing to your certificate files.");
+  console.warn("   Generate a self-signed cert for dev:");
+  console.warn("   openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes");
+}
+console.log(`🚀 HSMC Local API server running on ${protocol}://localhost:${PORT}`);
+console.log(`   REST: ${protocol}://localhost:${PORT}/rest/v1/:table`);
+console.log(`   Health: ${protocol}://localhost:${PORT}/health`);
+console.log(`   Auth: ${protocol}://localhost:${PORT}/auth/login | /auth/register`);
+console.log(`   WebAuthn: ${protocol}://localhost:${PORT}/auth/webauthn/login | /register | /unregister | /challenge`);
+console.log(`   Stripe Buy: ${protocol}://localhost:${PORT}/stripe/checkout`);
+console.log(`   Stripe Sell: ${protocol}://localhost:${PORT}/stripe/payout`);
+console.log(`   Payout Webhook: ${protocol}://localhost:${PORT}/stripe/payout/webhook`);
+console.log(`   Treasury Balance: ${protocol}://localhost:${PORT}/treasury/balance`);
+console.log(`   Treasury Tx: ${protocol}://localhost:${PORT}/treasury/transactions`);
 console.log(`   Rate limit: ${RATE_LIMIT_MAX_REQUESTS} req/min per IP`);
+console.log(`   Auth mode: ${IS_DEV_MODE ? "DEV (no API key required)" : "PROTECTED (API key required)"}`);
+console.log(`   TLS: ${USING_TLS ? "ENABLED" : "DISABLED"}`);
+console.log(`   CORS origin: ${CORS_ORIGIN}`);
 console.log(`   Tables: ${ALLOWED_TABLES.size}`);
