@@ -1,8 +1,10 @@
 # HSMC Network — Master Blueprint
 
-> **Ultima actualizare:** 2026-07-21
+> **Ultima actualizare:** 2026-07-24
 > **Owner:** Ifrim George  
-> **Status:** Build in progress — Phase 3 (backend hardening + multi-chain)
+> **Status:** Build in progress — Phase 4 (security + infra complete; 7/34 features done)
+> 
+> 📋 **Breakdown complet:** Vezi [HSMC-MASTER-PLAN.md](server/HSMC-MASTER-PLAN.md) — 416 sub-task-uri, 1,896 ore
 
 ---
 
@@ -61,14 +63,15 @@ HSMC Network este un blockchain Layer 1 **post-quantum** cu confidențialitate r
 
 ## 🔧 În lucru acum
 
-| Task | Prioritate |
-|---|---|
-| Privacy (RingCT/stealth) în wallet UI | 🔴 C2 |
-| Treasury endpoint + fee decontare | 🏦 NOU |
-| HSMCPay sell/payout flow | 🟠 H4 |
-| WebAuthn/biometric în 2FA | 🟠 H6 |
-| Stratum mining server hardening | ⛏️ |
-| Multi-chain bridge connectors | 🌉 H2 |
+| # | Task | Prioritate | Ore | 
+|---|------|-----------|-----|
+| 1 | Privacy wiring în web wallet | 🔴 CRITICAL | 55h |
+| 2 | HSMCPay settlement real (Stripe) | 🔴 CRITICAL | 34h |
+| 3 | Post-quantum crypto (Kyber+Dilithium) | 🟠 HIGH | 43h |
+| 4 | Stratum V2 upgrade | 🟠 HIGH | 30h |
+| 5 | Bridge hardening (7 chain-uri rămase) | 🟠 HIGH | 45h |
+| 6 | Wallet Purifier Mode | 🟡 MEDIUM | 15h |
+| 7 | Oracle multi-source | 🟡 MEDIUM | 62h |
 
 ---
 
@@ -274,7 +277,7 @@ HSMC funcționează ca o **bancă virtuală complet transparentă** — fără h
 
 ### Supply & Economics
 
-- **Total Supply Cap:** 1,000,000,000,000 HSMC (fix, imuabil)
+- **Total Supply Cap:** 500,000,000 HSMC (fix, imuabil — corectat din 1T)
 - **Circulating:** 65,000,000 HSMC
 - **Token Holders:** 4
 - **Price:** ~$0.045
@@ -356,15 +359,23 @@ HSMC-network-hub-main/
 
 ## 🚀 Next Steps (în ordine)
 
-1. ✅ Completează fix-urile TypeScript + mining server
-2. 🔧 Implementează Treasury endpoint + fee decontare HSMCPay
-3. 🔧 Implementează HSMCPay sell/payout flow
-4. ⏳ Compilează și testează Rust node (needs VPS)
-5. ⏳ Adaugă Kyber/Dilithium în hsmc-crypto
-6. ⏳ Construiește bridge connectors (BTC, ETH, SOL, ...)
-7. ⏳ Portează AI Co-Pilot la API local
-8. ⏳ Implementează smart contract VM (WASM)
-9. ⏳ Audit crypto post-quantum (extern)
-10. ⏳ Deploy mainnet pe 5+ VPS-uri
-11. ⏳ Listează pe exchange-uri (MEXC, Gate.io)
-12. ⏳ Lansează marketing + community
+### ✅ Completate (2026-07-21 – 2026-07-24)
+1. ✅ Supply fix: 1T → 500M HSMC (toate layerele)
+2. ✅ Eliminare unwrap() din producție (102 fix-uri)
+3. ✅ WebAuthn biometric (register + login)
+4. ✅ CORS + CSP security headers
+5. ✅ Vite proxy + relative URLs
+6. ✅ DB migration (schema 38 tabele + seed + migrate)
+7. ✅ Rate limiting + anti-DDoS
+
+### 🔴 Prioritate imediată
+8. 🔧 Privacy wiring în web wallet (#15)
+9. 🔧 HSMCPay settlement real (#3)
+10. ⏳ Post-quantum crypto (#4)
+11. ⏳ Stratum V2 (#21)
+12. ⏳ Bridge hardening (#22)
+
+### 🟡 Înainte de mainnet
+13. ⏳ Integration tests (#31)
+14. ⏳ Full security audit (#32)
+15. ⏳ Mainnet launch prep (#34)
