@@ -1,10 +1,9 @@
 /**
- * HSMC Mining Client — Stratum-only, Web Worker powered.
+ * HSMC Mining Client — Stratum V1 + V2, Web Worker powered.
  *
- * Connects to a Rust Stratum node via real WebSocket.
+ * Connects to the HSMC Stratum server via WebSocket.
+ * Auto-negotiates protocol: tries Stratum V2 (binary), falls back to V1 (JSON).
  * All mining happens in a dedicated Web Worker (mining-worker.ts).
- * No local/simulated mining fallback — if the node is offline,
- * the user sees a clear error message.
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -12,7 +11,7 @@ import {
   Cpu, Zap, Activity, Play, Square, Settings2, Hash,
   Server, User, Target, BarChart3, Award,
   Wifi, WifiOff, RefreshCw, AlertTriangle, CheckCircle2,
-  Radio
+  Radio, Shield
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +19,22 @@ import { useAuth } from '@/hooks/useAuth';
 import { useWallet } from '@/hooks/useWallet';
 import { toast } from '@/hooks/use-toast';
 import MiningWorker from '@/workers/mining-worker?worker';
+import {
+  V2MsgType,
+  V2Algo,
+  encodeV2Frame,
+  decodeV2Frame,
+  isV2Frame,
+  encodeSetupConnection,
+  decodeSetupConnectionSuccess,
+  decodeNewMiningJob,
+  encodeSubmitShare,
+  decodeSubmitShareResponse,
+  decodeSetDifficulty,
+  encodeJobNegotiation,
+  type V2NewMiningJob,
+  type V2SetupConnectionSuccess,
+} from '@/utils/stratum-v2';
 
 type Algorithm = 'RandomX' | 'SHA-256' | 'ProgPoW' | 'KawPoW' | 'Ethash' | 'X11';
 
@@ -40,9 +55,9 @@ interface RpcStats {
   ping: number;
   difficulty: number;
   connected: boolean;
+  protocolVersion: string | null; // 'v1' | 'v2'
 }
 
-/** Default Stratum URL — stored in localStorage so the user can persist their own */
 const DEFAULT_STRATUM_URL = 'ws://localhost:3333';
 const STRATUM_URL_STORAGE_KEY = 'hsmc_mining_stratum_url';
 
@@ -57,7 +72,7 @@ function loadStratumUrl(): string {
 function saveStratumUrl(url: string): void {
   try {
     localStorage.setItem(STRATUM_URL_STORAGE_KEY, url);
-  } catch { /* ignore quota errors */ }
+  } catch { /* ignore */ }
 }
 
 const ALGORITHMS: { id: Algorithm; label: string; desc: string }[] = [
@@ -69,22 +84,163 @@ const ALGORITHMS: { id: Algorithm; label: string; desc: string }[] = [
   { id: 'X11', label: 'X11', desc: 'Chained 11 hash functions' },
 ];
 
-/** Check whether a URL is a Stratum WebSocket endpoint */
+function algoToV2Algo(algo: Algorithm): V2Algo {
+  switch (algo) {
+    case 'RandomX': return V2Algo.RandomX;
+    case 'SHA-256': return V2Algo.SHA256d;
+    case 'ProgPoW': return V2Algo.ProgPoW;
+    case 'KawPoW': return V2Algo.KawPoW;
+    case 'Ethash': return V2Algo.Ethash;
+    case 'X11': return V2Algo.X11;
+    default: return V2Algo.SHA256d;
+  }
+}
+
 function isStratumUrl(url: string): boolean {
   return url.startsWith('ws://') || url.startsWith('wss://');
 }
 
-/** Check whether a URL looks like an obvious placeholder */
 function isPlaceholderUrl(url: string): boolean {
-  return /YOUR_VPS_IP|placeholder|example\.com|localhost:3333/i.test(url);
+  return /YOUR_VPS_IP|placeholder|example\.com/i.test(url);
 }
 
-/**
- * Attempt to connect to a Stratum node via WebSocket.
- * Performs mining.subscribe + mining.authorize handshake.
- * Returns the WS instance and initial job params, or null on failure.
- */
-function tryStratumConnect(
+// ─── V2 Connection ─────────────────────────────────────────────────────
+
+async function tryStratumV2Connect(
+  url: string,
+  workerName: string,
+  miningAddress: string,
+  algo: Algorithm,
+): Promise<{
+  ws: WebSocket;
+  job: { jobId: string; prevHash: string; target: string; blockNumber: number };
+} | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let ws: WebSocket;
+    let protocolOk = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        try { ws?.close(); } catch { /* ignore */ }
+        resolve(null);
+      }
+    }, 8000);
+
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      clearTimeout(timeout);
+      resolve(null);
+      return;
+    }
+
+    // Must use binary for V2
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      // Send V2 SetupConnection
+      const setupPayload = encodeSetupConnection(2, 2, 0x01);
+      const setupFrame = encodeV2Frame(V2MsgType.SetupConnection, setupPayload);
+      ws.send(setupFrame);
+    };
+
+    ws.onmessage = (evt: MessageEvent) => {
+      if (settled) return;
+
+      // V2 messages come as binary
+      if (evt.data instanceof ArrayBuffer || evt.data instanceof Uint8Array) {
+        const data = new Uint8Array(evt.data);
+        const frame = decodeV2Frame(data);
+        if (!frame) return;
+
+        if (frame.msgType === V2MsgType.SetupConnectionSuccess) {
+          try {
+            const success = decodeSetupConnectionSuccess(frame.payload);
+            console.log(`[V2] SetupConnectionSuccess: version=${success.version} server=${success.serverName}`);
+            protocolOk = true;
+
+            // Send job negotiation
+            const negPayload = encodeJobNegotiation(BigInt(4), algoToV2Algo(algo));
+            ws.send(encodeV2Frame(V2MsgType.JobNegotiation, negPayload));
+          } catch (e) {
+            console.error('[V2] Failed to decode SetupConnectionSuccess:', e);
+          }
+          return;
+        }
+
+        if (frame.msgType === V2MsgType.SetupConnectionError) {
+          console.log('[V2] SetupConnectionError — falling back to V1');
+          settled = true;
+          clearTimeout(timeout);
+          try { ws.close(); } catch { /* ignore */ }
+          resolve(null);
+          return;
+        }
+
+        if (frame.msgType === V2MsgType.NewMiningJob && protocolOk) {
+          try {
+            const job = decodeNewMiningJob(frame.payload);
+            settled = true;
+            clearTimeout(timeout);
+
+            const targetHex = Array.from(job.target).map(b => b.toString(16).padStart(2, '0')).join('');
+            const prevHashHex = Array.from(job.prevHash).map(b => b.toString(16).padStart(2, '0')).join('');
+
+            resolve({
+              ws,
+              job: {
+                jobId: job.jobId.toString(16),
+                prevHash: `0x${prevHashHex}`,
+                target: targetHex,
+                blockNumber: job.blockNumber,
+              },
+            });
+          } catch (e) {
+            console.error('[V2] Failed to decode NewMiningJob:', e);
+          }
+          return;
+        }
+
+        // SetDifficulty — just log, don't settle
+        if (frame.msgType === V2MsgType.SetDifficulty) {
+          const diff = decodeSetDifficulty(frame.payload);
+          console.log(`[V2] Difficulty set to ${diff}`);
+          return;
+        }
+      }
+
+      // If we got a text message, it might be V1 — reject V2
+      if (typeof evt.data === 'string') {
+        console.log('[V2] Received text message — falling back to V1');
+        settled = true;
+        clearTimeout(timeout);
+        try { ws.close(); } catch { /* ignore */ }
+        resolve(null);
+      }
+    };
+
+    ws.onerror = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        resolve(null);
+      }
+    };
+
+    ws.onclose = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        resolve(null);
+      }
+    };
+  });
+}
+
+// ─── V1 Connection (legacy) ────────────────────────────────────────────
+
+async function tryStratumV1Connect(
   url: string,
   workerName: string,
   miningAddress: string,
@@ -112,29 +268,14 @@ function tryStratumConnect(
     }
 
     ws.onopen = () => {
-      // Stratum v1 subscribe
-      ws.send(
-        JSON.stringify({
-          id: 1,
-          method: 'mining.subscribe',
-          params: [workerName, '2.0'],
-        }),
-      );
-      // Stratum v1 authorize
-      ws.send(
-        JSON.stringify({
-          id: 2,
-          method: 'mining.authorize',
-          params: [miningAddress, workerName],
-        }),
-      );
+      ws.send(JSON.stringify({ id: 1, method: 'mining.subscribe', params: [workerName, '2.0'] }));
+      ws.send(JSON.stringify({ id: 2, method: 'mining.authorize', params: [miningAddress, workerName] }));
     };
 
     ws.onmessage = (evt: MessageEvent) => {
       if (settled) return;
       try {
         const msg = JSON.parse(evt.data);
-        // Accept on any valid JSON response (subscription, authorization, or first notify)
         if (msg && !settled) {
           settled = true;
           clearTimeout(timeout);
@@ -150,28 +291,15 @@ function tryStratumConnect(
             },
           });
         }
-      } catch {
-        // Ignore parse errors, wait for next message or timeout
-      }
+      } catch { /* wait */ }
     };
 
-    ws.onerror = () => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        resolve(null);
-      }
-    };
-
-    ws.onclose = () => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        resolve(null);
-      }
-    };
+    ws.onerror = () => { if (!settled) { settled = true; clearTimeout(timeout); resolve(null); } };
+    ws.onclose = () => { if (!settled) { settled = true; clearTimeout(timeout); resolve(null); } };
   });
 }
+
+// ─── Component ─────────────────────────────────────────────────────────
 
 export const MiningRPCClient = () => {
   const { user } = useAuth();
@@ -197,18 +325,19 @@ export const MiningRPCClient = () => {
     ping: 0,
     difficulty: 4,
     connected: false,
+    protocolVersion: null,
   });
   const [log, setLog] = useState<
     { time: string; msg: string; type: 'info' | 'success' | 'warn' | 'error' }[]
   >([]);
   const [showConfig, setShowConfig] = useState(false);
 
-  // Refs for mutable state shared with callbacks / intervals
   const miningRef = useRef(false);
   const uptimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef(0);
   const stratumWsRef = useRef<WebSocket | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const protocolRef = useRef<'v1' | 'v2' | null>(null);
   const currentJobRef = useRef<{
     jobId: string;
     header: string;
@@ -222,10 +351,8 @@ export const MiningRPCClient = () => {
 
   // ── Worker lifecycle ────────────────────────────────────────────────
 
-  /** Create and set up the mining worker */
   const createWorker = useCallback(() => {
     if (workerRef.current) return;
-
     const worker = new MiningWorker();
     workerRef.current = worker;
 
@@ -242,27 +369,31 @@ export const MiningRPCClient = () => {
           `Share found | Hash: ${share.hash.slice(0, 14)}... | Nonce: ${share.nonce}`,
           'success',
         );
-        setStats((prev) => ({
-          ...prev,
-          sharesAccepted: prev.sharesAccepted + 1,
-        }));
+        setStats((prev) => ({ ...prev, sharesAccepted: prev.sharesAccepted + 1 }));
 
-        // Submit share to Stratum server
         const ws = stratumWsRef.current;
         if (ws && ws.readyState === WebSocket.OPEN && currentJobRef.current) {
-          ws.send(
-            JSON.stringify({
-              id: Date.now() % 100000,
-              method: 'mining.submit',
-              params: [
-                config.workerName,
-                share.jobId,
-                share.nonce.toString(16),
-                currentJobRef.current.target,
-                share.nonce,
-              ],
-            }),
-          );
+          if (protocolRef.current === 'v2') {
+            // V2 binary submit
+            const submitFrame = encodeV2Frame(
+              V2MsgType.SubmitShare,
+              encodeSubmitShare(
+                parseInt(share.jobId, 16),
+                BigInt(share.nonce),
+                algoToV2Algo(config.algorithm),
+              ),
+            );
+            ws.send(submitFrame);
+          } else {
+            // V1 JSON submit
+            ws.send(
+              JSON.stringify({
+                id: Date.now() % 100000,
+                method: 'mining.submit',
+                params: [config.workerName, share.jobId, share.nonce.toString(16), currentJobRef.current.target, share.nonce],
+              }),
+            );
+          }
         }
       }
     };
@@ -270,9 +401,8 @@ export const MiningRPCClient = () => {
     worker.onerror = (err) => {
       addLog(`Mining worker error: ${err.message}`, 'error');
     };
-  }, [config.workerName]);
+  }, [config.workerName, config.algorithm]);
 
-  /** Destroy the mining worker */
   const terminateWorker = useCallback(() => {
     if (workerRef.current) {
       workerRef.current.terminate();
@@ -281,83 +411,89 @@ export const MiningRPCClient = () => {
     currentJobRef.current = null;
   }, []);
 
-  // ── Stratum WebSocket message handler ───────────────────────────────
+  // ── V2 Stratum message handler ─────────────────────────────────────
 
-  const setupStratumMessageHandler = useCallback(
+  const setupV2MessageHandler = useCallback(
     (ws: WebSocket) => {
+      ws.binaryType = 'arraybuffer';
+
       ws.onmessage = (evt: MessageEvent) => {
-        try {
-          const msg = JSON.parse(evt.data);
+        if (evt.data instanceof ArrayBuffer || evt.data instanceof Uint8Array) {
+          const data = new Uint8Array(evt.data);
+          const frame = decodeV2Frame(data);
+          if (!frame) return;
 
-          // mining.notify — new job from server
-          if (msg.method === 'mining.notify') {
-            const params = msg.params as unknown[];
-            const jobId = (params?.[0] as string) ?? '0';
-            const prevHash = (params?.[1] as string) ?? '0x0';
-            // params[6] (nbits) encodes the target
-            const nbits = (params?.[6] as string) ?? '1f00ffff';
+          switch (frame.msgType) {
+            case V2MsgType.NewMiningJob: {
+              const job = decodeNewMiningJob(frame.payload);
+              const prevHashHex = Array.from(job.prevHash).map(b => b.toString(16).padStart(2, '0')).join('');
+              const targetHex = Array.from(job.target).map(b => b.toString(16).padStart(2, '0')).join('');
 
-            // Convert nbits to target hex (simplified: use nbits directly as target)
-            // In real Stratum, nbits like "1b0404cb" encodes target; here we pass it through
-            const target = nbits.startsWith('0x') ? nbits.slice(2) : nbits;
+              currentJobRef.current = {
+                jobId: job.jobId.toString(16),
+                header: prevHashHex,
+                target: targetHex,
+              };
 
-            // Build header for hashing: prevHash + nbits (simplified Stratum header)
-            const header = prevHash.startsWith('0x') ? prevHash.slice(2) : prevHash;
+              if (miningRef.current && workerRef.current) {
+                workerRef.current.postMessage({
+                  type: 'start',
+                  data: currentJobRef.current,
+                });
+              }
 
-            currentJobRef.current = { jobId, header, target };
+              if (!connected) {
+                setConnected(true);
+                setStats((prev) => ({ ...prev, connected: true }));
+              }
 
-            // Send new job to worker
-            if (miningRef.current && workerRef.current) {
-              workerRef.current.postMessage({
-                type: 'start',
-                data: { jobId, header, target },
-              });
+              addLog(`[V2] New job #${job.jobId.toString(16)} | Block #${job.blockNumber} | algo=${job.algo}`, 'info');
+              break;
             }
 
-            if (!connected) {
-              setConnected(true);
-              setStats((prev) => ({ ...prev, connected: true }));
+            case V2MsgType.SubmitShareResponse: {
+              const resp = decodeSubmitShareResponse(frame.payload);
+              if (resp.accepted) {
+                setStats((prev) => ({ ...prev, blocksFound: prev.blocksFound + 1 }));
+                addLog('[V2] ✅ Share accepted', 'success');
+              } else {
+                setStats((prev) => ({ ...prev, sharesRejected: prev.sharesRejected + 1 }));
+                addLog(`[V2] ❌ Share rejected (code=${resp.errorCode})`, 'warn');
+              }
+              break;
             }
 
-            const blockNumber = (params?.[8] as number) ?? 0;
-            addLog(`New job #${jobId} | Block #${blockNumber}`, 'info');
-          }
+            case V2MsgType.SetDifficulty: {
+              const diff = decodeSetDifficulty(frame.payload);
+              setStats((prev) => ({ ...prev, difficulty: Number(diff) }));
+              addLog(`[V2] Difficulty set to ${diff}`, 'info');
+              break;
+            }
 
-          // mining.set_difficulty
-          if (msg.method === 'mining.set_difficulty') {
-            const diff = msg.params?.[0] ?? stats.difficulty;
-            setStats((prev) => ({ ...prev, difficulty: Number(diff) }));
-            addLog(`Difficulty set to ${diff}`, 'info');
-          }
+            case V2MsgType.SetupConnectionSuccess: {
+              addLog('[V2] ✅ Setup accepted by server', 'success');
+              break;
+            }
 
-          // Response to mining.submit
-          if (msg.id && msg.result !== undefined && msg.id > 2) {
-            if (msg.result === true) {
-              setStats((prev) => ({
-                ...prev,
-                blocksFound: prev.blocksFound + 1,
-              }));
-              addLog('✅ Share accepted by pool', 'success');
-            } else {
-              setStats((prev) => ({
-                ...prev,
-                sharesRejected: prev.sharesRejected + 1,
-              }));
-              addLog(`❌ Share rejected: ${msg.error ?? 'stale or invalid'}`, 'warn');
+            case V2MsgType.Pong: {
+              // keep-alive acknowledged
+              break;
+            }
+
+            case V2MsgType.Error: {
+              const errMsg = new TextDecoder().decode(frame.payload.slice(1));
+              addLog(`[V2] Server error: ${errMsg}`, 'error');
+              break;
             }
           }
-
-          // Response to mining.authorize (id: 2)
-          if (msg.id === 2) {
-            if (msg.result === true) {
-              addLog('✅ Stratum authorized', 'success');
-            } else {
-              addLog(`❌ Stratum authorization failed: ${JSON.stringify(msg.error)}`, 'error');
-            }
-          }
-        } catch {
-          // Ignore unparseable messages
+          return;
         }
+
+        // Fallback: text messages treated as V1
+        try {
+          const msg = JSON.parse(evt.data as string);
+          handleV1Message(msg);
+        } catch { /* ignore */ }
       };
 
       ws.onclose = () => {
@@ -366,7 +502,6 @@ export const MiningRPCClient = () => {
           setStats((prev) => ({ ...prev, connected: false }));
           addLog('⚠️ Stratum connection closed', 'warn');
           if (miningRef.current) {
-            // Stop mining if connection drops
             miningRef.current = false;
             setMining(false);
             terminateWorker();
@@ -380,225 +515,197 @@ export const MiningRPCClient = () => {
         }
       };
 
-      ws.onerror = () => {
-        // onclose will fire after this
-      };
+      ws.onerror = () => { /* onclose fires after */ };
     },
-    [connected, stats.difficulty, addLog, terminateWorker],
+    [connected, addLog, terminateWorker],
   );
 
-  // ── Connect to Stratum pool ─────────────────────────────────────────
+  // ── V1 message handler (also used for V2 text messages) ────────────
+
+  const handleV1Message = useCallback((msg: any) => {
+    // mining.notify
+    if (msg.method === 'mining.notify') {
+      const params = msg.params as unknown[];
+      const jobId = (params?.[0] as string) ?? '0';
+      const prevHash = (params?.[1] as string) ?? '0x0';
+      const nbits = (params?.[6] as string) ?? '1f00ffff';
+      const target = nbits.startsWith('0x') ? nbits.slice(2) : nbits;
+      const header = prevHash.startsWith('0x') ? prevHash.slice(2) : prevHash;
+
+      currentJobRef.current = { jobId, header, target };
+
+      if (miningRef.current && workerRef.current) {
+        workerRef.current.postMessage({ type: 'start', data: currentJobRef.current });
+      }
+
+      if (!connected) {
+        setConnected(true);
+        setStats((prev) => ({ ...prev, connected: true }));
+      }
+      addLog(`[V1] New job #${jobId}`, 'info');
+    }
+
+    if (msg.method === 'mining.set_difficulty') {
+      const diff = msg.params?.[0] ?? stats.difficulty;
+      setStats((prev) => ({ ...prev, difficulty: Number(diff) }));
+      addLog(`[V1] Difficulty set to ${diff}`, 'info');
+    }
+
+    if (msg.id && msg.result !== undefined && msg.id > 2) {
+      if (msg.result === true) {
+        setStats((prev) => ({ ...prev, blocksFound: prev.blocksFound + 1 }));
+        addLog('[V1] ✅ Share accepted', 'success');
+      } else {
+        setStats((prev) => ({ ...prev, sharesRejected: prev.sharesRejected + 1 }));
+        addLog(`[V1] ❌ Share rejected: ${msg.error ?? 'invalid'}`, 'warn');
+      }
+    }
+
+    if (msg.id === 2) {
+      if (msg.result === true) {
+        addLog('[V1] ✅ Authorized', 'success');
+      } else {
+        addLog(`[V1] ❌ Auth failed: ${JSON.stringify(msg.error)}`, 'error');
+      }
+    }
+  }, [connected, stats.difficulty, addLog]);
+
+  // ── Connect to pool (auto-negotiate V2 → V1) ──────────────────────
 
   const connectToPool = useCallback(async () => {
     if (!wallet) {
-      toast({
-        title: 'Wallet required',
-        description: 'Create a wallet first',
-        variant: 'destructive',
-      });
+      toast({ title: 'Wallet required', description: 'Create a wallet first', variant: 'destructive' });
       return false;
     }
 
     setConnecting(true);
     addLog(`Connecting to ${config.url}...`, 'info');
 
-    // Only Stratum WebSocket is supported — no local://chain fallback
     if (!isStratumUrl(config.url)) {
-      addLog(
-        `❌ Unsupported URL scheme: "${config.url}". Only ws:// and wss:// Stratum endpoints are supported.`,
-        'error',
-      );
-      toast({
-        title: 'Invalid pool URL',
-        description: 'Use a ws:// or wss:// Stratum endpoint. Example: ws://YOUR_VPS_IP:3333',
-        variant: 'destructive',
-      });
+      addLog(`❌ Unsupported URL scheme: "${config.url}"`, 'error');
       setConnecting(false);
       return false;
     }
 
-    // M1: Warn when ws:// is used on an HTTPS page
     if (typeof window !== 'undefined' && window.location.protocol === 'https:' && config.url.startsWith('ws://')) {
-      addLog(
-        '⚠️ Mining connection is unencrypted (ws://). Your wallet address may be visible to network observers.',
-        'warn',
-      );
-      toast({
-        title: '⚠️ Insecure WebSocket',
-        description: 'Mining connection is unencrypted (ws://). Your wallet address may be visible to network observers.',
-        variant: 'destructive',
-      });
-      // Do NOT block — still let them connect, but warn prominently
+      addLog('⚠️ Mining connection is unencrypted (ws://).', 'warn');
     }
 
-    // Reject obvious placeholder URLs
     if (isPlaceholderUrl(config.url)) {
-      addLog(
-        `❌ Pool URL "${config.url}" is a placeholder. Set your real Stratum node address.`,
-        'error',
-      );
-      toast({
-        title: 'Pool URL not configured',
-        description:
-          'Replace the placeholder with your real Rust node WebSocket (e.g. ws://1.2.3.4:3333).',
-        variant: 'destructive',
-      });
+      addLog(`❌ Pool URL "${config.url}" is a placeholder.`, 'error');
       setConnecting(false);
       return false;
     }
 
-    addLog('Opening Stratum WebSocket...', 'info');
+    // ── Try V2 first ──────────────────────────────────────────────
+    addLog('Attempting Stratum V2 (binary protocol)...', 'info');
     const connectStart = performance.now();
-    const result = await tryStratumConnect(config.url, config.workerName, wallet.address);
+    let result = await tryStratumV2Connect(config.url, config.workerName, wallet.address, config.algorithm);
 
     if (result) {
       const ping = Math.round(performance.now() - connectStart);
+      protocolRef.current = 'v2';
       stratumWsRef.current = result.ws;
+      setupV2MessageHandler(result.ws);
 
-      // Set up ongoing message handling
-      setupStratumMessageHandler(result.ws);
-
-      setStats((prev) => ({
-        ...prev,
-        ping,
-        connected: true,
-        difficulty: Math.max(prev.difficulty, 1),
-      }));
+      setStats((prev) => ({ ...prev, ping, connected: true, protocolVersion: 'v2', difficulty: Math.max(prev.difficulty, 1) }));
       setConnected(true);
       setConnecting(false);
-      addLog(
-        `✅ Stratum node connected (${ping}ms) — Block #${result.job.blockNumber}`,
-        'success',
-      );
-
-      // Save URL for next session
+      addLog(`✅ Stratum V2 connected (${ping}ms) — Block #${result.job.blockNumber}`, 'success');
       saveStratumUrl(config.url);
-
       return true;
     }
 
-    // ── Node offline — clear error, no fallback ───────────────────────
-    addLog(
-      `❌ Stratum node unreachable at ${config.url}. Verify the Rust node is running and the WebSocket port is reachable.`,
-      'error',
-    );
+    // ── Fallback to V1 ───────────────────────────────────────────
+    addLog('V2 failed — falling back to Stratum V1 (JSON-RPC)...', 'warn');
+    const v1Start = performance.now();
+    result = await tryStratumV1Connect(config.url, config.workerName, wallet.address);
+
+    if (result) {
+      const ping = Math.round(performance.now() - v1Start);
+      protocolRef.current = 'v1';
+      stratumWsRef.current = result.ws;
+
+      // Use the V2 message handler which also handles V1 text messages
+      setupV2MessageHandler(result.ws);
+
+      setStats((prev) => ({ ...prev, ping, connected: true, protocolVersion: 'v1', difficulty: Math.max(prev.difficulty, 1) }));
+      setConnected(true);
+      setConnecting(false);
+      addLog(`✅ Stratum V1 connected (${ping}ms) — Block #${result.job.blockNumber}`, 'success');
+      saveStratumUrl(config.url);
+      return true;
+    }
+
+    // ── Both failed ──────────────────────────────────────────────
+    addLog(`❌ Stratum node unreachable at ${config.url}.`, 'error');
     toast({
       title: 'Stratum node offline',
-      description: `${config.url} did not respond. Check that your Rust node is running and the port is reachable.`,
+      description: `${config.url} did not respond.`,
       variant: 'destructive',
     });
     setConnecting(false);
     return false;
-  }, [wallet, config, addLog, setupStratumMessageHandler]);
+  }, [wallet, config, addLog, setupV2MessageHandler]);
 
   // ── Start / Stop mining ─────────────────────────────────────────────
 
   const startMining = async () => {
-    if (!user) {
-      toast({ title: 'Sign in required', variant: 'destructive' });
-      return;
-    }
+    if (!user) { toast({ title: 'Sign in required', variant: 'destructive' }); return; }
 
-    // Connect if not already connected
     if (!connected) {
       const ok = await connectToPool();
-      if (!ok) {
-        // Connection failed — do not start mining, no fallback
-        addLog('Mining not started — Stratum node is offline.', 'error');
-        return;
-      }
+      if (!ok) { addLog('Mining not started — Stratum node offline.', 'error'); return; }
     }
 
-    // Create worker if needed
     createWorker();
-
     miningRef.current = true;
     setMining(true);
     startTimeRef.current = Date.now();
 
     uptimeRef.current = setInterval(() => {
-      setStats((prev) => ({
-        ...prev,
-        uptime: Math.floor((Date.now() - startTimeRef.current) / 1000),
-      }));
+      setStats((prev) => ({ ...prev, uptime: Math.floor((Date.now() - startTimeRef.current) / 1000) }));
     }, 1000);
 
-    // If we have a current job, start the worker on it
     if (currentJobRef.current && workerRef.current) {
-      workerRef.current.postMessage({
-        type: 'start',
-        data: currentJobRef.current,
-      });
+      workerRef.current.postMessage({ type: 'start', data: currentJobRef.current });
     }
 
-    addLog(`Mining started on worker "${config.workerName}"`, 'info');
+    addLog(`Mining started on "${config.workerName}" [${protocolRef.current?.toUpperCase() ?? '?'}]`, 'info');
   };
 
   const stopMining = () => {
     miningRef.current = false;
     setMining(false);
-
-    // Stop uptime counter
-    if (uptimeRef.current) {
-      clearInterval(uptimeRef.current);
-      uptimeRef.current = null;
-    }
-
-    // Stop worker
-    if (workerRef.current) {
-      workerRef.current.postMessage({ type: 'stop' });
-    }
-
+    if (uptimeRef.current) { clearInterval(uptimeRef.current); uptimeRef.current = null; }
+    if (workerRef.current) { workerRef.current.postMessage({ type: 'stop' }); }
     addLog('Mining stopped by user', 'warn');
-    toast({
-      title: '⏹ Mining stopped',
-      description: `Earned ${stats.totalEarned.toFixed(4)} HSMC`,
-    });
+    toast({ title: '⏹ Mining stopped', description: `Earned ${stats.totalEarned.toFixed(4)} HSMC` });
   };
 
   const disconnect = () => {
     stopMining();
-
-    // Close Stratum WebSocket
     if (stratumWsRef.current) {
-      try {
-        stratumWsRef.current.close();
-      } catch {
-        /* ignore */
-      }
+      try { stratumWsRef.current.close(); } catch { /* ignore */ }
       stratumWsRef.current = null;
     }
-
-    // Terminate worker
     terminateWorker();
-
+    protocolRef.current = null;
     setConnected(false);
-    setStats((prev) => ({
-      ...prev,
-      connected: false,
-      hashrate: 0,
-    }));
+    setStats((prev) => ({ ...prev, connected: false, hashrate: 0, protocolVersion: null }));
     addLog('Disconnected from pool', 'warn');
   };
-
-  // ── Cleanup on unmount ──────────────────────────────────────────────
 
   useEffect(() => {
     return () => {
       miningRef.current = false;
       if (uptimeRef.current) clearInterval(uptimeRef.current);
       if (stratumWsRef.current) {
-        try {
-          stratumWsRef.current.close();
-        } catch {
-          /* ignore */
-        }
+        try { stratumWsRef.current.close(); } catch { /* ignore */ }
       }
       terminateWorker();
     };
   }, [terminateWorker]);
-
-  // ── Helpers ─────────────────────────────────────────────────────────
 
   const formatUptime = (s: number) => {
     const h = Math.floor(s / 3600);
@@ -620,11 +727,11 @@ export const MiningRPCClient = () => {
         >
           <p className="section-eyebrow mb-4">Pool Mining Client</p>
           <h2 className="text-3xl sm:text-4xl font-black mb-3">
-            <span className="gradient-text">Stratum Mining</span> Client
+            <span className="gradient-text">Stratum V1 + V2</span> Mining
           </h2>
           <p className="text-muted-foreground max-w-xl mx-auto text-sm">
-            Connect to your HSMC Rust Stratum node, configure your worker, and mine with a
-            dedicated Web Worker — no simulated blocks, only real Stratum mining.
+            Auto-negotiating Stratum client. Tries V2 (binary, Noise IK), falls back to V1 (JSON-RPC).
+            Connect to your HSMC node and mine with a dedicated Web Worker.
           </p>
         </motion.div>
 
@@ -648,9 +755,18 @@ export const MiningRPCClient = () => {
                   <span className="text-sm font-semibold">Stratum Connection</span>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  {connected && stats.protocolVersion && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${
+                      stats.protocolVersion === 'v2'
+                        ? 'border-secondary/40 bg-secondary/10 text-secondary'
+                        : 'border-primary/40 bg-primary/10 text-primary'
+                    }`}>
+                      {stats.protocolVersion.toUpperCase()}
+                    </span>
+                  )}
                   {connected && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-secondary/40 bg-secondary/10 text-secondary font-mono">
-                      RUST NODE
+                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-accent/40 bg-accent/10 text-accent font-mono">
+                      NODE
                     </span>
                   )}
                   <span
@@ -678,12 +794,12 @@ export const MiningRPCClient = () => {
                   className="w-full gap-2 border-secondary/30 text-secondary"
                   onClick={() => connectToPool()}
                 >
-                  <Wifi className="w-4 h-4" /> Connect to Stratum
+                  <Wifi className="w-4 h-4" /> Connect (V2 → V1)
                 </Button>
               )}
               {connecting && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <RefreshCw className="w-3 h-3 animate-spin" /> Connecting...
+                  <RefreshCw className="w-3 h-3 animate-spin" /> Negotiating protocol...
                 </div>
               )}
               {connected && !mining && (
@@ -714,9 +830,7 @@ export const MiningRPCClient = () => {
                   <Settings2 className="w-4 h-4 text-primary" />
                   <span className="text-sm font-semibold">Configuration</span>
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  {showConfig ? '▲' : '▼'}
-                </span>
+                <span className="text-xs text-muted-foreground">{showConfig ? '▲' : '▼'}</span>
               </button>
 
               <AnimatePresence>
@@ -733,19 +847,13 @@ export const MiningRPCClient = () => {
                       </label>
                       <Input
                         value={config.url}
-                        onChange={(e) => {
-                          const url = e.target.value;
-                          setConfig((c) => ({ ...c, url }));
-                          saveStratumUrl(url);
-                        }}
+                        onChange={(e) => { const url = e.target.value; setConfig((c) => ({ ...c, url })); saveStratumUrl(url); }}
                         className="font-mono text-xs"
                         disabled={mining}
                         placeholder="ws://YOUR_VPS_IP:3333"
                       />
                       <p className="text-[10px] text-muted-foreground mt-1">
-                        WebSocket Stratum endpoint of your HSMC Rust node. Only{' '}
-                        <code className="text-secondary">ws://</code> and{' '}
-                        <code className="text-secondary">wss://</code> are supported.
+                        Supports V2 (binary) and V1 (JSON). Auto-negotiated.
                       </p>
                     </div>
 
@@ -755,12 +863,7 @@ export const MiningRPCClient = () => {
                       </label>
                       <Input
                         value={config.workerName}
-                        onChange={(e) =>
-                          setConfig((c) => ({
-                            ...c,
-                            workerName: e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''),
-                          }))
-                        }
+                        onChange={(e) => setConfig((c) => ({ ...c, workerName: e.target.value.replace(/[^a-zA-Z0-9_-]/g, '') }))}
                         className="font-mono text-sm"
                         disabled={mining}
                         placeholder="worker01"
@@ -770,34 +873,23 @@ export const MiningRPCClient = () => {
                     <div>
                       <label className="text-xs text-muted-foreground mb-1 block flex items-center gap-1">
                         <Target className="w-3 h-3" /> Difficulty Target:{' '}
-                        <span className="text-primary font-mono ml-1">
-                          {config.difficultyTarget}
-                        </span>
+                        <span className="text-primary font-mono ml-1">{config.difficultyTarget}</span>
                       </label>
                       <input
                         type="range"
-                        min={1}
-                        max={8}
+                        min={1} max={8}
                         value={config.difficultyTarget}
-                        onChange={(e) =>
-                          setConfig((c) => ({
-                            ...c,
-                            difficultyTarget: parseInt(e.target.value),
-                          }))
-                        }
+                        onChange={(e) => setConfig((c) => ({ ...c, difficultyTarget: parseInt(e.target.value) }))}
                         disabled={mining}
                         className="w-full accent-primary"
                       />
                       <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
-                        <span>Easy (1)</span>
-                        <span>Hard (8)</span>
+                        <span>Easy (1)</span><span>Hard (8)</span>
                       </div>
                     </div>
 
                     <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        Algorithm
-                      </label>
+                      <label className="text-xs text-muted-foreground mb-1 block">Algorithm</label>
                       <div className="grid grid-cols-2 gap-1">
                         {ALGORITHMS.map((a) => (
                           <button
@@ -835,8 +927,7 @@ export const MiningRPCClient = () => {
             >
               {mining ? (
                 <Button
-                  variant="outline"
-                  size="lg"
+                  variant="outline" size="lg"
                   className="w-full gap-3 border-destructive/50 text-destructive hover:bg-destructive/10"
                   onClick={stopMining}
                 >
@@ -844,8 +935,7 @@ export const MiningRPCClient = () => {
                 </Button>
               ) : (
                 <Button
-                  variant="hero"
-                  size="lg"
+                  variant="hero" size="lg"
                   className="w-full gap-3"
                   onClick={startMining}
                   disabled={connecting}
@@ -859,7 +949,6 @@ export const MiningRPCClient = () => {
 
           {/* Stats + Log */}
           <div className="lg:col-span-2 space-y-4">
-            {/* Stats Grid */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               whileInView={{ opacity: 1, x: 0 }}
@@ -867,63 +956,19 @@ export const MiningRPCClient = () => {
               className="grid grid-cols-2 sm:grid-cols-4 gap-3"
             >
               {[
-                {
-                  icon: Zap,
-                  label: 'Hashrate',
-                  value: mining
-                    ? `${stats.hashrate.toLocaleString()} H/s`
-                    : '0 H/s',
-                  color: 'text-primary',
-                },
-                {
-                  icon: CheckCircle2,
-                  label: 'Accepted',
-                  value: stats.sharesAccepted.toString(),
-                  color: 'text-secondary',
-                },
-                {
-                  icon: AlertTriangle,
-                  label: 'Rejected',
-                  value: stats.sharesRejected.toString(),
-                  color: 'text-destructive',
-                },
-                {
-                  icon: Activity,
-                  label: 'Uptime',
-                  value: formatUptime(stats.uptime),
-                  color: 'text-accent',
-                },
-                {
-                  icon: Hash,
-                  label: 'Blocks',
-                  value: stats.blocksFound.toString(),
-                  color: 'text-primary',
-                },
-                {
-                  icon: Award,
-                  label: 'Earned',
-                  value: `${stats.totalEarned.toFixed(4)} HSMC`,
-                  color: 'text-secondary',
-                },
-                {
-                  icon: Target,
-                  label: 'Difficulty',
-                  value: stats.difficulty.toString(),
-                  color: 'text-muted-foreground',
-                },
-                {
-                  icon: BarChart3,
-                  label: 'Algorithm',
-                  value: config.algorithm,
-                  color: 'text-accent',
-                },
+                { icon: Zap, label: 'Hashrate', value: mining ? `${stats.hashrate.toLocaleString()} H/s` : '0 H/s', color: 'text-primary' },
+                { icon: CheckCircle2, label: 'Accepted', value: stats.sharesAccepted.toString(), color: 'text-secondary' },
+                { icon: AlertTriangle, label: 'Rejected', value: stats.sharesRejected.toString(), color: 'text-destructive' },
+                { icon: Activity, label: 'Uptime', value: formatUptime(stats.uptime), color: 'text-accent' },
+                { icon: Hash, label: 'Blocks', value: stats.blocksFound.toString(), color: 'text-primary' },
+                { icon: Award, label: 'Earned', value: `${stats.totalEarned.toFixed(4)} HSMC`, color: 'text-secondary' },
+                { icon: Target, label: 'Difficulty', value: stats.difficulty.toString(), color: 'text-muted-foreground' },
+                { icon: Shield, label: 'Protocol', value: stats.protocolVersion?.toUpperCase() ?? '—', color: stats.protocolVersion === 'v2' ? 'text-secondary' : 'text-accent' },
               ].map(({ icon: Icon, label, value, color }) => (
                 <div key={label} className="glass-card p-3">
                   <div className="flex items-center gap-1.5 mb-1.5">
                     <Icon className={`w-3.5 h-3.5 ${color}`} />
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                      {label}
-                    </span>
+                    <span className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</span>
                   </div>
                   <div className={`font-mono font-bold text-sm ${color}`}>{value}</div>
                 </div>
@@ -959,13 +1004,10 @@ export const MiningRPCClient = () => {
                     <div
                       key={i}
                       className={`${
-                        entry.type === 'success'
-                          ? 'text-secondary'
-                          : entry.type === 'error'
-                            ? 'text-destructive'
-                            : entry.type === 'warn'
-                              ? 'text-yellow-400'
-                              : 'text-muted-foreground'
+                        entry.type === 'success' ? 'text-secondary'
+                        : entry.type === 'error' ? 'text-destructive'
+                        : entry.type === 'warn' ? 'text-yellow-400'
+                        : 'text-muted-foreground'
                       }`}
                     >
                       <span className="text-muted-foreground/50">[{entry.time}] </span>
