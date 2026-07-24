@@ -33,8 +33,8 @@ contract WHSMC is ERC20, ERC20Permit, ERC20Burnable, AccessControl, Pausable {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
-    /// @notice Total HSMC supply hard-cap (1,000,000,000,000 HSMC = 1T)
-    uint256 public constant MAX_SUPPLY = 1_000_000_000_000 * 10 ** 8;
+    /// @notice Total HSMC supply hard-cap (500,000,000 HSMC = 500M)
+    uint256 public constant MAX_SUPPLY = 500_000_000 * 10 ** 8;
 
     event BridgeMint(address indexed to, uint256 amount, bytes32 indexed hsmcTxHash);
     event BridgeBurn(address indexed from, uint256 amount, string hsmcDestination);

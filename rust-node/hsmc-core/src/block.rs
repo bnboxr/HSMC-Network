@@ -38,8 +38,8 @@ pub const HALVING_INTERVAL: u64 = 210_000;
 /// Initial block reward in HSMC
 pub const INITIAL_REWARD: f64 = 50.0;
 
-/// Maximum supply cap: 100 million HSMC
-pub const MAX_SUPPLY: f64 = 100_000_000.0;
+/// Maximum supply cap: 500 million HSMC
+pub const MAX_SUPPLY: f64 = 500_000_000.0;
 
 /// Target block time: 120 seconds (2 minutes)
 pub const TARGET_BLOCK_TIME_SECS: u64 = 120;
