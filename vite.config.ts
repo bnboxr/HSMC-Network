@@ -18,6 +18,15 @@ export default defineConfig(({ mode }) => ({
     hmr: {
       overlay: false,
     },
+    proxy: {
+      '/api': 'http://localhost:3001',
+      '/rest': 'http://localhost:3001',
+      '/stripe': 'http://localhost:3001',
+      '/treasury': 'http://localhost:3001',
+      '/auth': 'http://localhost:3001',
+      '/crypto': 'http://localhost:3001',
+      '/node-proxy': 'http://localhost:3001',
+    },
   },
   plugins: [
     nodePolyfills({ include: ["buffer", "crypto"] }),

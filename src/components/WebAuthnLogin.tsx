@@ -14,7 +14,7 @@ import { Fingerprint, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
 
-const API_BASE = 'http://localhost:3001';
+const API_BASE = '';
 
 interface WebAuthnLoginProps {
   onSuccess: (token: string, user: { id: string; email: string }) => void;

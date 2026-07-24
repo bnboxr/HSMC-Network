@@ -129,7 +129,7 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
     try {
       if (mode === 'sell') {
         // ── SELL FLOW: call /stripe/payout ──────────────────────────
-        const res = await fetch('http://localhost:3001/stripe/payout', {
+        const res = await fetch('/stripe/payout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'initiate', amount_usd: Number(amountUsd), user_wallet: user.id || 'local-user' }),
@@ -166,7 +166,7 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
       } else {
         // Fallback to local API server
         console.debug('[HSMCPay] Edge function unavailable, falling back to local API');
-        const res = await fetch('http://localhost:3001/stripe/checkout', {
+        const res = await fetch('/stripe/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'initiate', mode, amount_usd: Number(amountUsd) }),
@@ -240,7 +240,7 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
         settleData = fnData as Record<string, unknown>;
       } else {
         console.debug('[HSMCPay] Edge function unavailable for settle, falling back to local API');
-        const res = await fetch('http://localhost:3001/stripe/checkout', {
+        const res = await fetch('/stripe/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'settle', session_id: sessionId, payment_intent_id: paymentIntentId }),
@@ -275,7 +275,7 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
     setLoading(true);
     setStep('processing');
     try {
-      const res = await fetch('http://localhost:3001/stripe/payout', {
+      const res = await fetch('/stripe/payout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'settle', payout_session_id: sellPayoutSessionId, tx_hash: sellTxHash.trim() }),

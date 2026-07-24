@@ -14,7 +14,7 @@ import { Fingerprint, Shield, Loader2, CheckCircle2, XCircle, Trash2, AlertTrian
 import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
 
-const API_BASE = 'http://localhost:3001';
+const API_BASE = '';
 
 interface WebAuthnSetupProps {
   userId: string;

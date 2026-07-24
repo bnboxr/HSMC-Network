@@ -119,8 +119,7 @@ export const useMultiWallet = () => {
     try {
       // H7 FIX: Use atomic API endpoint instead of two separate UPDATE calls
       // This prevents fund loss if the first UPDATE succeeds and the second fails.
-      const API_BASE = 'http://localhost:3001';
-      const res = await fetch(`${API_BASE}/api/transfer`, {
+      const res = await fetch(`/api/transfer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -290,12 +290,12 @@ export async function generateRingSignature(
   // The Rust node MUST be running on the same machine (localhost) over TLS.
   // NEVER send the private key over an unencrypted or remote connection.
   // See: /home/team/shared/attack-surface-map.md §3.2
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+  const apiUrl = import.meta.env.VITE_API_URL || '';
   if (apiUrl.startsWith('http://') && !apiUrl.includes('localhost') && !apiUrl.includes('127.0.0.1')) {
     throw new Error(
       '❌ SECURITY: Privacy features require a LOCAL TLS connection. ' +
       'The spend private key is about to be transmitted and MUST be encrypted. ' +
-      'Set VITE_API_URL=https://localhost:3001 or use the local API server. ' +
+      'Set VITE_API_URL to a local HTTPS endpoint or ensure the Vite proxy is configured. ' +
       'Refusing to send private key over plaintext remote connection.'
     );
   }
@@ -554,7 +554,7 @@ function hexToBytes(hex: string): Uint8Array | null {
 // Local API Server — NO fallback, NO stubs
 // ═══════════════════════════════════════════════════════════════════
 
-const NODE_API_BASE = 'http://localhost:3001';
+const NODE_API_BASE = '';
 
 /**
  * Call the Rust node via the local API server.

@@ -1,13 +1,13 @@
 /**
  * Local DB Client — drop-in replacement for the DB client.
  *
- * Talks to the local API server on http://localhost:3001/rest/v1/:table
+ * Talks to the local API server via Vite proxy on /rest/v1/:table
  * Returns data in DB-compatible shape: { data, error }
  *
  * Import: import { localDb } from '@/integrations/local-db/client';
  */
 
-const API_BASE = "http://localhost:3001/rest/v1";
+const API_BASE = "/rest/v1";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

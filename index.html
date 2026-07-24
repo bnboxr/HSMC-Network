@@ -40,8 +40,8 @@
     <meta name="theme-color" content="#0d0d0d" />
     <meta name="msapplication-TileColor" content="#0d0d0d" />
 
-    <!-- M4 FIX: Content-Security-Policy — prevent XSS, restrict script sources -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:* https://*.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';" />
+    <!-- Content-Security-Policy — prevent XSS, restrict script sources -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://js.stripe.com; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';" />
 
     <!-- Structured Data — Organization -->
     <script type="application/ld+json">
