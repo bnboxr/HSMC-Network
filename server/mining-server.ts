@@ -40,6 +40,7 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "crypto";
 import { readFileSync } from "fs";
+import { hardenFilePermissions } from "./db-security";
 import type { ServerWebSocket } from "bun";
 import {
   NoiseIKResponder,
@@ -999,6 +1000,16 @@ function createWebSocketHandler(): any {
 
 // ── Start Servers ─────────────────────────────────────────────────────────────────
 async function startServers(): Promise<void> {
+  // ── Security: File permissions ───────────────────────────────────────────
+  const permResults = hardenFilePermissions(DB_PATH);
+  for (const r of permResults) {
+    if (!r.ok) {
+      console.warn(`[Security] ⚠️  Permission hardening failed for ${r.path}: ${r.error}`);
+    } else if (r.permsBefore !== r.permsAfter) {
+      console.log(`[Security] 🔒 ${r.path}: ${r.permsBefore} → ${r.permsAfter}`);
+    }
+  }
+
   // Generate Noise keypair for V2
   serverNoiseKeyPair = await generateX25519KeyPair();
   console.log(`[Noise] Server keypair generated: ${serverNoiseKeyPair.publicKey.toString("hex").slice(0, 16)}...`);

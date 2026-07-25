@@ -24,6 +24,14 @@
 
 import { Database } from "bun:sqlite";
 import { randomUUID, timingSafeEqual } from "crypto";
+import {
+  initEncryptionKey,
+  encryptField,
+  decryptField,
+  isEncryptionAvailable,
+  isEncryptedColumn,
+} from "./db-crypto";
+import { runStartupSecurityChecks } from "./db-security";
 
 const DB_PATH = "/home/team/shared/hsmc.db";
 const PORT = 3001;
@@ -34,7 +42,8 @@ PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS blocks (
   block_number REAL, created_at TEXT, difficulty REAL, hash TEXT, id TEXT PRIMARY KEY,
-  miner_address TEXT, nonce REAL, prev_hash TEXT, privacy_protocol TEXT, transactions_count REAL
+  miner_address TEXT, nonce REAL, prev_hash TEXT, privacy_protocol TEXT, transactions_count REAL,
+  key_image TEXT
 );
 
 CREATE TABLE IF NOT EXISTS contract_interactions (
@@ -321,6 +330,32 @@ console.log("✅ Created 35 tables");
 db.exec(SEED_SQL);
 console.log("✅ Seeded test data");
 
+// ── Security: encryption + schema integrity + file permissions ────────────
+const DB_SECURITY_STRICT = process.env.DB_SECURITY_STRICT === "true"; // non-strict by default (warn-only)
+
+// Initialize column-level encryption
+await initEncryptionKey();
+if (isEncryptionAvailable()) {
+  console.log("🔐 Column-level encryption ACTIVE — sensitive fields are AES-256-GCM encrypted");
+} else {
+  console.warn("⚠️  Column-level encryption DISABLED — set DB_ENCRYPTION_KEY env var (min 16 chars)");
+}
+
+// Run startup security checks (schema integrity, file permissions, ownership)
+try {
+  const secResult = await runStartupSecurityChecks(db, DB_PATH, SCHEMA_SQL, DB_SECURITY_STRICT);
+  if (!secResult.allOk) {
+    console.warn("[SECURITY] ⚠️  Some security checks failed — see warnings above");
+  }
+} catch (err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`[SECURITY] ❌ FATAL: ${msg}`);
+  if (DB_SECURITY_STRICT) {
+    process.exit(1);
+  }
+  console.warn("[SECURITY] ⚠️  Continuing despite schema mismatch (DB_SECURITY_STRICT=false)");
+}
+
 // ── Auth Configuration ───────────────────────────────────────────────────────
 const HSMC_API_KEY = process.env.HSMC_API_KEY || "";
 const JWT_SECRET = process.env.JWT_SECRET || "";
@@ -577,6 +612,27 @@ const tables = db
   .all() as { name: string }[];
 for (const t of tables) ALLOWED_TABLES.add(t.name);
 
+// ── Transparent column encryption for REST API ────────────────────────────────
+/** Encrypt sensitive columns in a row object before INSERT/UPDATE */
+async function encryptSensitiveColumns(table: string, row: Record<string, unknown>): Promise<void> {
+  if (!isEncryptionAvailable()) return;
+  for (const [col, val] of Object.entries(row)) {
+    if (isEncryptedColumn(table, col) && typeof val === "string" && val.length > 0 && !val.startsWith("PLAINTEXT:")) {
+      row[col] = await encryptField(val);
+    }
+  }
+}
+
+/** Decrypt sensitive columns in a row object after SELECT */
+async function decryptSensitiveColumns(table: string, row: Record<string, unknown>): Promise<void> {
+  if (!isEncryptionAvailable()) return;
+  for (const [col, val] of Object.entries(row)) {
+    if (isEncryptedColumn(table, col) && typeof val === "string" && val.length > 0) {
+      row[col] = await decryptField(val);
+    }
+  }
+}
+
 // ── Rate Limiting (Token Bucket, tiered per-path) ────────────────────────────
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute window
 
@@ -799,13 +855,16 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
     const paymentIntentId = `pi_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
     const clientSecret = `${paymentIntentId}_secret_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
 
+    // Encrypt sensitive fields at rest
+    const encryptedClientSecret = await encryptField(clientSecret);
+
     const now = new Date().toISOString();
     db.run(
       `INSERT INTO payment_sessions (id, user_id, amount_usd, amount_hsmc, session_id,
        stripe_payment_intent_id, stripe_client_secret, status, processor, created_at, otp_expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'stripe', ?, ?)`,
       randomUUID(), "local-user", amountUsd, amountHsmc, sessionId,
-      paymentIntentId, clientSecret, now,
+      paymentIntentId, encryptedClientSecret, now,
       new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
     );
 
@@ -2135,7 +2194,11 @@ async function handleRequestInner(req: Request): Promise<Response> {
     try {
       if (req.method === "GET") {
         const { sql, params } = buildSelectSQL(parsed);
-        const rows = db.query(sql).all(...params);
+        const rows = db.query(sql).all(...params) as Record<string, unknown>[];
+        // Decrypt sensitive columns before returning
+        for (const row of rows) {
+          await decryptSensitiveColumns(parsed.table, row);
+        }
         return jsonResponse(rows);
       }
 
@@ -2168,6 +2231,9 @@ async function handleRequestInner(req: Request): Promise<Response> {
           const rowObj = row as Record<string, unknown>;
           if (!rowObj.id) rowObj.id = randomUUID();
           if (!rowObj.created_at) rowObj.created_at = new Date().toISOString();
+
+          // Encrypt sensitive columns before storing
+          await encryptSensitiveColumns(parsed.table, rowObj);
 
           // Validate column names in the row
           const cols = Object.keys(rowObj);
@@ -2208,6 +2274,9 @@ async function handleRequestInner(req: Request): Promise<Response> {
             return errorResponse(`Invalid column name in body: "${col}"`, 400);
           }
         }
+
+        // Encrypt sensitive columns before updating
+        await encryptSensitiveColumns(parsed.table, bodyObj);
 
         const conditions: string[] = [];
         const params: unknown[] = [];

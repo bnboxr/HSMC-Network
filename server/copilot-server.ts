@@ -31,6 +31,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { hardenFilePermissions, verifySchemaIntegrity } from "./db-security";
 
 // ── Agent imports ────────────────────────────────────────────────────────
 import {
@@ -86,7 +87,51 @@ import {
 const DB_PATH = new URL("./copilot.db", import.meta.url).pathname;
 const db = new Database(DB_PATH, { create: true });
 
+const COPILOT_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS wallets (
+  user_id TEXT NOT NULL,
+  address TEXT NOT NULL,
+  balance REAL NOT NULL DEFAULT 0,
+  staked_balance REAL NOT NULL DEFAULT 0,
+  label TEXT,
+  is_primary INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS transactions (
+  user_id TEXT NOT NULL,
+  tx_type TEXT NOT NULL,
+  amount REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'confirmed',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS token_metrics (
+  price REAL NOT NULL,
+  market_cap REAL NOT NULL DEFAULT 0,
+  circulating_supply REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
 db.run("PRAGMA journal_mode=WAL");
+
+// ── Security: file permissions ────────────────────────────────────────────
+const permResults = hardenFilePermissions(DB_PATH);
+for (const r of permResults) {
+  if (!r.ok) {
+    console.warn(`[Copilot-Security] ⚠️  Permission hardening failed for ${r.path}: ${r.error}`);
+  } else if (r.permsBefore !== r.permsAfter) {
+    console.log(`[Copilot-Security] 🔒 ${r.path}: ${r.permsBefore} → ${r.permsAfter}`);
+  }
+}
+
+// ── Security: schema integrity (non-strict — copilot DB is auto-created) ───
+const schemaCheck = await verifySchemaIntegrity(db, COPILOT_SCHEMA_SQL);
+if (!schemaCheck.passed) {
+  console.warn(`[Copilot-Security] ⚠️  Schema integrity check failed — may be expected for auto-created DB`);
+  console.warn(`  Expected: ${schemaCheck.expectedHash.slice(0, 16)}...`);
+  console.warn(`  Actual:   ${schemaCheck.actualHash.slice(0, 16)}...`);
+} else {
+  console.log(`[Copilot-Security] ✅ Schema integrity OK (${schemaCheck.tableCount} tables)`);
+}
 
 db.run(`
   CREATE TABLE IF NOT EXISTS wallets (
