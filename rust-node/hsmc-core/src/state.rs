@@ -294,6 +294,94 @@ impl Treasury {
     }
 }
 
+// ─── Staking Snapshot (for persistence) ───────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StakingSnapshot {
+    pub stakes: HashMap<String, StakeEntry>,
+    pub validators: HashMap<String, ValidatorInfo>,
+    pub total_staked: u64,
+    pub epoch: u64,
+    pub reward_pool: u64,
+    pub annual_reward_rate_bps: u16,
+}
+
+// ─── RPC-friendly StakingState wrapper ────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StakingPool {
+    pub id: String,
+    pub name: String,
+    pub validator_address: String,
+    pub total_staked: f64,
+    pub apr: f64,
+    pub commission_rate: f64,
+    pub min_stake: f64,
+    pub status: String,
+    pub delegator_count: u64,
+    pub uptime_percent: f64,
+    pub created_at: i64,
+}
+
+pub struct StakingState {
+    pub registry: StakingRegistry,
+    pub pools: Vec<StakingPool>,
+}
+
+impl StakingState {
+    pub fn new() -> Self {
+        Self {
+            registry: StakingRegistry::new(),
+            pools: Vec::new(),
+        }
+    }
+
+    /// Total staked across all pools
+    pub fn total_staked(&self) -> u64 {
+        self.registry.total_staked
+    }
+
+    /// Distribute epoch rewards to stakers
+    pub fn distribute_rewards(&mut self, reward_units: u64, block_height: u64, _now: u64) -> u64 {
+        self.registry.distribute_block_reward(reward_units, block_height, 200);
+        self.registry.total_staked
+    }
+
+    /// Process unbonding completions
+    pub fn process_unbonding(&mut self, _now: u64) -> u64 {
+        // Stub: returns count of unbonded validators
+        0
+    }
+
+    /// Slash inactive validators
+    pub fn slash_inactive(&mut self, _block_height: u64, _window: u64, _threshold: u64) -> u64 {
+        // Stub: returns count of slashed validators
+        0
+    }
+
+    /// Serialize to snapshot
+    pub fn to_snapshot(&self) -> Result<StakingSnapshot, String> {
+        Ok(StakingSnapshot {
+            stakes: self.registry.stakes.clone(),
+            validators: self.registry.validators.clone(),
+            total_staked: self.registry.total_staked,
+            epoch: self.registry.epoch,
+            reward_pool: self.registry.reward_pool,
+            annual_reward_rate_bps: self.registry.annual_reward_rate_bps,
+        })
+    }
+
+    /// Load from snapshot
+    pub fn load_snapshot(&mut self, snap: StakingSnapshot) {
+        self.registry.stakes = snap.stakes;
+        self.registry.validators = snap.validators;
+        self.registry.total_staked = snap.total_staked;
+        self.registry.epoch = snap.epoch;
+        self.registry.reward_pool = snap.reward_pool;
+        self.registry.annual_reward_rate_bps = snap.annual_reward_rate_bps;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

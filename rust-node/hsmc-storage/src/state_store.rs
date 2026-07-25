@@ -12,6 +12,8 @@ const KEY_TOTAL_STAKED: &[u8] = b"total_staked";
 const KEY_TREASURY_BALANCE: &[u8] = b"treasury_balance";
 const KEY_LAST_DIFFICULTY: &[u8] = b"last_difficulty";
 const KEY_LAST_CHECKPOINT: &[u8] = b"last_checkpoint";
+const KEY_GOVERNANCE_SNAPSHOT: &str = "governance_snapshot";
+const KEY_STAKING_SNAPSHOT: &str = "staking_snapshot";
 
 pub struct StateStore { db: Arc<DB> }
 
@@ -66,5 +68,25 @@ impl StateStore {
     pub fn get_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
         Ok(self.db.get_cf(self.cf()?, key.as_bytes())?
             .and_then(|v| serde_json::from_slice(&v).ok()))
+    }
+
+    /// Save governance snapshot to RocksDB
+    pub fn save_governance<T: Serialize>(&self, snapshot: &T) -> Result<()> {
+        self.set_json(KEY_GOVERNANCE_SNAPSHOT, snapshot)
+    }
+
+    /// Load governance snapshot from RocksDB
+    pub fn load_governance<T: for<'de> Deserialize<'de>>(&self) -> Result<Option<T>> {
+        self.get_json(KEY_GOVERNANCE_SNAPSHOT)
+    }
+
+    /// Save staking snapshot to RocksDB
+    pub fn save_staking<T: Serialize>(&self, snapshot: &T) -> Result<()> {
+        self.set_json(KEY_STAKING_SNAPSHOT, snapshot)
+    }
+
+    /// Load staking snapshot from RocksDB
+    pub fn load_staking<T: for<'de> Deserialize<'de>>(&self) -> Result<Option<T>> {
+        self.get_json(KEY_STAKING_SNAPSHOT)
     }
 }

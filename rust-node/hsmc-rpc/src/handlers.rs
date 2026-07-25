@@ -6,6 +6,7 @@ use axum::{extract::{State, Path, Query}, Json};
 use std::{sync::Arc, collections::HashMap};
 use tracing::info;
 use hsmc_core::{Block, Transaction, PrivacyLevel, TxStatus};
+use hsmc_core::governance::{RpcProposal, GovernanceState};
 use hsmc_crypto::{DualKeyWallet, StealthOutputSender, StealthAddress, RingPublicKey, RingPrivateKey, LsagSignature, ClsagSignature, select_decoys, PedersenCommitment, BulletproofRangeProof, RctOutput};
 use rand::rngs::OsRng;
 use crate::types::*;
@@ -520,7 +521,7 @@ pub async fn create_proposal(
     let now = chrono::Utc::now();
     let ends_at = now + chrono::Duration::days(req.voting_days.unwrap_or(7) as i64);
 
-    let proposal = hsmc_core::GovernanceProposal {
+    let proposal = RpcProposal {
         id: proposal_id.clone(),
         title: req.title.clone(),
         description: req.description.clone(),
@@ -534,6 +535,7 @@ pub async fn create_proposal(
         ends_at: ends_at.timestamp(),
         parameter_key: req.parameter_key.clone(),
         parameter_value: req.parameter_value.clone(),
+        total_voting_power: 0,
     };
 
     gov.proposals.push(proposal);
@@ -545,6 +547,42 @@ pub async fn create_proposal(
         "voting_ends_at": ends_at.to_rfc3339(),
         "quorum_required": req.quorum_required.unwrap_or(1000),
     }))
+}
+
+/// Execute a governance proposal after timelock expiry.
+/// Anyone can call this — the engine enforces all guards.
+/// POST /governance/execute/:id
+pub async fn execute_proposal(
+    State(state): State<Arc<AppState>>,
+    Path(proposal_id): Path<String>,
+) -> Json<serde_json::Value> {
+    let mut gov = state.governance.write().await;
+
+    // Get current block height from chain for context
+    let block_height = state.chain.read().await.height();
+
+    match gov.engine.execute(&proposal_id, block_height) {
+        Ok(proposal_type) => {
+            // Sync RPC view from engine
+            gov.sync_from_engine();
+            info!(proposal_id = %proposal_id, "Governance proposal executed via RPC");
+
+            Json(serde_json::json!({
+                "success": true,
+                "proposal_id": proposal_id,
+                "executed_at": chrono::Utc::now().to_rfc3339(),
+                "block_height": block_height,
+                "type": format!("{:?}", proposal_type),
+            }))
+        }
+        Err(e) => {
+            Json(serde_json::json!({
+                "success": false,
+                "proposal_id": proposal_id,
+                "error": e.to_string(),
+            }))
+        }
+    }
 }
 
 pub async fn cast_vote(

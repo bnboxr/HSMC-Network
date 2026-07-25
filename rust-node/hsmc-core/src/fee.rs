@@ -166,6 +166,26 @@ impl FeeMarket {
         let total: u64 = recent.iter().copied().sum();
         total as f64 / (MAX_BLOCK_BYTES * recent.len() as u64) as f64
     }
+
+    /// Get base fee in satoshis (for metrics / external consumers)
+    pub fn base_fee_satoshis(&self) -> u64 {
+        self.base_fee_rate
+    }
+
+    /// Adjust base fee based on gas used vs target (EIP-1559 style)
+    /// Called by the fee market updater background task
+    pub fn adjust_base_fee_public(&mut self, gas_used: u64, target_gas: u64) {
+        if target_gas == 0 { return; }
+        let current = self.base_fee_rate;
+        let new_fee = if gas_used > target_gas {
+            let delta = current * (gas_used - target_gas) / (target_gas * BASE_FEE_MAX_CHANGE_DENOM);
+            current + delta.max(1)
+        } else {
+            let delta = current * (target_gas - gas_used) / (target_gas * BASE_FEE_MAX_CHANGE_DENOM);
+            current.saturating_sub(delta)
+        };
+        self.base_fee_rate = new_fee.max(MIN_FEE_RATE_SAT_VB);
+    }
 }
 
 impl Default for FeeMarket {

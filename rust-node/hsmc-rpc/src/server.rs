@@ -6,7 +6,7 @@ use axum::{
 use tower_http::cors::{CorsLayer, Any};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use hsmc_core::{Chain, Mempool, GovernanceState, StakingState};
+use hsmc_core::{Chain, Mempool, governance::GovernanceState, state::StakingState};
 use hsmc_p2p::PeerRegistry;
 use tracing::info;
 use crate::handlers::*;
@@ -80,6 +80,7 @@ pub async fn start_rpc_server(
         .route("/governance/proposals",    get(get_proposals))
         .route("/governance/propose",      post(create_proposal))
         .route("/governance/vote/:id",     post(cast_vote))
+        .route("/governance/execute/:id",  post(execute_proposal))
         // ── Staking ───────────────────────────────────────────────
         .route("/staking/pools",           get(get_staking_pools))
         .route("/staking/stake",           post(stake))

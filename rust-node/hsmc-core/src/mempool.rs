@@ -615,6 +615,50 @@ impl Mempool {
 
     // ── Utility ───────────────────────────────────────────────────────────────
 
+    /// Current mempool size (alias for `size()`)
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Evict transactions older than the given deadline (UNIX timestamp).
+    /// Returns the hashes of evicted transactions.
+    pub fn evict_expired_before(&mut self, deadline_unix: i64) -> Vec<String> {
+        let expired: Vec<String> = self.entries
+            .iter()
+            .filter(|(_, e)| e.added_at < deadline_unix)
+            .map(|(h, _)| h.clone())
+            .collect();
+        for hash in &expired {
+            self.remove(hash);
+        }
+        if !expired.is_empty() {
+            tracing::debug!(count = expired.len(), "Mempool: evicted {} expired txs", expired.len());
+        }
+        expired
+    }
+
+    /// Evict the `count` lowest-fee transactions from the mempool.
+    /// Returns the hashes of evicted transactions.
+    pub fn evict_lowest_fee(&mut self, count: usize) -> Vec<String> {
+        let mut evicted = Vec::with_capacity(count);
+        // Collect lowest-fee entries from fee_index
+        let lowest: Vec<String> = self.fee_index
+            .iter()
+            .take(count)
+            .map(|(_, hash)| hash.clone())
+            .collect();
+        for hash in &lowest {
+            self.remove(hash);
+            evicted.push(hash.clone());
+        }
+        evicted
+    }
+
+    /// Return all pending transactions in the mempool (for persistence)
+    pub fn all_pending(&self) -> Vec<&Transaction> {
+        self.entries.values().map(|e| &e.tx).collect()
+    }
+
     /// Convert fee-per-byte float to a u64 key for BTreeMap ordering
     fn fee_index_key(&self, fpb: f64) -> u64 {
         (fpb * 1e12) as u64

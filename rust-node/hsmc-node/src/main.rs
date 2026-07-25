@@ -23,9 +23,9 @@ use anyhow::Result;
 
 use hsmc_core::{
     Chain, Mempool,
-    governance::{GovernanceEngine, ProposalStatus},
+    governance::{GovernanceEngine, GovernanceState, ProposalStatus},
     fee::FeeMarket,
-    state::StakingRegistry,
+    state::{StakingRegistry, StakingState},
 };
 use hsmc_p2p::{PeerRegistry, SyncService};
 use hsmc_rpc::server::start_rpc_server;
@@ -157,9 +157,9 @@ pub struct AppState {
     pub chain:      Arc<RwLock<Chain>>,
     pub mempool:    Arc<RwLock<Mempool>>,
     pub peers:      Arc<PeerRegistry>,
-    pub governance: Arc<RwLock<GovernanceEngine>>,
+    pub governance: Arc<RwLock<GovernanceState>>,
     pub fee_market: Arc<RwLock<FeeMarket>>,
-    pub staking:    Arc<RwLock<StakingRegistry>>,
+    pub staking:    Arc<RwLock<StakingState>>,
     pub metrics:    &'static NodeMetrics,
 }
 
@@ -199,9 +199,9 @@ async fn main() -> Result<()> {
     // ── In-memory shared state ────────────────────────────────────────────────
     let chain      = Arc::new(RwLock::new(Chain::new()));
     let mempool    = Arc::new(RwLock::new(Mempool::new()));
-    let governance = Arc::new(RwLock::new(GovernanceEngine::new()));
+    let governance = Arc::new(RwLock::new(GovernanceState::new()));
     let fee_market = Arc::new(RwLock::new(FeeMarket::new()));
-    let staking    = Arc::new(RwLock::new(StakingRegistry::new()));
+    let staking    = Arc::new(RwLock::new(StakingState::new()));
     let peers      = Arc::new(PeerRegistry::new());
 
     let app = AppState {
@@ -276,13 +276,15 @@ async fn main() -> Result<()> {
 
     // ── RPC HTTP server (blocking — main task) ────────────────────────────────
     info!("🚀 RPC server starting on port {}", cfg.rpc_port);
-    let rpc_chain   = chain.clone();
-    let rpc_mempool = mempool.clone();
-    let rpc_peers   = peers.clone();
-    let rpc_port    = cfg.rpc_port;
-    let mut rx      = shutdown_tx.subscribe();
+    let rpc_chain     = chain.clone();
+    let rpc_mempool   = mempool.clone();
+    let rpc_peers     = peers.clone();
+    let rpc_gov       = governance.clone();
+    let rpc_staking   = staking.clone();
+    let rpc_port      = cfg.rpc_port;
+    let mut rx        = shutdown_tx.subscribe();
     tokio::select! {
-        res = start_rpc_server(rpc_chain, rpc_mempool, rpc_peers, rpc_port) => {
+        res = start_rpc_server(rpc_chain, rpc_mempool, rpc_peers, rpc_gov, rpc_staking, rpc_port) => {
             if let Err(e) = res { error!("RPC server error: {}", e); }
         }
         _ = rx.recv() => { info!("RPC server shutting down"); }
@@ -361,12 +363,13 @@ async fn restore_utxo_set(utxo_store: &Arc<UtxoStore>) {
     }
 }
 
-async fn restore_governance(gov: &Arc<RwLock<GovernanceEngine>>, state: &Arc<StateStore>) {
+async fn restore_governance(gov: &Arc<RwLock<GovernanceState>>, state: &Arc<StateStore>) {
     let mut g = gov.write().await;
     match state.load_governance() {
         Ok(Some(snap)) => {
-            g.load_snapshot(snap);
-            let active = g.active_proposals().len();
+            g.engine.load_snapshot(snap);
+            g.sync_from_engine();
+            let active = g.engine.active_proposals().len();
             METRICS.governance_active.store(active as u64, Ordering::Relaxed);
             info!("🗳️  Governance restored: {} active proposals", active);
         }
@@ -375,7 +378,7 @@ async fn restore_governance(gov: &Arc<RwLock<GovernanceEngine>>, state: &Arc<Sta
     }
 }
 
-async fn restore_staking(staking: &Arc<RwLock<StakingRegistry>>, state: &Arc<StateStore>) {
+async fn restore_staking(staking: &Arc<RwLock<StakingState>>, state: &Arc<StateStore>) {
     let mut s = staking.write().await;
     match state.load_staking() {
         Ok(Some(snap)) => {
@@ -418,7 +421,7 @@ fn spawn_metrics_updater(app: AppState, block_time_ms: u64) {
             let peer_count = app.peers.count();
             METRICS.peer_count.store(peer_count as u64, Ordering::Relaxed);
             // Governance
-            let active_props = app.governance.read().await.active_proposals().len();
+            let active_props = app.governance.read().await.engine.active_proposals().len();
             METRICS.governance_active.store(active_props as u64, Ordering::Relaxed);
             // Staking
             let total_staked = app.staking.read().await.total_staked();
@@ -458,7 +461,7 @@ fn spawn_p2p_sync(
 // ── Governance processor ──────────────────────────────────────────────────────
 
 fn spawn_governance_processor(
-    governance: Arc<RwLock<GovernanceEngine>>,
+    governance: Arc<RwLock<GovernanceState>>,
     state_store: Arc<StateStore>,
     shutdown: Arc<AtomicBool>,
 ) {
@@ -472,7 +475,7 @@ fn spawn_governance_processor(
             let mut g = governance.write().await;
 
             // Finalize expired proposals
-            let finalized = g.finalize_expired(now);
+            let finalized = g.engine.finalize_expired(now);
             if !finalized.is_empty() {
                 for (id, status) in &finalized {
                     match status {
@@ -485,19 +488,22 @@ fn spawn_governance_processor(
             }
 
             // Process enacted proposals (parameter changes, treasury payments)
-            let enacted = g.enact_passed_proposals();
+            let enacted = g.engine.enact_passed_proposals();
             if !enacted.is_empty() {
                 info!("📜 Enacted {} governance proposal(s)", enacted.len());
             }
 
+            // Sync RPC proposal list from engine
+            g.sync_from_engine();
+
             // Persist governance snapshot
-            if let Ok(snap) = g.to_snapshot() {
+            if let Ok(snap) = g.engine.to_snapshot() {
                 if let Err(e) = state_store.save_governance(&snap) {
                     warn!("⚠️  Governance persist failed: {}", e);
                 }
             }
 
-            let active = g.active_proposals().len();
+            let active = g.engine.active_proposals().len();
             METRICS.governance_active.store(active as u64, Ordering::Relaxed);
         }
         info!("Governance processor stopped");
@@ -507,7 +513,7 @@ fn spawn_governance_processor(
 // ── Staking reward distributor ────────────────────────────────────────────────
 
 fn spawn_staking_reward_distributor(
-    staking: Arc<RwLock<StakingRegistry>>,
+    staking: Arc<RwLock<StakingState>>,
     chain: Arc<RwLock<Chain>>,
     state_store: Arc<StateStore>,
     shutdown: Arc<AtomicBool>,
@@ -526,7 +532,6 @@ fn spawn_staking_reward_distributor(
             // Calculate epoch rewards based on chain height and total staked
             let total_staked    = s.total_staked();
             let annual_rate_bps = 1200u64; // 12% APR in basis points
-            // per-second rate: annual_rate / (365 * 24 * 3600) / 10000
             let epoch_secs = 600u64;
             let reward_units = (total_staked * annual_rate_bps * epoch_secs)
                 / (365 * 24 * 3600 * 10_000);
@@ -586,7 +591,7 @@ fn spawn_fee_market_updater(
             };
 
             let mut fm = fee_market.write().await;
-            fm.adjust_base_fee(gas_used, target_gas_per_block);
+            fm.adjust_base_fee_public(gas_used, target_gas_per_block);
             let base_fee = fm.base_fee_satoshis();
             METRICS.base_fee_satoshis.store(base_fee, Ordering::Relaxed);
             debug!("⛽ Fee market: base_fee={} sat, gas_used={}", base_fee, gas_used);
@@ -612,7 +617,7 @@ fn spawn_mempool_cleanup(
             let mut m = mempool.write().await;
 
             // Evict transactions older than 24 hours
-            let expired = m.evict_expired(now - 86_400);
+            let expired = m.evict_expired_before(now - 86_400);
             for hash in &expired {
                 let _ = store.remove(hash);
             }
@@ -805,8 +810,8 @@ async fn run_metrics_server(port: u16) -> Result<()> {
 async fn flush_state(
     chain: &Arc<RwLock<Chain>>,
     mempool: &Arc<RwLock<Mempool>>,
-    staking: &Arc<RwLock<StakingRegistry>>,
-    governance: &Arc<RwLock<GovernanceEngine>>,
+    staking: &Arc<RwLock<StakingState>>,
+    governance: &Arc<RwLock<GovernanceState>>,
     block_store: &Arc<BlockStore>,
     mempool_store: &Arc<MempoolStore>,
     state_store: &Arc<StateStore>,
@@ -841,7 +846,7 @@ async fn flush_state(
     }
 
     // Persist governance snapshot
-    if let Ok(snap) = governance.read().await.to_snapshot() {
+    if let Ok(snap) = governance.read().await.engine.to_snapshot() {
         if let Err(e) = state_store.save_governance(&snap) {
             warn!("Flush: governance snapshot failed: {}", e);
         } else {
