@@ -1044,17 +1044,16 @@ pub async fn oracle_price(
     State(state): State<Arc<AppState>>,
     Path(pair): Path<String>,
 ) -> Json<serde_json::Value> {
-    let decoded = urlencoding::decode(&pair).unwrap_or_else(|_| pair.clone().into());
-    match state.oracle.get_price(&decoded).await {
+    match state.oracle.get_price(&pair).await {
         Ok(price) => {
             let cache = state.oracle.cache_ref().read();
             let feeds_used = cache
-                .get(&*decoded)
+                .get(&pair)
                 .map(|e| e.feeds_used)
                 .unwrap_or(state.oracle.feed_count());
 
             Json(serde_json::json!({
-                "pair": decoded,
+                "pair": pair,
                 "price": price,
                 "feeds_used": feeds_used,
                 "feeds_total": state.oracle.feed_count(),
@@ -1064,7 +1063,7 @@ pub async fn oracle_price(
             }))
         }
         Err(e) => Json(serde_json::json!({
-            "pair": decoded,
+            "pair": pair,
             "error": e.to_string(),
             "feeds_total": state.oracle.feed_count(),
         })),

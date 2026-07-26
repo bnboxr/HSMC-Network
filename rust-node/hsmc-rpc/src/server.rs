@@ -19,6 +19,7 @@ pub struct AppState {
     pub governance: Arc<RwLock<GovernanceState>>,
     pub staking:    Arc<RwLock<StakingState>>,
     pub bridge:     Arc<RwLock<BridgeState>>,
+    pub oracle:     Arc<hsmc_oracle::Oracle>,
     pub chain_id:   u64,
     pub network:    String,
 }
@@ -37,6 +38,7 @@ pub async fn start_rpc_server(
         peers,
         governance,
         staking,
+        oracle: Arc::new(hsmc_oracle::Oracle::with_default_feeds(std::time::Duration::from_secs(30))),
         bridge: Arc::new(RwLock::new(BridgeState::default())),
         chain_id: 8888,
         network: "mainnet".into(),
@@ -97,6 +99,8 @@ pub async fn start_rpc_server(
         .route("/crypto/ring-sign",        post(generate_ring_signature))
         .route("/crypto/commitment",       post(generate_commitment))
         .route("/crypto/range-proof",      post(generate_range_proof))
+        // ── Oracle (multi-source price feed) ─────────────────────
+        .route("/oracle/price/:pair",      get(oracle_price))
         .layer(cors)
         .with_state(state);
 

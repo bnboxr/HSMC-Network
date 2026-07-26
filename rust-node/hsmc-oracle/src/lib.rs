@@ -53,6 +53,7 @@ pub trait PriceFeed: Send + Sync {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct BinancePrice {
     symbol: String,
     price: String,
@@ -98,6 +99,7 @@ struct BybitTicker {
 struct GateResponse(Vec<GateTicker>);
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GateTicker {
     currency_pair: String,
     last: String,
@@ -138,7 +140,7 @@ impl PriceFeed for BinanceFeed {
         let bp: BinancePrice = resp.json().await.map_err(|e| OracleError::Parse(e.to_string()))?;
         bp.price
             .parse::<f64>()
-            .map_err(|e| OracleError::MalformedResponse {
+            .map_err(|_e| OracleError::MalformedResponse {
                 feed: "Binance".into(),
                 pair: pair.to_string(),
             })
@@ -401,7 +403,6 @@ pub fn aggregate_iqr(mut prices: Vec<f64>) -> Option<f64> {
 
     prices.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let n = prices.len();
     let q1 = percentile_sorted(&prices, 25);
     let q3 = percentile_sorted(&prices, 75);
     let iqr = q3 - q1;
@@ -447,10 +448,10 @@ fn median_sorted(sorted: &[f64]) -> f64 {
 
 /// Cached price entry with timestamp.
 #[derive(Debug, Clone)]
-struct CachedPrice {
-    price: f64,
-    timestamp: Instant,
-    feeds_used: usize,
+pub struct CachedPrice {
+    pub price: f64,
+    pub timestamp: Instant,
+    pub feeds_used: usize,
 }
 
 /// The main Oracle that queries multiple feeds and caches results.
@@ -519,6 +520,7 @@ impl Oracle {
             return Err(OracleError::NoData(pair.to_string()));
         }
 
+        let feeds_used = prices.len();
         let aggregated = aggregate_iqr(prices).ok_or_else(|| OracleError::NoData(pair.to_string()))?;
 
         // Update cache
@@ -529,7 +531,7 @@ impl Oracle {
                 CachedPrice {
                     price: aggregated,
                     timestamp: Instant::now(),
-                    feeds_used: self.feeds.len(),
+                    feeds_used,
                 },
             );
         }
