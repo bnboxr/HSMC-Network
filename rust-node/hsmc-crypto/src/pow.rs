@@ -171,7 +171,7 @@ pub fn build_block_template(block: &Block) -> Vec<u8> {
 ///
 /// Returns the 32-byte RandomX hash output.
 fn randomx_hash(key: &[u8], nonce: u64, mode: RandomXMode) -> [u8; 32] {
-    use randomx_rs::{RandomXCache, RandomXDataset, RandomXFlag, RandomXVM};
+    use randomx::{RandomXCache, RandomXDataset, RandomXFlag, RandomXVM};
 
     let flags = match mode {
         RandomXMode::Fast => RandomXFlag::FLAG_DEFAULT | RandomXFlag::FLAG_FULL_MEM,

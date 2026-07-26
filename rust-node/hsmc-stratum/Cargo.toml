@@ -20,4 +20,4 @@ parking_lot       = { workspace = true }
 dashmap           = { workspace = true }
 hsmc-core         = { path = "../hsmc-core" }
 hsmc-crypto       = { path = "../hsmc-crypto" }
-randomx-rs        = { workspace = true }
+randomx            = { workspace = true }
