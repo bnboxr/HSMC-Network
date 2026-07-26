@@ -23,6 +23,7 @@ import ExplorerPage from "./pages/Explorer";
 import SettingsPage from "./pages/SettingsPage";
 import WalletAuthPage from "./pages/WalletAuth";
 import OAuthConsent from "./pages/OAuthConsent";
+import { KillSwitchBanner } from "./components/KillSwitchBanner";
 
 const queryClient = new QueryClient();
 
@@ -33,6 +34,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <main>
+          <KillSwitchBanner />
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/landing" element={<LandingPage />} />

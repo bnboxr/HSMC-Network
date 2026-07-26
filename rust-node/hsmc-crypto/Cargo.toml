@@ -25,7 +25,7 @@ merlin           = { workspace = true }
 once_cell        = { workspace = true }
 rayon            = { workspace = true }
 num_cpus         = { workspace = true }
-randomx            = { workspace = true }
+# randomx disabled
 fips204            = { workspace = true }
 fips203            = { workspace = true }
 hsmc-core        = { path = "../hsmc-core" }

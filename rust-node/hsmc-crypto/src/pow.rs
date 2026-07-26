@@ -36,7 +36,7 @@ pub enum PowAlgorithm {
 
 impl Default for PowAlgorithm {
     fn default() -> Self {
-        Self::RandomX
+        Self::Sha256d  // RandomX temporarily disabled (clang-sys version conflict)
     }
 }
 
@@ -711,9 +711,9 @@ mod tests {
     // ── PowAlgorithm tests ─────────────────────────────────────────────────
 
     #[test]
-    fn test_algorithm_default_is_randomx() {
+    fn test_algorithm_default_is_sha256d() {
         let algo = PowAlgorithm::default();
-        assert_eq!(algo, PowAlgorithm::RandomX);
+        assert_eq!(algo, PowAlgorithm::Sha256d);
     }
 
     #[test]

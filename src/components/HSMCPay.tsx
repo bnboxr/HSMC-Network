@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, ArrowRight, Check, CreditCard, Loader2, Lock, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, Copy, CreditCard, Loader2, Lock, QrCode, ShieldCheck, Wallet, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/db/client';
 
-type PayStep = 'amount' | 'stripe' | 'deposit' | 'sell-confirm' | 'processing' | 'success' | 'failed';
+type PayStep = 'amount' | 'stripe' | 'deposit' | 'sell-confirm' | 'processing' | 'success' | 'failed' | 'p2p';
 
 interface HSMCPayProps {
   isOpen: boolean;
@@ -83,6 +83,10 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
   const [sellFeeTier, setSellFeeTier] = useState('');
   const [sellPayoutSessionId, setSellPayoutSessionId] = useState('');
   const [sellAmountRequired, setSellAmountRequired] = useState(0);
+  // Kill-switch / P2P state
+  const [killSwitchActive, setKillSwitchActive] = useState(false);
+  const [p2pWalletAddress, setP2pWalletAddress] = useState('0xHSMC_Treasury_P2P_000000000000000000000');
+  const [p2pInstructions, setP2pInstructions] = useState('');
 
   const canContinue = useMemo(() => Number(amountUsd) >= 1 && Number.isFinite(Number(amountUsd)), [amountUsd]);
 
@@ -100,6 +104,21 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
     paymentElement.mount('#hsmcpay-payment-element');
     return () => paymentElement.unmount();
   }, [step, paymentElement]);
+
+  // ── Kill-switch detection ─────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/admin/kill-switch')
+      .then(res => res.json())
+      .then((data: { kill_switch_active?: boolean; p2p_wallet_address?: string; p2p_instructions?: string }) => {
+        if (cancelled) return;
+        setKillSwitchActive(!!data.kill_switch_active);
+        if (data.p2p_wallet_address) setP2pWalletAddress(data.p2p_wallet_address);
+        if (data.p2p_instructions) setP2pInstructions(data.p2p_instructions);
+      })
+      .catch(() => { /* API not available — assume normal mode */ });
+    return () => { cancelled = true; };
+  }, [isOpen]);
 
   const reset = () => {
     paymentElement?.unmount();
@@ -149,6 +168,13 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
         setSellFeeTier(data.fee_tier);
         setEstimatedHsmc(data.amount_hsmc_required);
         setStep('deposit');
+        return;
+      }
+
+      // ── BUY FLOW: check kill-switch ────────────────────────────────
+      if (killSwitchActive) {
+        // P2P mode — skip Stripe entirely
+        setStep('p2p');
         return;
       }
 
@@ -477,6 +503,93 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Check className="w-4 h-4 mr-2" />}
                     Confirm & Settle
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ── P2P Mode: Kill-switch active, show wallet address + QR ── */}
+            {step === 'p2p' && mode === 'buy' && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+                <div className="text-center">
+                  <div className="w-14 h-14 mx-auto rounded-full bg-destructive/20 flex items-center justify-center mb-3">
+                    <AlertTriangle className="w-7 h-7 text-destructive" />
+                  </div>
+                  <h3 className="font-semibold text-lg">P2P Mode Active</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Card payments are disabled. Send HSMC directly to the treasury address.
+                  </p>
+                </div>
+
+                {/* QR Code */}
+                <div className="flex justify-center">
+                  <div className="p-4 bg-white rounded-xl border-2 border-destructive/30">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(p2pWalletAddress)}`}
+                      alt="P2P Wallet QR Code"
+                      className="w-48 h-48"
+                    />
+                  </div>
+                </div>
+
+                {/* Wallet Address */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium flex items-center gap-2">
+                    <Wallet className="w-4 h-4" />
+                    Send {estimatedHsmc > 0 ? estimatedHsmc.toFixed(4) : '...'} HSMC to:
+                  </label>
+                  <div className="p-3 bg-muted/30 rounded-xl border border-border break-all font-mono text-xs select-all">
+                    {p2pWalletAddress}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => {
+                      navigator.clipboard.writeText(p2pWalletAddress);
+                      toast({ title: 'Copied!', description: 'Wallet address copied to clipboard' });
+                    }}
+                  >
+                    <Copy className="w-4 h-4 mr-2" /> Copy Address
+                  </Button>
+                </div>
+
+                {/* Instructions */}
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-2 text-xs text-muted-foreground">
+                  <p className="flex items-center gap-2 font-medium text-amber-400">
+                    <QrCode className="w-3 h-3" /> Instructions:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1">
+                    <li>Scan the QR code with your HSMC wallet app</li>
+                    <li>Or copy the address and send {estimatedHsmc > 0 ? estimatedHsmc.toFixed(4) : ''} HSMC manually</li>
+                    <li>Include your User ID in the transaction memo: <span className="font-mono text-foreground">{user?.id || 'N/A'}</span></li>
+                    <li>Transaction will be credited within 10-30 minutes after confirmation</li>
+                  </ol>
+                  {p2pInstructions && (
+                    <p className="text-destructive-foreground bg-destructive/10 p-2 rounded mt-2">{p2pInstructions}</p>
+                  )}
+                </div>
+
+                {/* Amount summary */}
+                <div className="p-3 bg-muted/20 rounded-xl border border-border space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Amount (USD)</span>
+                    <span className="font-mono font-bold">${amountUsd}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">HSMC to send</span>
+                    <span className="font-mono font-bold gradient-text">{estimatedHsmc.toFixed(4)} HSMC</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Fee</span>
+                    <span className="font-mono text-secondary">$0.00 (P2P mode)</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={() => setStep('amount')} className="flex-1">Back</Button>
+                  <Button variant="hero" className="flex-1" onClick={() => { reset(); onClose(); }}>
+                    <Check className="w-4 h-4 mr-2" /> Done
                   </Button>
                 </div>
               </motion.div>
