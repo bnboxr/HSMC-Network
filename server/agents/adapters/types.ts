@@ -22,11 +22,11 @@ export interface AdapterResponse {
 }
 
 /** Union type of all supported AI providers */
-export type AIProvider = "lovable" | "openai" | "anthropic" | "groq" | "mistral" | "ollama";
+export type AIProvider = "hsmc-ai" | "openai" | "anthropic" | "groq" | "mistral" | "ollama";
 
 /** List of all providers for validation */
 export const ALL_PROVIDERS: AIProvider[] = [
-  "lovable",
+  "hsmc-ai",
   "openai",
   "anthropic",
   "groq",
@@ -36,7 +36,7 @@ export const ALL_PROVIDERS: AIProvider[] = [
 
 /** Human-readable labels for providers */
 export const PROVIDER_LABELS: Record<AIProvider, string> = {
-  lovable: "Lovable (Gemini Flash)",
+  hsmc-ai: "HSMC-AI (Gemini Flash)",
   openai: "OpenAI (GPT-4o Mini)",
   anthropic: "Anthropic (Claude 3 Haiku)",
   groq: "Groq (Llama 3.1 70B)",
@@ -46,7 +46,7 @@ export const PROVIDER_LABELS: Record<AIProvider, string> = {
 
 /** Which env var each provider needs */
 export const PROVIDER_ENV_VARS: Record<AIProvider, string | null> = {
-  lovable: "LOVABLE_API_KEY",
+  hsmc-ai: "HSMC_AI_KEY",
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
   groq: "GROQ_API_KEY",

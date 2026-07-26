@@ -192,7 +192,7 @@ export const PROJECT_STRUCTURE_CONTEXT = `## HSMC Project File Structure
 
 /home/team/shared/
 ├── api-server.ts            — REST API server (port 3001, 35 tables, SQLite)
-├── copilot-server.ts         — AI Co-Pilot (port 3002, Lovable gateway)
+├── copilot-server.ts         — AI Co-Pilot (port 3002, HSMC-AI gateway)
 ├── mining-server.ts          — Stratum V1 Mining Pool (port 3333, WebSocket)
 ├── build-own-db.ts           — Database builder utility
 ├── schema.sqlite.sql         — Full DB schema definition

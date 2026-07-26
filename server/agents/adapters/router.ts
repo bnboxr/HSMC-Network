@@ -11,7 +11,7 @@
 
 import type { AIProvider, AdapterResponse } from "./types";
 import { ALL_PROVIDERS } from "./types";
-import { streamLovable } from "./lovable";
+import { streamHsmcAi } from "./hsmc-ai";
 import { streamOpenAI } from "./openai";
 import { streamAnthropic } from "./anthropic";
 import { streamGroq } from "./groq";
@@ -36,8 +36,8 @@ export async function streamToAI(
   const config = { messages, model, apiKey };
 
   switch (provider) {
-    case "lovable":
-      return streamLovable(config);
+    case "hsmc-ai":
+      return streamHsmcAi(config);
     case "openai":
       return streamOpenAI(config);
     case "anthropic":
@@ -60,7 +60,7 @@ export async function streamToAI(
  * Resolve which provider to use, respecting:
  * 1. Explicit per-request override (from body.provider)
  * 2. Global env var AI_PROVIDER
- * 3. Fallback to "lovable" (original default)
+ * 3. Fallback to "hsmc-ai" (original default)
  */
 export function resolveProvider(requestedProvider?: string): AIProvider {
   if (requestedProvider) {
@@ -75,5 +75,5 @@ export function resolveProvider(requestedProvider?: string): AIProvider {
     return envProvider as AIProvider;
   }
 
-  return "lovable"; // original default
+  return "hsmc-ai"; // original default
 }

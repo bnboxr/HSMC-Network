@@ -3,7 +3,7 @@
  * Routes requests to 7 specialized AI agents, each with their own endpoint,
  * system prompt, and context. Supports 6 AI backends via pluggable adapters:
  *
- *   lovable   — Gemini Flash (free, LOVABLE_API_KEY)
+ *   hsmc-ai   — Gemini Flash (free, HSMC_AI_KEY)
  *   openai    — GPT-4o Mini (~$0.15/1M, OPENAI_API_KEY)
  *   anthropic — Claude 3 Haiku (~$0.25/1M, ANTHROPIC_API_KEY)
  *   groq      — Llama 3.1 70B (free tier, GROQ_API_KEY)
@@ -13,7 +13,7 @@
  * Provider selection:
  *   - Global default: set AI_PROVIDER env var (e.g., AI_PROVIDER=ollama)
  *   - Per-request: send {"provider": "ollama"} in request body
- *   - Fallback: lovable (original default)
+ *   - Fallback: hsmc-ai (original default)
  *
  * Usage: bun run copilot-server.ts
  * Listens on port 3002.
@@ -369,7 +369,7 @@ async function routeAgent(
   const userId = (body.user_id as string) ?? req.headers.get("x-user-id") ?? "demo-user";
   const messages = body.messages as unknown[] | undefined;
 
-  // Resolve provider: per-request override > env var > default (lovable)
+  // Resolve provider: per-request override > env var > default (hsmc-ai)
   const provider = resolveProvider(body.provider as string | undefined);
 
   // For concierge, we need messages with actual user content
@@ -577,6 +577,6 @@ const anyCloudAvailable = ALL_PROVIDERS.some(p => {
 
 if (!anyCloudAvailable) {
   console.log(`\n   ⚠️  No cloud API keys found. Only "ollama" (local) will work.`);
-  console.log(`   Set one of: LOVABLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY`);
+  console.log(`   Set one of: HSMC_AI_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY`);
   console.log(`   Or run: ollama pull llama3.2:3b && ollama serve`);
 }
