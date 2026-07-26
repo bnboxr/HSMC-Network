@@ -478,9 +478,64 @@ impl Default for RingBatchVerifier {
 // Decoy Selection
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Select decoy ring members from a set of known public keys
-/// Uses gamma distribution for realistic age-biased selection (Monero-style)
+/// Select decoy ring members from a set of known public keys.
+///
+/// Uses cryptographically secure randomness (OsRng) for all index selection
+/// and signer position randomization. This is critical for sender anonymity —
+/// predictable decoy selection would deanonymize the signer.
+///
+/// W5 FIX (2026-07-26): Replaced deterministic LCG with OsRng.
+/// Previous implementation used a seeded linear congruential generator
+/// which was predictable given knowledge of the seed, making decoy
+/// selection non-random and potentially deanonymizing.
 pub fn select_decoys(
+    all_public_keys: &[RingPublicKey],
+    real_key: &RingPublicKey,
+    ring_size: usize,
+) -> Result<(Vec<RingPublicKey>, usize), RingError> {
+    if all_public_keys.len() < ring_size {
+        return Err(RingError::InsufficientDecoys {
+            needed: ring_size,
+            available: all_public_keys.len(),
+        });
+    }
+
+    let mut selected = Vec::with_capacity(ring_size);
+    let mut used: HashSet<[u8; 32]> = HashSet::new();
+    used.insert(real_key.0);
+
+    // Cryptographically secure random index selection (OsRng)
+    use rand::Rng;
+    let mut rng = OsRng;
+    let mut attempts = 0usize;
+    while selected.len() < ring_size - 1 && attempts < ring_size * 100 {
+        let idx = rng.gen_range(0..all_public_keys.len());
+        let candidate = &all_public_keys[idx];
+        if !used.contains(&candidate.0) {
+            used.insert(candidate.0);
+            selected.push(candidate.clone());
+        }
+        attempts += 1;
+    }
+
+    if selected.len() < ring_size - 1 {
+        return Err(RingError::InsufficientDecoys {
+            needed: ring_size - 1,
+            available: selected.len(),
+        });
+    }
+
+    // Insert real key at cryptographically random position
+    let signer_pos = rng.gen_range(0..ring_size);
+    selected.insert(signer_pos, real_key.clone());
+
+    Ok((selected, signer_pos))
+}
+
+/// Deterministic decoy selection for testing only.
+/// Uses a seeded LCG — DO NOT USE in production.
+#[cfg(test)]
+pub fn select_decoys_deterministic(
     all_public_keys: &[RingPublicKey],
     real_key: &RingPublicKey,
     ring_size: usize,
@@ -497,7 +552,6 @@ pub fn select_decoys(
     let mut used: HashSet<[u8; 32]> = HashSet::new();
     used.insert(real_key.0);
 
-    // Deterministic pseudo-random selection (seeded)
     let mut rng_state = seed.wrapping_mul(0x9e3779b97f4a7c15);
     let mut attempts = 0usize;
     while selected.len() < ring_size - 1 && attempts < ring_size * 10 {
@@ -518,7 +572,6 @@ pub fn select_decoys(
         });
     }
 
-    // Insert real key at random position
     rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
     let signer_pos = (rng_state >> 33) as usize % ring_size;
     selected.insert(signer_pos, real_key.clone());
@@ -688,14 +741,29 @@ mod tests {
     }
 
     #[test]
-    fn test_decoy_selection() -> anyhow::Result<()> {
-        let keys: Vec<RingPublicKey> = (0..100).map(|i| {
+    fn test_decoy_selection_deterministic() -> anyhow::Result<()> {
+        let keys: Vec<RingPublicKey> = (0..100).map(|_| {
             let (pk, _) = RingPublicKey::generate();
             pk
         }).collect();
-        let (ring, signer_pos) = select_decoys(&keys, &keys[0], 11, 42)?;
+        let (ring, signer_pos) = select_decoys_deterministic(&keys, &keys[0], 11, 42)?;
         assert_eq!(ring.len(), 11);
         assert_eq!(ring[signer_pos], keys[0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_decoy_selection_crypto_random() -> anyhow::Result<()> {
+        let keys: Vec<RingPublicKey> = (0..100).map(|_| {
+            let (pk, _) = RingPublicKey::generate();
+            pk
+        }).collect();
+        let (ring, signer_pos) = select_decoys(&keys, &keys[0], 11)?;
+        assert_eq!(ring.len(), 11);
+        assert_eq!(ring[signer_pos], keys[0]);
+        // Verify all ring members are unique
+        let unique: HashSet<[u8; 32]> = ring.iter().map(|pk| pk.0).collect();
+        assert_eq!(unique.len(), 11);
         Ok(())
     }
 

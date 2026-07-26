@@ -2436,6 +2436,9 @@ async function handleRequestInner(req: Request): Promise<Response> {
         "Access-Control-Allow-Origin": CORS_ORIGIN,
         "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, Prefer, stripe-signature",
+        "Access-Control-Max-Age": "86400",
+        // Security headers on preflight (defense-in-depth; browsers honor these)
+        ...securityHeaders(USING_TLS),
       },
     });
   }
