@@ -1,0 +1,21 @@
+[package]
+name = "hsmc-starks"
+version = "0.1.0"
+edition = "2021"
+description = "HSMC zk-STARKs for Shielded Pool — deposit/withdraw integrity proofs via Winterfell"
+
+[dependencies]
+winterfell        = { workspace = true }
+sha2              = { workspace = true }
+sha3              = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+hex               = { workspace = true }
+rand              = { workspace = true }
+thiserror         = { workspace = true }
+anyhow            = { workspace = true }
+tracing           = { workspace = true }
+zeroize           = { workspace = true }
+getrandom         = "0.2"
+
+[dev-dependencies]

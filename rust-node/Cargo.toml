@@ -12,6 +12,7 @@ members = [
     "hsmc-oracle",
     "hsmc-pos",
     "hsmc-mpc",
+    "hsmc-starks",
 ]
 
 [workspace.dependencies]
@@ -63,3 +64,4 @@ crossbeam-channel  = "0.5"
 # randomx disabled — conflicts with rocksdb's clang-sys version. Use SHA-256d for now.
 fips204            = "0.4"  # Dilithium-5 (ML-DSA-87) — Post-Quantum signatures
 fips203            = "0.4"  # Kyber-1024 (ML-KEM-1024) — Post-Quantum KEM
+winterfell         = "0.13" # zk-STARK prover/verifier (Polygon Miden)
