@@ -1,0 +1,203 @@
+# ════════════════════════════════════════════════════════════════════════
+# HSMC Mainnet — Genesis Block Configuration
+# ════════════════════════════════════════════════════════════════════════
+# This file defines the genesis state for the HSMC L1 blockchain.
+# It is canonical — all nodes MUST start with the same genesis block.
+# Changing any value after mainnet launch creates a hard fork.
+# ════════════════════════════════════════════════════════════════════════
+
+[chain]
+# Chain identifier — unique across all HSMC networks
+chain_id = "hsmc-mainnet-1"
+# Human-readable network name
+network_name = "HSMC Mainnet"
+# Network type: mainnet, testnet, devnet
+network_type = "mainnet"
+
+[genesis]
+# UNIX timestamp of the genesis block (fixed, reproducible)
+# 2023-11-14T06:13:20Z — approximate project inception
+timestamp = 1_700_000_000
+# Genesis coinbase message (embedded in block 0, Satoshi-style)
+coinbase_message = "HSMC Genesis: Privacy-First L1 Blockchain — March 2026 — 8888"
+# Genesis block version flags: BASE | RINGCT | BULLETPROOF
+version = 0x000B
+# Genesis block nonce (homage to Bitcoin genesis: 2083236893)
+nonce = 2_083_236_893
+
+[supply]
+# Total maximum supply: 500 million HSMC
+max_supply = 500_000_000.0
+# Premine: 0 HSMC (FAIR LAUNCH — no founder allocation at genesis)
+premine = 0.0
+# Initial block reward (halves every 210,000 blocks)
+initial_reward = 50.0
+# Halving interval in blocks
+halving_interval = 210_000
+
+[consensus]
+# Consensus mechanism
+consensus_type = "Proof-of-Work"
+# PoW algorithm (RandomX via randomx-rs crate)
+pow_algorithm = "RandomX"
+# Target block time in seconds
+block_time_secs = 120
+# Initial difficulty (minimum difficulty = 256)
+initial_difficulty = 256
+# Minimum difficulty (prevents network grinding to a halt)
+min_difficulty = 256
+# Difficulty adjustment window (2016 blocks ≈ 2.8 days at 2 min/block)
+difficulty_adjustment_window = 2016
+# Maximum difficulty adjustment factor per window (±4x)
+max_difficulty_factor = 4.0
+# Maximum block size in bytes (2 MB)
+max_block_size_bytes = 2_097_152
+# Maximum transactions per block
+max_txs_per_block = 4_000
+
+[privacy]
+# Default privacy protocol
+default_protocol = "RingCT"
+# Minimum ring size for ring signatures
+min_ring_size = 11
+# Maximum ring size for ring signatures
+max_ring_size = 64
+# Stealth addresses enabled
+stealth_addresses = true
+# Bulletproofs range proofs enabled
+bulletproofs = true
+
+[validators]
+# Genesis validator set — EMPTY for PoW (no pre-assigned validators)
+# In a PoW chain, validators are miners who find blocks.
+# A future governance proposal may introduce a hybrid PoW/PoS system.
+genesis_validators = []
+
+[network]
+# ── Ports ──
+# RPC HTTP API port (public API surface)
+rpc_port = 8080
+# P2P networking port (gossip protocol)
+p2p_port = 30303
+# Stratum mining protocol port (miner connections)
+stratum_port = 3333
+# Prometheus metrics port (monitoring)
+metrics_port = 9090
+
+# ── Peer Management ──
+# Maximum number of outbound P2P peers
+max_peers = 64
+# Maximum number of inbound P2P connections
+max_inbound = 128
+# Minimum peer count before bootstrap
+min_peers = 8
+
+# ── Seed Nodes (placeholder — populated before mainnet launch) ──
+# Format: "/dns4/<hostname>/tcp/<port>/p2p/<peer_id>"
+# Seeds are the initial bootstrap peers for the network.
+# These must be geographically distributed, high-availability nodes.
+[[network.seed_nodes]]
+region = "eu-west"
+provider = "placeholder"
+hostname = "seed-1.hsmc.network"
+ip = "0.0.0.0"
+p2p_port = 30303
+
+[[network.seed_nodes]]
+region = "eu-central"
+provider = "placeholder"
+hostname = "seed-2.hsmc.network"
+ip = "0.0.0.0"
+p2p_port = 30303
+
+[[network.seed_nodes]]
+region = "us-east"
+provider = "placeholder"
+hostname = "seed-3.hsmc.network"
+ip = "0.0.0.0"
+p2p_port = 30303
+
+[[network.seed_nodes]]
+region = "us-west"
+provider = "placeholder"
+hostname = "seed-4.hsmc.network"
+ip = "0.0.0.0"
+p2p_port = 30303
+
+[[network.seed_nodes]]
+region = "asia-southeast"
+provider = "placeholder"
+hostname = "seed-5.hsmc.network"
+ip = "0.0.0.0"
+p2p_port = 30303
+
+# ── Bootstrap peers (multiaddr format) ──
+# These are filled in when seed nodes are provisioned.
+network_bootstrap_peers = []
+
+[governance]
+# Governance token: 1 HSMC = 1 vote
+vote_weight_model = "1-token-1-vote"
+# Minimum quorum for proposal validity (% of total supply)
+min_quorum_percent = 10.0
+# Supermajority threshold for proposal passage (% of quorum)
+supermajority_threshold_percent = 66.67
+# Timelock period between proposal passage and execution (in blocks)
+timelock_blocks = 10_080  # ~14 days at 2 min/block
+# Maximum proposal duration (in blocks)
+max_proposal_duration_blocks = 40_320  # ~56 days
+
+[fees]
+# Fee market model (EIP-1559 style)
+fee_model = "EIP-1559"
+# Minimum base fee in satoshis (1 HSMC = 100_000_000 satoshis)
+min_base_fee = 10_000_000_000  # 100 HSMC min
+# Fee multiplier for transparent txs
+fee_multiplier_transparent = 1.0
+# Fee multiplier for RingCT txs
+fee_multiplier_ringct = 2.0
+# Fee multiplier for stealth address txs
+fee_multiplier_stealth = 3.0
+# Fee multiplier for full privacy (RingCT + stealth)
+fee_multiplier_full = 5.0
+
+[bridge]
+# External chain IDs for wrapped HSMC (wHSMC)
+# BSC mainnet
+bsc_chain_id = 56
+# Ethereum mainnet
+eth_chain_id = 1
+# Polygon mainnet
+polygon_chain_id = 137
+# Bridge fee rate (0.1% lock/unlock)
+bridge_fee_rate = 0.001
+# Minimum bridge amount in HSMC
+bridge_min_amount = 10.0
+# Fraud proof window (24 hours in blocks at 2 min/block)
+bridge_fraud_window_blocks = 720
+
+[monitoring]
+# Enable Prometheus metrics
+metrics_enabled = true
+# Enable JSON-RPC health endpoint
+health_endpoint_enabled = true
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+# Enable structured JSON logging
+json_logging = false
+# Log to file
+log_to_file = true
+# Log directory
+log_dir = "/var/hsmc/logs"
+
+[storage]
+# Database backend
+db_backend = "rocksdb"
+# Data directory
+data_dir = "/var/hsmc/data"
+# Enable block pruning (keep only recent blocks)
+pruning_enabled = true
+# Number of recent blocks to keep when pruning
+pruning_keep_blocks = 50_000
+# Enable RocksDB compression (LZ4 + Snappy)
+db_compression = true

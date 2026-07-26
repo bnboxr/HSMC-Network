@@ -19,6 +19,7 @@ import MainnetReadiness from "./pages/MainnetReadiness";
 import RustNodePage from "./pages/RustNodePage";
 import InvestorsPage from "./pages/InvestorsPage";
 import ListingKitPage from "./pages/ListingKitPage";
+import ExplorerPage from "./pages/Explorer";
 import SettingsPage from "./pages/SettingsPage";
 import WalletAuthPage from "./pages/WalletAuth";
 import OAuthConsent from "./pages/OAuthConsent";
@@ -45,6 +46,7 @@ const App = () => (
             <Route path="/rust-node" element={<RustNodePage />} />
             <Route path="/investors" element={<InvestorsPage />} />
             <Route path="/listing-kit" element={<ListingKitPage />} />
+            <Route path="/explorer" element={<ExplorerPage />} />
             <Route path="/app/settings" element={<SettingsPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/wallet-auth" element={<WalletAuthPage />} />
