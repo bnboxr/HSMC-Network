@@ -1,0 +1,24 @@
+groups:
+  - name: hsmc
+    rules:
+      - alert: BlockStall
+        expr: increase(block_height[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HSMC block production stalled"
+      - alert: LowPeers
+        expr: hsmc_peers_connected < 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HSMC node has fewer than 3 peers"
+      - alert: HighDiskUsage
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) < 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HSMC node disk usage > 80%"

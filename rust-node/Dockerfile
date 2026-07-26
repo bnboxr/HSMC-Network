@@ -56,8 +56,8 @@ COPY --from=builder /build/target/release/hsmc-node /usr/local/bin/hsmc-node
 # Persistent data volume
 VOLUME ["/home/hsmc/hsmc-data"]
 
-# Ports: 8080 (RPC), 3333 (Stratum)
-EXPOSE 8080 3333
+# Ports: 8080 (RPC), 3333 (Stratum), 9090 (Metrics)
+EXPOSE 8080 3333 9090
 
 ENV HSMC_DATA_DIR=/home/hsmc/hsmc-data
 ENV RPC_PORT=8080
@@ -65,3 +65,4 @@ ENV STRATUM_PORT=3333
 ENV RUST_LOG=info
 
 CMD ["hsmc-node"]
+EXPOSE 9090
