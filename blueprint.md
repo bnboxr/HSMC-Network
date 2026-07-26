@@ -2,7 +2,7 @@
 
 > **Ultima actualizare:** 2026-07-24
 > **Owner:** Ifrim George  
-> **Status:** Build in progress — Phase 4 (security + infra complete; 7/34 features done)
+> **Status:** Build in progress — Phase 5 (11/34 features done; governance + DB security + Stratum V2 complete)
 > 
 > 📋 **Breakdown complet:** Vezi [HSMC-MASTER-PLAN.md](server/HSMC-MASTER-PLAN.md) — 416 sub-task-uri, 1,896 ore
 
@@ -359,7 +359,7 @@ HSMC-network-hub-main/
 
 ## 🚀 Next Steps (în ordine)
 
-### ✅ Completate (2026-07-21 – 2026-07-24)
+### ✅ Completate (2026-07-21 – 2026-07-25)
 1. ✅ Supply fix: 1T → 500M HSMC (toate layerele)
 2. ✅ Eliminare unwrap() din producție (102 fix-uri)
 3. ✅ WebAuthn biometric (register + login)
@@ -367,15 +367,19 @@ HSMC-network-hub-main/
 5. ✅ Vite proxy + relative URLs
 6. ✅ DB migration (schema 38 tabele + seed + migrate)
 7. ✅ Rate limiting + anti-DDoS
+8. ✅ Stratum V2 mining (Noise IK + binary framing)
+9. ✅ DB Security (AES-256-GCM column encryption + anti-tampering)
+10. ✅ Governance on-chain execution (execute + RPC + auto-enact)
+11. ✅ Supabase complet eliminat
 
 ### 🔴 Prioritate imediată
-8. 🔧 Privacy wiring în web wallet (#15)
-9. 🔧 HSMCPay settlement real (#3)
-10. ⏳ Post-quantum crypto (#4)
-11. ⏳ Stratum V2 (#21)
-12. ⏳ Bridge hardening (#22)
+12. 🔧 Privacy wiring în web wallet (#15)
+13. 🔧 HSMCPay settlement real (#3)
+14. ⏳ Post-quantum crypto (#4)
+15. ⏳ RandomX PoW (#23)
+16. ⏳ Bridge hardening (#22)
 
 ### 🟡 Înainte de mainnet
-13. ⏳ Integration tests (#31)
-14. ⏳ Full security audit (#32)
-15. ⏳ Mainnet launch prep (#34)
+17. ⏳ Integration tests (#31)
+18. ⏳ Full security audit (#32)
+19. ⏳ Mainnet launch prep (#34)
