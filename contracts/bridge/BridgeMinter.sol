@@ -33,6 +33,55 @@ interface IWHSMC {
     function unpause() external;
 }
 
+/// @custom:formal
+/// ──── BridgeMinter Formal Verification Invariants ──────────────────
+///
+/// ### INVARIANT 1: No Double Mint (primary security property)
+///   ∀ hsmcTxHash: processed[hsmcTxHash] => mint happened at most once
+///
+///   Proof sketch:
+///   - `executeMint()` sets `processed[hsmcTxHash] = true` BEFORE any mint
+///   - Guard: `if (processed[hsmcTxHash]) revert AlreadyProcessed()` at entry
+///   - In challenge-period mode: mint happens in `finalizeMint()` which
+///     requires ProposalState.Pending → sets to Finalized (irreversible)
+///   - In immediate mode (challengePeriod==0): mint happens inline but
+///     `processed` is already true → cannot re-enter
+///   - No function clears `processed` → monotonic
+///   - Therefore: each hsmcTxHash is minted at most once
+///
+/// ### INVARIANT 2: Validator Set Consistency
+///   ∀ v ∈ validators: isValidator[v] == true
+///   ∀ v where isValidator[v] == true: v ∈ validators
+///   |validators| = count(isValidator == true)
+///
+/// ### INVARIANT 3: Threshold Bounds
+///   0 < threshold <= |validators|
+///   setThreshold enforces: t > 0 && t <= validators.length
+///
+/// ### INVARIANT 4: Proposal State Machine
+///   ProposalState transitions:
+///     None → Pending        (via executeMint with challenge period)
+///     Pending → Finalized   (via finalizeMint after expiry)
+///     Pending → Challenged  (via challengeMint before expiry)
+///     Challenged → Cancelled (via resolveChallenge with uphold=true)
+///     Challenged → Pending   (via resolveChallenge with uphold=false)
+///   No other transitions possible.
+///   txHashToProposalId[hash] is set iff proposal.state != None
+///
+/// ### INVARIANT 5: Slashed validator cannot sign
+///   slashed[v] => executeMint reverts for signatures from v
+///   (enforced by: if (slashed[signer]) revert NotAValidator(signer))
+///
+/// ### INVARIANT 6: Bond Accounting
+///   Sum of challenge bonds held = challengeBond * (#Challenged proposals not yet resolved)
+///   The contract's ETH balance >= this sum (may include forfeited bonds)
+///   resolveChallenge transfers bond to challenger (on uphold) or keeps it (on reject)
+///
+/// ### INVARIANT 7: Signature Replay Protection
+///   Each digest is chain-specific: keccak256(block.chainid, address(this), hsmcTxHash, to, amount)
+///   Prevents cross-chain replay. Address(this) in digest prevents cross-contract replay.
+/// ────────────────────────────────────────────────────────────────
+
 contract BridgeMinter is AccessControl, ReentrancyGuard {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
@@ -142,6 +191,12 @@ contract BridgeMinter is AccessControl, ReentrancyGuard {
     /// @param to         Recipient on this EVM chain
     /// @param amount     Amount in wHSMC base units (8 decimals)
     /// @param sigs       ECDSA signatures (r,s,v packed 65 bytes each), sorted by signer addr asc
+    /// @custom:invariant processed[hsmcTxHash] is set exactly once (no double mint)
+    /// @custom:requires sigs.length >= threshold
+    /// @custom:requires all signers are unslashed validators, sorted ascending
+    /// @custom:requires !processed[hsmcTxHash]
+    /// @custom:ensures processed[hsmcTxHash] == true
+    /// @custom:ensures IF challengePeriod > 0 THEN proposals[proposalCount].state == Pending
     function executeMint(
         bytes32 hsmcTxHash,
         address to,
@@ -204,6 +259,11 @@ contract BridgeMinter is AccessControl, ReentrancyGuard {
     /// @notice Finalize a mint proposal after the challenge window expires.
     ///         Anyone can call this.
     /// @param proposalId The proposal ID from MintProposed event
+    /// @custom:invariant proposal mints at most once (state transitions Pending→Finalized)
+    /// @custom:requires proposal.state == Pending
+    /// @custom:requires block.timestamp >= proposal.expiresAt
+    /// @custom:ensures proposal.state == Finalized
+    /// @custom:ensures wHSMC is minted exactly once for this proposal's hsmcTxHash
     function finalizeMint(uint256 proposalId) external nonReentrant {
         MintProposal storage prop = proposals[proposalId];
         if (prop.state == ProposalState.None) revert ProposalNotFound(proposalId);

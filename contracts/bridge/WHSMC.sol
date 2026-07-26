@@ -29,11 +29,52 @@ import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC2
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
+/// @custom:formal
+/// ──── WHSMC Formal Verification Invariants ────────────────────────
+///
+/// ### INVARIANT 1: Total Supply Cap (verified by bridgeMint)
+///   totalSupply() <= MAX_SUPPLY
+///
+///   Proof sketch:
+///   - At deployment: totalSupply() = 0 <= MAX_SUPPLY (trivially true)
+///   - The ONLY mint function is bridgeMint(), guarded by require(totalSupply() + amount <= MAX_SUPPLY)
+///   - _mint() in OZ ERC20 updates totalSupply += amount atomically
+///   - No other function increases totalSupply (burn only decreases)
+///   - Therefore: totalSupply() <= MAX_SUPPLY for all reachable states
+///
+/// ### INVARIANT 2: Non-negative Balances
+///   ∀ addr: balanceOf(addr) >= 0
+///
+///   Proof: OZ ERC20 _update enforces this; no underflow possible in Solidity ^0.8.x
+///
+/// ### INVARIANT 3: Sum of Balances = Total Supply
+///   Σ balanceOf(a) for all a = totalSupply()
+///
+///   Proof: OZ ERC20 invariant; every _mint adds to both a balance and totalSupply;
+///   every _burn subtracts from both
+///
+/// ### INVARIANT 4: MINTER_ROLE is sole minter
+///   Only MINTER_ROLE can call bridgeMint() (enforced by onlyRole modifier)
+///   bridgeMint is the ONLY mint entry point (no public mint, no fallback)
+///
+/// ### INVARIANT 5: Pausable consistency
+///   When paused: all _update reverts (whenNotPaused on _update)
+///   bridgeMint reverts (whenNotPaused)
+///   bridgeBurn reverts (whenNotPaused)
+///   Only PAUSER_ROLE can toggle (pause/unpause protected by role)
+///
+/// ### INVARIANT 6: MAX_SUPPLY representation
+///   MAX_SUPPLY = 500_000_000 * 10^8 = 5e16 (fits in uint256: ~1.16e77)
+///   No overflow risk in require check: totalSupply() <= MAX_SUPPLY and
+///   amount <= MAX_SUPPLY, so totalSupply() + amount <= 2 * MAX_SUPPLY << 2^256
+/// ────────────────────────────────────────────────────────────────
+
 contract WHSMC is ERC20, ERC20Permit, ERC20Burnable, AccessControl, Pausable {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     /// @notice Total HSMC supply hard-cap (500,000,000 HSMC = 500M)
+    /// @custom:invariant totalSupply() <= MAX_SUPPLY
     uint256 public constant MAX_SUPPLY = 500_000_000 * 10 ** 8;
 
     event BridgeMint(address indexed to, uint256 amount, bytes32 indexed hsmcTxHash);
@@ -54,6 +95,11 @@ contract WHSMC is ERC20, ERC20Permit, ERC20Burnable, AccessControl, Pausable {
 
     /// @notice Mint wHSMC after a verified HSMC mainnet lock event.
     /// @dev Only callable by BridgeMinter (multisig-attested).
+    /// @custom:invariant totalSupply() <= MAX_SUPPLY after execution
+    /// @custom:requires to != address(0)
+    /// @custom:requires totalSupply() + amount <= MAX_SUPPLY
+    /// @custom:ensures totalSupply() == old(totalSupply()) + amount
+    /// @custom:ensures balanceOf(to) == old(balanceOf(to)) + amount
     function bridgeMint(address to, uint256 amount, bytes32 hsmcTxHash)
         external
         onlyRole(MINTER_ROLE)

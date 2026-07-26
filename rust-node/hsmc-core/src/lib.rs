@@ -11,6 +11,9 @@ pub mod governance;
 pub mod fee;
 pub mod state;
 
+#[cfg(kani)]
+pub mod verification;
+
 pub use block::*;
 
 // Export everything from transaction EXCEPT validate_tx which conflicts with validator::validate_tx
