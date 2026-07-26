@@ -1,0 +1,119 @@
+{
+  "name": "hsmc-desktop-wallet",
+  "version": "1.0.0",
+  "description": "HSMC Network Desktop Wallet — Privacy-first blockchain wallet with RingCT, stealth addresses, and cross-chain bridge support.",
+  "author": "HSMC Network",
+  "license": "MIT",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently \"npm run dev:renderer\" \"wait-on http://localhost:3000 && electron .\"",
+    "dev:electron": "npm run build:electron && electron .",
+    "dev:renderer": "cd .. && vite --host",
+    "build:electron": "tsc -p tsconfig.json",
+    "build:renderer": "cd .. && vite build",
+    "build": "npm run build:electron && npm run build:renderer",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "network.hsmc.desktop-wallet",
+    "productName": "HSMC Wallet",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "../dist/**/*",
+      "../public/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "msi",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "../public/hsmc-logo.png",
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "../public/hsmc-logo.png",
+      "uninstallerIcon": "../public/hsmc-logo.png",
+      "installerHeaderIcon": "../public/hsmc-logo.png",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "HSMC Wallet"
+    },
+    "msi": {
+      "wrapped": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "../public/hsmc-logo.png",
+      "category": "public.app-category.finance",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "../public/hsmc-logo.png",
+      "category": "Finance",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "bnboxr",
+      "repo": "HSMC-Network",
+      "releaseType": "release"
+    }
+  },
+  "dependencies": {
+    "auto-launch": "^5.0.6",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.8.3",
+    "wait-on": "^8.0.3"
+  }
+}
