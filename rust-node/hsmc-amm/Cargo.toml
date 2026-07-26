@@ -1,0 +1,15 @@
+[package]
+name = "hsmc-amm"
+version = "0.1.0"
+edition = "2021"
+description = "HSMC Constant-Product AMM (UniV2-style) — Phase 1"
+
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+tracing    = { workspace = true }
+hsmc-core  = { path = "../hsmc-core" }
+
+[dev-dependencies]
+rand = { workspace = true }

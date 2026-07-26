@@ -8,6 +8,7 @@ members = [
     "hsmc-storage",
     "hsmc-node",
     "hsmc-stratum",
+    "hsmc-amm",
 ]
 
 [workspace.dependencies]
