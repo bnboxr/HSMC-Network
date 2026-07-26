@@ -10,6 +10,7 @@ members = [
     "hsmc-stratum",
     "hsmc-amm",
     "hsmc-oracle",
+    "hsmc-pos",
 ]
 
 [workspace.dependencies]

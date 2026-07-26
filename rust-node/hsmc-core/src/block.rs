@@ -65,6 +65,10 @@ pub const MAX_TXS_PER_BLOCK: u32 = 4_000;
 /// Maximum coinbase script length
 pub const MAX_COINBASE_SCRIPT_LEN: usize = 100;
 
+/// Hybrid PoS + PoW reward split: fraction going to the PoS validator
+/// Default 0.5 = 50% validator, 50% miner
+pub const POS_REWARD_SHARE: f64 = 0.5;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BlockHeader (hashed for PoW)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -239,6 +243,16 @@ pub struct Block {
     pub coinbase_data:    CoinbaseData,
     /// Block-level median timestamp (of previous 11 blocks) for timestamp validation
     pub median_time:      i64,
+
+    // ── PoS Hybrid Consensus Fields ───────────────────────────────────────
+    /// PoS validator address that co-signed this block (empty for pre-PoS blocks)
+    pub pos_validator_address: String,
+    /// PoS validator's signature over the block header hash
+    pub pos_validator_signature: String,
+    /// PoS validator reward portion (0 for pre-PoS blocks)
+    pub pos_validator_reward: f64,
+    /// PoW miner reward portion (equals total reward if no PoS validator)
+    pub pow_miner_reward: f64,
 }
 
 impl Block {
@@ -284,6 +298,10 @@ impl Block {
         let reward = block_reward(block_number);
         let privacy = PrivacyProtocol::for_height(block_number);
 
+        // Split reward: 50% PoS validator, 50% PoW miner
+        let pos_reward = (reward * POS_REWARD_SHARE * 100.0).round() / 100.0;
+        let pow_reward = reward - pos_reward;
+
         Self {
             block_number,
             hash: String::new(),
@@ -305,6 +323,10 @@ impl Block {
             total_fees: 0.0,
             coinbase_data: coinbase,
             median_time: 0,
+            pos_validator_address: String::new(),
+            pos_validator_signature: String::new(),
+            pos_validator_reward: pos_reward,
+            pow_miner_reward: pow_reward,
         }
     }
 
@@ -460,6 +482,35 @@ impl Block {
     pub fn estimated_size(&self) -> u32 {
         // Header: ~180 bytes + ~70 bytes per tx hash
         (180 + self.transactions_count as u32 * 70).min(MAX_BLOCK_SIZE_BYTES)
+    }
+
+    // ── PoS Hybrid Consensus Methods ──────────────────────────────────────
+
+    /// Attach a PoS validator signature to the block.
+    /// Called after PoW mining completes, before block submission.
+    pub fn attach_validator_signature(
+        &mut self,
+        validator_address: String,
+        signature: String,
+    ) {
+        self.pos_validator_address = validator_address;
+        self.pos_validator_signature = signature;
+    }
+
+    /// Check whether this block has a valid PoS co-signature.
+    /// Returns true if no validator is expected (pre-PoS era) or if present and valid.
+    pub fn has_pos_signature(&self) -> bool {
+        !self.pos_validator_address.is_empty() && !self.pos_validator_signature.is_empty()
+    }
+
+    /// Compute the PoS validator's reward for this block.
+    pub fn compute_pos_reward(total_reward: f64) -> f64 {
+        (total_reward * POS_REWARD_SHARE * 100.0).round() / 100.0
+    }
+
+    /// Compute the PoW miner's reward for this block.
+    pub fn compute_pow_reward(total_reward: f64) -> f64 {
+        total_reward - Self::compute_pos_reward(total_reward)
     }
 }
 
@@ -765,6 +816,10 @@ pub fn genesis_block() -> Block {
         total_fees:         0.0,
         coinbase_data:      coinbase,
         median_time:        GENESIS_TIMESTAMP,
+        pos_validator_address: String::new(),
+        pos_validator_signature: String::new(),
+        pos_validator_reward: 0.0,
+        pow_miner_reward: INITIAL_REWARD,
     };
     b.hash = b.compute_hash();
     b
@@ -967,5 +1022,46 @@ mod tests {
         assert_eq!(next_halving_block(210_000),     420_000);
         assert_eq!(blocks_until_halving(200_000),   10_000);
         assert_eq!(halvings_count(420_001),         2);
+    }
+
+    #[test]
+    fn test_pos_reward_split_50_50() {
+        let total = 50.0;
+        let pos = Block::compute_pos_reward(total);
+        let pow = Block::compute_pow_reward(total);
+        assert!((pos - 25.0).abs() < 0.01, "PoS reward should be ~25.0, got {}", pos);
+        assert!((pow - 25.0).abs() < 0.01, "PoW reward should be ~25.0, got {}", pow);
+        assert!(((pos + pow) - total).abs() < 0.01, "Sum should equal total");
+    }
+
+    #[test]
+    fn test_block_has_pos_fields() {
+        let b = Block::new(
+            1,
+            "0".repeat(64),
+            "HSMC_test_miner_addr_00000000000000000000000".into(),
+            MIN_DIFFICULTY,
+            vec![],
+        );
+        assert!(b.pos_validator_address.is_empty(), "PoS validator should be empty by default");
+        assert!(b.pos_validator_signature.is_empty());
+        assert!(b.pos_validator_reward > 0.0);
+        assert!(b.pow_miner_reward > 0.0);
+        assert!((b.pos_validator_reward + b.pow_miner_reward - b.reward).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_attach_validator_signature() {
+        let mut b = Block::new(
+            1,
+            "0".repeat(64),
+            "HSMC_test_miner_addr_00000000000000000000000".into(),
+            MIN_DIFFICULTY,
+            vec![],
+        );
+        assert!(!b.has_pos_signature());
+        b.attach_validator_signature("HSMC_val_addr_000000000000000000000000000".into(),
+                                      "sig_hex_placeholder".into());
+        assert!(b.has_pos_signature());
     }
 }
