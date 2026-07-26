@@ -15,7 +15,8 @@
     "test:watch": "bunx vitest",
     "test:integration": "bun test tests/",
     "test:all": "bunx vitest run && bun test tests/",
-    "telegram": "bun run server/telegram-bot.ts"
+    "telegram": "bun run server/telegram-bot.ts",
+    "whatsapp": "bun run server/whatsapp-gateway.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
