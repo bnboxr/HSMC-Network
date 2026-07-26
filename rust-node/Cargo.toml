@@ -9,6 +9,7 @@ members = [
     "hsmc-node",
     "hsmc-stratum",
     "hsmc-amm",
+    "hsmc-oracle",
 ]
 
 [workspace.dependencies]
@@ -31,6 +32,8 @@ tower-http         = { version = "0.5", features = ["cors", "trace", "compressio
 reqwest            = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 tokio-tungstenite  = { version = "0.23", features = ["native-tls"] }
 futures-util       = "0.3"
+futures            = "0.3"
+async-trait        = "0.1"
 curve25519-dalek   = { version = "4", features = ["rand_core", "serde"] }
 bulletproofs       = "4"
 merlin             = "3"

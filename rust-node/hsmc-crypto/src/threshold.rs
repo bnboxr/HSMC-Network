@@ -79,7 +79,7 @@ pub fn reconstruct_secret(shares: &[SecretShare]) -> Result<Scalar, ThresholdErr
 
     for (i, share_i) in shares.iter().enumerate() {
         let x_i = Scalar::from(share_i.index);
-        let y_i = Scalar::from_canonical_bytes(share_i.value)
+        let y_i = Scalar::from_canonical_bytes(share_i.value).into()
             .ok_or(ThresholdError::InvalidShardValue(share_i.index))?;
 
         // Compute Lagrange basis polynomial l_i(0) = Π(j≠i) (0 - x_j) / (x_i - x_j)
@@ -133,7 +133,7 @@ impl VssCommitment {
     /// Checks: y_i * G == Σ C_k * x_i^k
     pub fn verify_share(&self, share: &SecretShare) -> bool {
         let x_i = Scalar::from(share.index);
-        let y_i = match Scalar::from_canonical_bytes(share.value) {
+        let y_i = match Scalar::from_canonical_bytes(share.value).into() {
             Some(s) => s,
             None => return false,
         };
@@ -199,7 +199,7 @@ pub fn combine_threshold_schnorr_sigs(
 
     let mut s_total = Scalar::ZERO;
     for (i, ps) in partial_sigs.iter().enumerate() {
-        let s_i = match Scalar::from_canonical_bytes(ps.s_i) {
+        let s_i = match Scalar::from_canonical_bytes(ps.s_i).into() {
             Some(s) => s,
             None => continue,
         };

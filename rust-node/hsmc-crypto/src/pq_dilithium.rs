@@ -1,3 +1,4 @@
+use fips204::traits::SerDes;
 /// Post-Quantum Signature — Dilithium-5 (ML-DSA-87 / FIPS 204)
 ///
 /// Wraps the `fips204` crate (ML-DSA-87 / Dilithium-5 parameter set).

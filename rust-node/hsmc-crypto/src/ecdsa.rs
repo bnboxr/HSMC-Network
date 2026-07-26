@@ -34,7 +34,7 @@ impl KeyPair {
 
     /// Reconstruct from 32-byte private key bytes (canonical form)
     pub fn from_bytes(bytes: &[u8; 32]) -> Option<Self> {
-        let sk = Scalar::from_canonical_bytes(*bytes)?;
+        let sk = Scalar::from_canonical_bytes(*bytes).into()?;
         if sk == Scalar::ZERO { return None; }
         let pk = sk * RISTRETTO_BASEPOINT_POINT;
         Some(Self { private_key: sk, public_key: pk })
@@ -192,11 +192,11 @@ impl EcdsaSignature {
 
     /// Verify against an explicit public key (more efficient, no embedded key lookup)
     pub fn verify_with_key(&self, message: &[u8], pk: &RistrettoPoint) -> bool {
-        let r = match Scalar::from_canonical_bytes(self.r) {
+        let r = match Scalar::from_canonical_bytes(self.r).into() {
             Some(s) => s,
             None => return false,
         };
-        let s = match Scalar::from_canonical_bytes(self.s) {
+        let s = match Scalar::from_canonical_bytes(self.s).into() {
             Some(s) => s,
             None => return false,
         };
@@ -221,8 +221,8 @@ impl EcdsaSignature {
 
     /// Recover public key from signature + message (key recovery)
     pub fn recover_public_key(&self, message: &[u8]) -> Option<RistrettoPoint> {
-        let r = Scalar::from_canonical_bytes(self.r)?;
-        let s = Scalar::from_canonical_bytes(self.s)?;
+        let r = Scalar::from_canonical_bytes(self.r).into()?;
+        let s = Scalar::from_canonical_bytes(self.s).into()?;
 
         let r_point_attempt = r * RISTRETTO_BASEPOINT_POINT;
         let r_bytes = r_point_attempt.compress().to_bytes();
@@ -330,8 +330,8 @@ pub fn batch_verify_ecdsa(
     for (i, (sig, msg)) in signatures.iter().zip(messages.iter()).enumerate() {
         let a = if i == 0 { Scalar::ONE } else { Scalar::random(&mut rng) };
 
-        let r = match Scalar::from_canonical_bytes(sig.r) { Some(x) => x, None => return false };
-        let s = match Scalar::from_canonical_bytes(sig.s) { Some(x) => x, None => return false };
+        let r = match Scalar::from_canonical_bytes(sig.r).into() { Some(x) => x, None => return false };
+        let s = match Scalar::from_canonical_bytes(sig.s).into() { Some(x) => x, None => return false };
         let pk = match CompressedRistretto::from_slice(&sig.public_key).ok()
             .and_then(|c| c.decompress()) { Some(p) => p, None => return false };
 

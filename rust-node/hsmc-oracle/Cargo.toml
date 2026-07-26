@@ -1,0 +1,20 @@
+[package]
+name = "hsmc-oracle"
+version = "0.1.0"
+edition = "2021"
+description = "HSMC Multi-Source Price Oracle — median+IQR aggregation across 5 CEX + CoinGecko"
+
+[dependencies]
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+reqwest     = { workspace = true }
+tracing     = { workspace = true }
+thiserror   = { workspace = true }
+parking_lot = { workspace = true }
+chrono      = { workspace = true }
+async-trait = { workspace = true }
+futures     = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

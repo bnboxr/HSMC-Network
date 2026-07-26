@@ -1033,6 +1033,48 @@ pub async fn generate_range_proof(
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════
+// PRICE ORACLE
+// ═══════════════════════════════════════════════════════════════════
+
+/// GET /oracle/price/:pair
+/// Returns the aggregated (median + IQR) price for a trading pair.
+/// Example: GET /oracle/price/HSMC%2FUSDT → { "pair": "HSMC/USDT", "price": 0.042, ... }
+pub async fn oracle_price(
+    State(state): State<Arc<AppState>>,
+    Path(pair): Path<String>,
+) -> Json<serde_json::Value> {
+    let decoded = urlencoding::decode(&pair).unwrap_or_else(|_| pair.clone().into());
+    match state.oracle.get_price(&decoded).await {
+        Ok(price) => {
+            let cache = state.oracle.cache_ref().read();
+            let feeds_used = cache
+                .get(&*decoded)
+                .map(|e| e.feeds_used)
+                .unwrap_or(state.oracle.feed_count());
+
+            Json(serde_json::json!({
+                "pair": decoded,
+                "price": price,
+                "feeds_used": feeds_used,
+                "feeds_total": state.oracle.feed_count(),
+                "algorithm": "median_iqr",
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "source": "aggregated",
+            }))
+        }
+        Err(e) => Json(serde_json::json!({
+            "pair": decoded,
+            "error": e.to_string(),
+            "feeds_total": state.oracle.feed_count(),
+        })),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════
+
 fn compute_avg_block_time(blocks: &[Block]) -> f64 {
     if blocks.len() < 2 { return 120.0; }
     let n = blocks.len().min(11);

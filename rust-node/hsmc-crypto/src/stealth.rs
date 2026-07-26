@@ -28,7 +28,7 @@ pub struct DualKeyWallet {
 impl DualKeyWallet {
     /// Generate a fresh dual-key wallet
     pub fn generate() -> Self {
-        let mut rng = OsRng;
+        let rng = OsRng;
         let s = generate_scalar(&mut rng);
         let v = generate_scalar(&mut rng);
         Self {
@@ -196,7 +196,7 @@ impl StealthOutputSender {
         recipient: &StealthAddress,
         output_index: u32,
     ) -> Result<Self, StealthError> {
-        let mut rng = OsRng;
+        let rng = OsRng;
         let r = generate_scalar(&mut rng);
         let r_g = r * G;
 
@@ -347,7 +347,7 @@ impl StealthScanner {
 
     /// Verify key image for a claimed output (double-spend detection)
     pub fn compute_key_image(&self, owned: &OwnedOutput) -> Option<[u8; 32]> {
-        let p_point = CompressedRistretto::from_slice(&owned.one_time_key)
+        let _p_point = CompressedRistretto::from_slice(&owned.one_time_key)
             .ok()?
             .decompress()?;
         // I = x * H_p(P)

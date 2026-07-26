@@ -157,7 +157,7 @@ impl ExtendedPrivKey {
         let mut il_arr = [0u8; 32];
         il_arr.copy_from_slice(il);
 
-        let scalar = Scalar::from_canonical_bytes(il_arr)
+        let scalar = Scalar::from_canonical_bytes(il_arr).into()
             .ok_or(HdKeyError::InvalidKey(0))?;
 
         if scalar == Scalar::ZERO {
@@ -202,10 +202,10 @@ impl ExtendedPrivKey {
         let mut il_arr = [0u8; 32];
         il_arr.copy_from_slice(il);
 
-        let il_scalar = Scalar::from_canonical_bytes(il_arr)
+        let il_scalar = Scalar::from_canonical_bytes(il_arr).into()
             .ok_or(HdKeyError::InvalidKey(child_num))?;
 
-        let parent_scalar = Scalar::from_canonical_bytes(self.secret_key)
+        let parent_scalar = Scalar::from_canonical_bytes(self.secret_key).into()
             .ok_or(HdKeyError::InvalidKey(child_num))?;
 
         let child_scalar = il_scalar + parent_scalar;
@@ -242,7 +242,7 @@ impl ExtendedPrivKey {
 
     /// Get the corresponding public key bytes (compressed Ristretto)
     pub fn public_key_bytes(&self) -> [u8; 32] {
-        let sk = Scalar::from_canonical_bytes(self.secret_key)
+        let sk = Scalar::from_canonical_bytes(self.secret_key).into()
             .expect("secret key should be valid scalar");
         (sk * RISTRETTO_BASEPOINT_POINT).compress().to_bytes()
     }
@@ -305,7 +305,7 @@ impl ExtendedPubKey {
         let mut il_arr = [0u8; 32];
         il_arr.copy_from_slice(il);
 
-        let il_scalar = Scalar::from_canonical_bytes(il_arr)
+        let il_scalar = Scalar::from_canonical_bytes(il_arr).into()
             .ok_or(HdKeyError::InvalidKey(index))?;
 
         use curve25519_dalek::ristretto::CompressedRistretto;

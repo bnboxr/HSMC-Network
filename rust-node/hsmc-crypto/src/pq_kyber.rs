@@ -1,3 +1,4 @@
+use fips203::traits::SerDes;
 /// Post-Quantum Key Encapsulation — Kyber-1024 (ML-KEM-1024 / FIPS 203)
 ///
 /// Wraps the `fips203` crate (ML-KEM-1024 / Kyber-1024 parameter set).

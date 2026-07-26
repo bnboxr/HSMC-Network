@@ -146,7 +146,7 @@ impl LsagSignature {
             None => return Err(RingError::KeyImageDecompressFailed),
         };
 
-        let mut rng = OsRng;
+        let rng = OsRng;
         let alpha = generate_scalar();
 
         // Compute initial L_s = alpha*G, R_s = alpha*H_p(P_s)
@@ -348,9 +348,9 @@ impl ClsagSignature {
             .collect::<Result<Vec<_>, _>>()?;
 
         let msg_hash = hash_message(message);
-        let mut rng = OsRng;
+        let rng = OsRng;
         let alpha = generate_scalar();
-        let beta  = generate_scalar(); // for D commitment
+        let _beta  = generate_scalar(); // for D commitment
 
         let mut s: Vec<Scalar> = (0..n).map(|_| generate_scalar()).collect();
 
@@ -506,7 +506,7 @@ pub fn select_decoys(
 
     // Cryptographically secure random index selection (OsRng)
     use rand::Rng;
-    let mut rng = OsRng;
+    let rng = OsRng;
     let mut attempts = 0usize;
     while selected.len() < ring_size - 1 && attempts < ring_size * 100 {
         let idx = rng.gen_range(0..all_public_keys.len());
