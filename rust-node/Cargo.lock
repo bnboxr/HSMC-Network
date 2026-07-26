@@ -976,6 +976,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hsmc-mpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "curve25519-dalek",
+ "hex",
+ "itertools",
+ "merlin",
+ "parking_lot",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sha3 0.10.9",
+ "subtle",
+ "thiserror 1.0.69",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "hsmc-node"
 version = "0.1.0"
 dependencies = [
@@ -1041,6 +1063,24 @@ dependencies = [
  "tracing",
  "uuid",
  "x25519-dalek",
+]
+
+[[package]]
+name = "hsmc-pos"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "hsmc-core",
+ "hsmc-crypto",
+ "parking_lot",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]

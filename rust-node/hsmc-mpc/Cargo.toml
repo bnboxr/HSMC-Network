@@ -1,0 +1,25 @@
+[package]
+name = "hsmc-mpc"
+version = "0.1.0"
+edition = "2021"
+description = "HSMC Multi-Party Computation Wallet — GG20 DKG, threshold signing, key refresh"
+
+[dependencies]
+curve25519-dalek = { workspace = true }
+rand             = { workspace = true }
+sha2             = { workspace = true }
+sha3             = { workspace = true }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+thiserror        = { workspace = true }
+anyhow           = { workspace = true }
+tracing          = { workspace = true }
+zeroize          = { workspace = true }
+hex              = { workspace = true }
+subtle           = { workspace = true }
+merlin           = { workspace = true }
+bincode          = { workspace = true }
+itertools        = { workspace = true }
+parking_lot      = { workspace = true }
+
+[dev-dependencies]

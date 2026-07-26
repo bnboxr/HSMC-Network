@@ -11,6 +11,7 @@ members = [
     "hsmc-amm",
     "hsmc-oracle",
     "hsmc-pos",
+    "hsmc-mpc",
 ]
 
 [workspace.dependencies]
