@@ -696,10 +696,12 @@ fn spawn_block_producer(
 
             // Mine in parallel threads
             let mine_start = Instant::now();
-            match hsmc_crypto::mine_parallel(block, thread_count, stop_clone).await {
+            let algo = hsmc_crypto::PowAlgorithm::from_env();
+            let mode = hsmc_crypto::RandomXMode::from_env();
+            match hsmc_crypto::mine_parallel(block, thread_count, stop_clone, algo, mode).await {
                 Some((mined_block, result)) => {
                     let duration_ms = mine_start.elapsed().as_millis();
-                    let hashrate_khs = result.hashrate / 1000.0;
+                    let hashrate_khs = result.hashrate_hps / 1000.0;
 
                     info!(
                         "⛏️  Block #{} mined — hash={}…  {:.1} KH/s  {:.1}s  reward={:.4} HSMC",
