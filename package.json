@@ -78,7 +78,8 @@
     "three": "^0.160.1",
     "vaul": "^0.9.9",
     "vite-plugin-node-polyfills": "^0.22.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "stripe": "^22.3.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

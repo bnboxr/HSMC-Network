@@ -32,6 +32,7 @@ import {
   isEncryptedColumn,
 } from "./db-crypto";
 import { runStartupSecurityChecks } from "./db-security";
+import Stripe from "stripe";
 
 const DB_PATH = "/home/team/shared/hsmc.db";
 const PORT = 3001;
@@ -250,6 +251,14 @@ CREATE TABLE IF NOT EXISTS webauthn_credentials (
   last_used_at TEXT,
   device_name TEXT
 );
+
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  processed_at TEXT DEFAULT (datetime('now')),
+  payment_intent_id TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
 `;
 
 // ── Seed Data (from Supabase extraction) ─────────────────────────────────────
@@ -365,6 +374,21 @@ const TLS_KEY = process.env.TLS_KEY || "";
 const IS_DEV_MODE = !HSMC_API_KEY;
 const USING_TLS = !!(TLS_CERT && TLS_KEY);
 const JWT_EXPIRY_SECONDS = 3600; // 1 hour
+
+// ── Stripe Configuration ─────────────────────────────────────────────────────
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+const STRIPE_MODE: "live" | "test" = STRIPE_SECRET_KEY.startsWith("sk_live_") ? "live" : "test";
+let stripe: Stripe | null = null;
+if (STRIPE_SECRET_KEY) {
+  stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2025-06-30.basil" as any });
+  console.log(`💳 Stripe initialized (${STRIPE_MODE} mode)`);
+  if (!STRIPE_WEBHOOK_SECRET) {
+    console.warn("⚠️  STRIPE_WEBHOOK_SECRET not set — webhook signature verification disabled");
+  }
+} else {
+  console.warn("⚠️  STRIPE_SECRET_KEY not set — Stripe payments disabled, using mock mode");
+}
 
 if (IS_DEV_MODE) {
   console.warn("⚠️  WARNING: HSMC_API_KEY not set — API server running in DEV MODE (no auth required).");
@@ -492,7 +516,7 @@ function checkApiKey(req: Request): boolean {
 }
 
 // ── Health check paths (no auth required) ────────────────────────────────────
-const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge"]);
+const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge", "/stripe/webhook"]);
 
 function isPublicPath(path: string): boolean {
   return PUBLIC_PATHS.has(path);
@@ -849,16 +873,90 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
     ).get() as { price: number } | null;
     const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
     const amountHsmc = amountUsd / hsmcPrice;
+    const amountCents = Math.round(amountUsd * 100);
 
-    // Create payment session in DB
-    const sessionId = `pi_live_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    const paymentIntentId = `pi_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    const clientSecret = `${paymentIntentId}_secret_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    // Generate session ID (used as idempotency key)
+    const sessionId = `pi_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
-    // Encrypt sensitive fields at rest
-    const encryptedClientSecret = await encryptField(clientSecret);
+    // Stripe publishable key
+    const stripePublishableKey = process.env.STRIPE_PUBLISHABLE_KEY || "pk_test_placeholder";
 
     const now = new Date().toISOString();
+
+    // ── Real Stripe PaymentIntent ──────────────────────────────────────────
+    if (stripe) {
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amountCents,
+          currency: "usd",
+          description: `HSMCPay — ${amountUsd} USD → ${amountHsmc.toFixed(6)} HSMC`,
+          metadata: {
+            session_id: sessionId,
+            amount_hsmc: amountHsmc.toFixed(6),
+            hsmc_price: hsmcPrice.toFixed(4),
+            source: "HSMCPay",
+          },
+          statement_descriptor_suffix: "HSMCPay",
+        }, {
+          idempotencyKey: `session_${sessionId}`,
+        });
+
+        const paymentIntentId = paymentIntent.id;
+        const clientSecret = paymentIntent.client_secret!;
+
+        // Encrypt sensitive fields at rest
+        const encryptedClientSecret = await encryptField(clientSecret);
+
+        db.run(
+          `INSERT INTO payment_sessions (id, user_id, amount_usd, amount_hsmc, session_id,
+           stripe_payment_intent_id, stripe_client_secret, status, processor, created_at, otp_expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'stripe', ?, ?)`,
+          randomUUID(), "local-user", amountUsd, amountHsmc, sessionId,
+          paymentIntentId, encryptedClientSecret, now,
+          new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+        );
+
+        console.log(`[Stripe] PaymentIntent created: ${paymentIntentId} for ${amountUsd} (idempotency: session_${sessionId})`);
+
+        return jsonResponse({
+          session_id: sessionId,
+          payment_intent_id: paymentIntentId,
+          client_secret: clientSecret,
+          stripe_publishable_key: stripePublishableKey,
+          amount_hsmc: amountHsmc.toFixed(6),
+          amount_usd: amountUsd,
+        });
+      } catch (err: unknown) {
+        const stripeError = err as { type?: string; code?: string; message?: string; decline_code?: string };
+        console.error("[Stripe] PaymentIntent creation failed:", stripeError.message || String(err));
+
+        // Card declined
+        if (stripeError.type === "StripeCardError" || stripeError.code === "card_declined") {
+          const declineMsg = stripeError.decline_code
+            ? `Card declined: ${stripeError.decline_code.replace(/_/g, " ")}`
+            : "Your card was declined. Please try a different payment method.";
+          return errorResponse(declineMsg, 402, stripeError.message);
+        }
+
+        // Stripe API error (down / misconfigured)
+        if (stripeError.type?.startsWith("Stripe") || stripeError.code) {
+          return errorResponse(
+            "Payment service temporarily unavailable. Please try again in a moment.",
+            503,
+            stripeError.message
+          );
+        }
+
+        return errorResponse("Payment initiation failed. Please try again.", 500, stripeError.message);
+      }
+    }
+
+    // ── Mock mode (no Stripe key configured) ───────────────────────────────
+    const paymentIntentId = `pi_mock_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const clientSecret = `${paymentIntentId}_secret_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+
+    const encryptedClientSecret = await encryptField(clientSecret);
+
     db.run(
       `INSERT INTO payment_sessions (id, user_id, amount_usd, amount_hsmc, session_id,
        stripe_payment_intent_id, stripe_client_secret, status, processor, created_at, otp_expires_at)
@@ -867,9 +965,6 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
       paymentIntentId, encryptedClientSecret, now,
       new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
     );
-
-    // Stripe publishable key — use test key in dev
-    const stripePublishableKey = process.env.STRIPE_PUBLISHABLE_KEY || "pk_test_placeholder";
 
     return jsonResponse({
       session_id: sessionId,
@@ -1195,6 +1290,259 @@ async function handleStripePayoutWebhook(req: Request): Promise<Response> {
   });
 }
 
+// ── Stripe Create PaymentIntent Endpoint ────────────────────────────────────
+
+/** POST /stripe/create-payment-intent — dedicated endpoint with idempotency */
+async function handleStripeCreatePaymentIntent(req: Request): Promise<Response> {
+  if (req.method !== "POST") {
+    return errorResponse("Method not allowed", 405);
+  }
+
+  let body: { amount_usd?: number; idempotency_key?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  const amountUsd = Number(body.amount_usd);
+  if (!amountUsd || amountUsd < 1 || !Number.isFinite(amountUsd)) {
+    return errorResponse("amount_usd must be a positive number >= 1", 400);
+  }
+
+  const amountCents = Math.round(amountUsd * 100);
+  const idempotencyKey = body.idempotency_key || `hsmcpay_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+
+  if (!stripe) {
+    return errorResponse(
+      "Stripe is not configured. Set STRIPE_SECRET_KEY environment variable.",
+      503
+    );
+  }
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amountCents,
+      currency: "usd",
+      description: `HSMCPay — ${amountUsd} USD`,
+      metadata: {
+        idempotency_key: idempotencyKey,
+        source: "HSMCPay API",
+      },
+      statement_descriptor_suffix: "HSMCPay",
+    }, {
+      idempotencyKey,
+    });
+
+    console.log(`[Stripe] PaymentIntent created via API: ${paymentIntent.id} (idempotency: ${idempotencyKey})`);
+
+    return jsonResponse({
+      client_secret: paymentIntent.client_secret,
+      payment_intent_id: paymentIntent.id,
+      amount_usd: amountUsd,
+      amount_cents: amountCents,
+    });
+  } catch (err: unknown) {
+    const stripeError = err as { type?: string; code?: string; message?: string; decline_code?: string };
+    console.error("[Stripe] create-payment-intent failed:", stripeError.message || String(err));
+
+    if (stripeError.type === "StripeCardError" || stripeError.code === "card_declined") {
+      return errorResponse(
+        stripeError.decline_code
+          ? `Card declined: ${stripeError.decline_code.replace(/_/g, " ")}`
+          : "Your card was declined.",
+        402,
+        stripeError.message
+      );
+    }
+
+    if (stripeError.type?.startsWith("Stripe") || stripeError.code) {
+      return errorResponse(
+        "Payment service temporarily unavailable.",
+        503,
+        stripeError.message
+      );
+    }
+
+    return errorResponse("Payment initiation failed.", 500, stripeError.message);
+  }
+}
+
+// ── Stripe Webhook Handler ──────────────────────────────────────────────────
+
+/** POST /stripe/webhook — handle Stripe events with signature verification */
+async function handleStripeWebhook(req: Request): Promise<Response> {
+  if (req.method !== "POST") {
+    return errorResponse("Method not allowed", 405);
+  }
+
+  const signature = req.headers.get("stripe-signature");
+  if (!signature) {
+    return errorResponse("Missing stripe-signature header", 400);
+  }
+
+  // Read raw body for signature verification
+  const rawBody = await req.text();
+
+  // ── Signature verification ─────────────────────────────────────────────
+  let event: Stripe.Event;
+  if (STRIPE_WEBHOOK_SECRET && stripe) {
+    try {
+      event = stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Stripe] Webhook signature verification failed:", msg);
+      return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
+    }
+  } else {
+    // No webhook secret configured — parse without verification (dev mode only)
+    if (STRIPE_MODE !== "test") {
+      console.error("[Stripe] Webhook received but STRIPE_WEBHOOK_SECRET not configured in live mode");
+      return errorResponse("Webhook secret not configured", 500);
+    }
+    try {
+      event = JSON.parse(rawBody) as Stripe.Event;
+    } catch {
+      return errorResponse("Invalid webhook JSON body", 400);
+    }
+    console.warn("[Stripe] ⚠️  Webhook signature NOT verified — STRIPE_WEBHOOK_SECRET not set");
+  }
+
+  // ── Idempotency check — don't process the same event twice ──────────────
+  const existing = db.query("SELECT id FROM webhook_events WHERE id = ?").get(event.id) as { id: string } | null;
+  if (existing) {
+    console.log(`[Stripe] Webhook event ${event.id} already processed — skipping`);
+    return jsonResponse({ received: true, status: "already_processed" });
+  }
+
+  // Record the event as processed
+  db.run(
+    "INSERT INTO webhook_events (id, event_type, payment_intent_id) VALUES (?, ?, ?)",
+    event.id,
+    event.type,
+    (event.data.object as any)?.id || null
+  );
+
+  console.log(`[Stripe] Webhook received: ${event.type} (event: ${event.id})`);
+
+  // ── Process event ───────────────────────────────────────────────────────
+  try {
+    switch (event.type) {
+      case "payment_intent.succeeded": {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        const piId = paymentIntent.id;
+        const sessionId = paymentIntent.metadata?.session_id || "";
+
+        console.log(`[Stripe] PaymentIntent succeeded: ${piId}, amount: $${(paymentIntent.amount / 100).toFixed(2)}`);
+
+        // Find the payment session
+        const session = db.query(
+          "SELECT * FROM payment_sessions WHERE stripe_payment_intent_id = ?"
+        ).get(piId) as Record<string, unknown> | null;
+
+        if (!session) {
+          console.warn(`[Stripe] No payment session found for PaymentIntent ${piId}`);
+          return jsonResponse({ received: true, warning: "no_session_found" });
+        }
+
+        // If already settled, skip
+        if (session.status === "settled") {
+          console.log(`[Stripe] Session ${session.session_id} already settled — skipping`);
+          return jsonResponse({ received: true, status: "already_settled" });
+        }
+
+        const now = new Date().toISOString();
+        const txHash = "0x" + randomUUID().replace(/-/g, "");
+        const amountUsd = Number(session.amount_usd ?? 0);
+        const amountHsmc = Number(session.amount_hsmc ?? 0);
+        const userId = String(session.user_id ?? "local-user");
+
+        // Calculate HSMC fee
+        const { fee: feeUsd, tier: feeTier } = calculateHsmcFee(amountUsd);
+        const metrics = db.query(
+          "SELECT price FROM token_metrics ORDER BY updated_at DESC LIMIT 1"
+        ).get() as { price: number } | null;
+        const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
+        const feeHsmc = feeUsd / hsmcPrice;
+        const netHsmc = Math.max(amountHsmc - feeHsmc, 0);
+
+        // Insert treasury transaction
+        const treasuryTxId = randomUUID();
+        db.run(
+          `INSERT INTO treasury_transactions (id, amount_usd, fee_hsmc, fee_tier, payment_intent_id, session_id, user_id, tx_hash, type, status, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'buy_fee', 'settled', ?)`,
+          treasuryTxId, amountUsd, feeHsmc, feeTier, piId, sessionId,
+          userId, txHash,
+          `HSMCPay buy settlement (webhook) — ${feeTier} tier`
+        );
+
+        // Mark session as settled
+        db.run(
+          `UPDATE payment_sessions SET status = 'settled', settlement_tx_hash = ?, otp_expires_at = ? WHERE stripe_payment_intent_id = ?`,
+          txHash, now, piId
+        );
+
+        // Credit wallet balance
+        db.run(
+          `UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?`,
+          netHsmc, now, userId
+        );
+
+        console.log(`[Stripe] Wallet credited: ${netHsmc.toFixed(6)} HSMC to ${userId} (fee: ${feeHsmc.toFixed(2)} HSMC, tier: ${feeTier})`);
+
+        return jsonResponse({ received: true, status: "settled", tx_hash: txHash });
+      }
+
+      case "payment_intent.payment_failed": {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        const piId = paymentIntent.id;
+        const lastPaymentError = (paymentIntent as any).last_payment_error;
+        const errorMsg = lastPaymentError?.message || "Payment failed";
+
+        console.error(`[Stripe] PaymentIntent failed: ${piId} — ${errorMsg}`);
+
+        // Update session status
+        db.run(
+          `UPDATE payment_sessions SET status = 'failed', card_brand = ?, card_last4 = ?, otp_expires_at = ? WHERE stripe_payment_intent_id = ?`,
+          lastPaymentError?.payment_method?.card?.brand || "unknown",
+          lastPaymentError?.payment_method?.card?.last4 || "****",
+          new Date().toISOString(),
+          piId
+        );
+
+        return jsonResponse({ received: true, status: "marked_failed" });
+      }
+
+      case "payment_intent.processing": {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        console.log(`[Stripe] PaymentIntent processing: ${paymentIntent.id}`);
+        return jsonResponse({ received: true, status: "acknowledged" });
+      }
+
+      case "payment_intent.canceled": {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        console.log(`[Stripe] PaymentIntent canceled: ${paymentIntent.id}`);
+
+        db.run(
+          `UPDATE payment_sessions SET status = 'cancelled', otp_expires_at = ? WHERE stripe_payment_intent_id = ?`,
+          new Date().toISOString(),
+          paymentIntent.id
+        );
+
+        return jsonResponse({ received: true, status: "marked_cancelled" });
+      }
+
+      default:
+        console.log(`[Stripe] Unhandled event type: ${event.type}`);
+        return jsonResponse({ received: true, status: "unhandled_event_type" });
+    }
+  } catch (err: unknown) {
+    // Always return 200 to Stripe even on processing errors (prevents infinite retries)
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[Stripe] Webhook processing error for ${event.type}:`, msg);
+    return jsonResponse({ received: true, error: "processing_error", detail: msg });
+  }
+}
 // ── Internal Transfer (H7 fix: atomic multi-wallet transfer) ──────────────────
 
 /** POST /api/transfer — atomic transfer between two wallets of the same user */
@@ -2145,6 +2493,16 @@ async function handleRequestInner(req: Request): Promise<Response> {
     return handleStripePayoutWebhook(req);
   }
 
+  // Stripe create-payment-intent (real Stripe API with idempotency)
+  if (path === "/stripe/create-payment-intent" && req.method === "POST") {
+    return handleStripeCreatePaymentIntent(req);
+  }
+
+  // Stripe webhook (real Stripe events with signature verification)
+  if (path === "/stripe/webhook" && req.method === "POST") {
+    return handleStripeWebhook(req);
+  }
+
   // Treasury endpoints
   if (path === "/treasury/balance" && req.method === "GET") {
     return handleTreasuryBalance();
@@ -2377,6 +2735,8 @@ console.log(`   WebAuthn: ${protocol}://localhost:${PORT}/auth/webauthn/login | 
 console.log(`   Stripe Buy: ${protocol}://localhost:${PORT}/stripe/checkout`);
 console.log(`   Stripe Sell: ${protocol}://localhost:${PORT}/stripe/payout`);
 console.log(`   Payout Webhook: ${protocol}://localhost:${PORT}/stripe/payout/webhook`);
+console.log(`   Stripe Create PI: ${protocol}://localhost:${PORT}/stripe/create-payment-intent`);
+console.log(`   Stripe Webhook: ${protocol}://localhost:${PORT}/stripe/webhook`);
 console.log(`   Treasury Balance: ${protocol}://localhost:${PORT}/treasury/balance`);
 console.log(`   Treasury Tx: ${protocol}://localhost:${PORT}/treasury/transactions`);
 console.log(`   Rate limit: 100 req/min (REST), 20 req/min (/auth/*), 10 req/min (/stripe/*)`);
