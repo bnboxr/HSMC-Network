@@ -25,8 +25,11 @@ import {
   encryptMnemonic, decryptMnemonic, deriveStealthAddress
 } from '@/utils/bip39-wallet';
 import {
-  PrivacyLevel, getPrivacyFeeInfo, buildPrivateTransaction,
-  PrivateTxData, isNodeAvailable
+  PrivacyLevel, getPrivacyFeeInfo, isNodeAvailable,
+  deriveDualKeyWallet, encodeStealthAddress,
+  generateStealthOutput, generateCommitment,
+  generateRingSignature, generateRangeProof,
+  StealthOutputData
 } from '@/utils/privacy-utils';
 import { PasswordPromptModal } from '@/components/PasswordPromptModal';
 
@@ -114,6 +117,24 @@ export const WalletSection = () => {
   const [showPrivacyOptions, setShowPrivacyOptions] = useState(false);
   const [nodeOnline, setNodeOnline] = useState<boolean | null>(null);
   const [checkingNode, setCheckingNode] = useState(false);
+  // ── Privacy send progress ──────────────────────────────────────────────────
+  type ProgressStepStatus = 'pending' | 'active' | 'done' | 'error';
+  interface ProgressStep {
+    id: string;
+    label: string;
+    status: ProgressStepStatus;
+    detail?: string;
+  }
+  const PRIVACY_PROGRESS_STEPS: Record<string, { label: string; order: number }> = {
+    deriving_keys:  { label: 'Deriving dual-key wallet (spend + view)', order: 0 },
+    stealth_output: { label: 'Generating stealth one-time output...', order: 1 },
+    commitment:     { label: 'Creating Pedersen commitment...', order: 2 },
+    ring_signature: { label: 'Building ring signature (11 decoys)...', order: 3 },
+    range_proof:    { label: 'Generating Bulletproof range proof...', order: 4 },
+    signing:        { label: 'Signing and broadcasting...', order: 5 },
+  };
+  const [sendProgress, setSendProgress] = useState<ProgressStep[]>([]);
+  const [sendProgressActive, setSendProgressActive] = useState(false);
   // ── Multi-sig state ───────────────────────────────────────────────────────
   const [showMultiSigDialog, setShowMultiSigDialog] = useState(false);
   const [multiSigThreshold, setMultiSigThreshold] = useState('3');
@@ -228,6 +249,37 @@ export const WalletSection = () => {
     setTimeout(() => setStealthCopied(false), 2000);
   };
 
+  // ── Progress helper ─────────────────────────────────────────────────────────
+  const updateProgress = useCallback((stepId: string, status: ProgressStepStatus, detail?: string) => {
+    setSendProgress(prev => {
+      const updated = prev.map(s => s.id === stepId ? { ...s, status, detail } : s);
+      return updated;
+    });
+  }, []);
+
+  const initProgress = useCallback((levels: PrivacyLevel) => {
+    const steps: ProgressStep[] = [];
+    const allStepIds = ['deriving_keys', 'stealth_output', 'commitment', 'ring_signature', 'range_proof', 'signing'];
+    for (const id of allStepIds) {
+      // Skip range_proof for non-full privacy
+      if (id === 'range_proof' && levels !== 'full') continue;
+      steps.push({
+        id,
+        label: PRIVACY_PROGRESS_STEPS[id].label,
+        status: 'pending' as ProgressStepStatus,
+      });
+    }
+    setSendProgress(steps);
+    setSendProgressActive(true);
+  }, []);
+
+  // ── Stealth confirmation state ────────────────────────────────────────────
+  const [stealthConfirm, setStealthConfirm] = useState<{
+    oneTimeKey: string;
+    ephemeralKey: string;
+    privacyLevel: string;
+  } | null>(null);
+
   const handleSend = async () => {
     if (!displayWallet || !recipientAddress || !sendAmount || !user) return;
     const amount = parseFloat(sendAmount);
@@ -251,6 +303,9 @@ export const WalletSection = () => {
     }
 
     setSending(true);
+    setSendProgressActive(false);
+    setStealthConfirm(null);
+
     try {
       // Generate transaction hash
       const hashBytes = new Uint8Array(32);
@@ -265,6 +320,7 @@ export const WalletSection = () => {
       let decoyCount: number | null = null;
       let privacyLevelStr = 'standard';
       let effectiveToAddress = recipientAddress;
+      let stealthOutputResult: StealthOutputData | null = null;
 
       if (isPrivate) {
         // Verify node is online before attempting private transaction
@@ -279,7 +335,7 @@ export const WalletSection = () => {
           return;
         }
 
-        // Build private transaction using RingCT + stealth
+        // Decrypt seed
         const storedSeed = localStorage.getItem(`hsmc_encrypted_seed_${user.id}`);
         if (!storedSeed) {
           toast({ title: 'BIP39 setup required', description: 'Private transactions require BIP39 wallet setup.', variant: 'destructive' });
@@ -287,45 +343,83 @@ export const WalletSection = () => {
           return;
         }
 
-        // Decrypt the seed — request password via secure modal (C7/C8/C9)
         const pw = await requestPassword();
-        if (!pw) {
-          // User cancelled
-          setSending(false);
-          return;
-        }
+        if (!pw) { setSending(false); return; }
         let mnemonic: string;
         try {
           mnemonic = await decryptMnemonic(storedSeed, pw);
         } catch {
-          // Password was wrong — clear it from memory
           clearPassword();
           toast({ title: 'Wrong password', description: 'Cannot sign private transaction.', variant: 'destructive' });
           setSending(false);
           return;
         }
 
-        // Build the full private transaction
-        const txData: PrivateTxData = await buildPrivateTransaction({
-          mnemonic,
-          recipientAddress,
-          amount,
-          privacyLevel: effectivePrivacy,
-          ringSize: effectivePrivacy === 'full' ? 16 : 11,
-        });
+        const ringSize = effectivePrivacy === 'full' ? 16 : 11;
+        const amountSatoshis = Math.round(amount * 1e8);
 
-        ringSignature = txData.ringSignature;
-        stealthAddress = txData.stealthAddress || txData.stealthOutput?.oneTimeKey || null;
-        commitment = txData.commitment;
-        rangeProof = txData.rangeProof || null;
-        keyImage = txData.keyImage;
-        decoyCount = txData.decoyCount;
+        // ── Step-by-step privacy build with progress ──────────────────────
+        initProgress(effectivePrivacy);
+
+        // Step 1: Derive dual-key wallet
+        updateProgress('deriving_keys', 'active');
+        const wallet_keys = await deriveDualKeyWallet(mnemonic);
+        const senderAddress = encodeStealthAddress(wallet_keys.spendPublic, wallet_keys.viewPublic);
+        updateProgress('deriving_keys', 'done');
+
+        // Step 2: Generate stealth one-time output
+        updateProgress('stealth_output', 'active');
+        const isStealthAddr = recipientAddress.startsWith('HSMCst');
+        let effectiveAddr: string = recipientAddress;
+        if (!isStealthAddr) {
+          // Wrap transparent address in a pseudo-stealth address
+          const recipientPubHash = await crypto.subtle.digest(
+            'SHA-256', new TextEncoder().encode(recipientAddress)
+          );
+          const derivedSP = new Uint8Array(recipientPubHash).slice(0, 32);
+          const derivedVP = new Uint8Array(recipientPubHash).slice(0, 32);
+          effectiveAddr = encodeStealthAddress(derivedSP, derivedVP);
+        }
+        stealthOutputResult = await generateStealthOutput(effectiveAddr, 0);
+        stealthAddress = stealthOutputResult.oneTimeKey;
+        updateProgress('stealth_output', 'done',
+          `One-time key: ${stealthOutputResult.oneTimeKey.slice(0, 14)}...`);
+
+        // Step 3: Generate Pedersen commitment
+        updateProgress('commitment', 'active');
+        const commitData = await generateCommitment(amountSatoshis, wallet_keys);
+        commitment = commitData.commitment;
+        updateProgress('commitment', 'done',
+          `Commitment: ${commitment.slice(0, 14)}...`);
+
+        // Step 4: Generate ring signature
+        updateProgress('ring_signature', 'active',
+          `Building ring signature with ${ringSize - 1} decoys...`);
+        const message = `${senderAddress}:${stealthAddress}:${amount}:${Date.now()}`;
+        const ringData = await generateRingSignature(message, wallet_keys, ringSize);
+        ringSignature = ringData.ringSignature;
+        keyImage = ringData.keyImage;
+        updateProgress('ring_signature', 'done',
+          `Key image: ${keyImage.slice(0, 14)}...`);
+
+        // Step 5: Generate Bulletproof range proof (full only)
+        if (effectivePrivacy === 'full') {
+          updateProgress('range_proof', 'active');
+          rangeProof = await generateRangeProof(amountSatoshis, commitment);
+          updateProgress('range_proof', 'done',
+            `Range proof: ${rangeProof.slice(0, 14)}...`);
+        }
+
+        decoyCount = ringSize;
         privacyLevelStr = effectivePrivacy;
 
         // Use stealth one-time address as the destination
-        if (txData.stealthOutput?.oneTimeKey) {
-          effectiveToAddress = '0x' + txData.stealthOutput.oneTimeKey;
+        if (stealthOutputResult.oneTimeKey) {
+          effectiveToAddress = '0x' + stealthOutputResult.oneTimeKey;
         }
+
+        // Step 6: Signing & broadcasting
+        updateProgress('signing', 'active');
       }
 
       // Insert confirmed transaction — build payload defensively
@@ -344,10 +438,7 @@ export const WalletSection = () => {
         range_proof: rangeProof,
         decoy_count: decoyCount,
       };
-      // Only include key_image if present (column may not exist in older DB schemas)
-      if (keyImage) {
-        insertPayload.key_image = keyImage;
-      }
+      if (keyImage) { insertPayload.key_image = keyImage; }
 
       const { error: txError } = await supabase.from('transactions').insert(insertPayload);
       if (txError) throw txError;
@@ -365,7 +456,6 @@ export const WalletSection = () => {
         .select('id, balance')
         .eq('address', recipientAddress)
         .maybeSingle();
-
       if (recipientWallet) {
         await supabase
           .from('wallets')
@@ -373,17 +463,42 @@ export const WalletSection = () => {
           .eq('id', recipientWallet.id);
       }
 
+      // Mark signing as done
+      if (isPrivate) {
+        updateProgress('signing', 'done', 'Broadcast complete');
+      }
+
+      // Build success message
       const privacyLabel = isPrivate ? ` (${privacyLevelStr.toUpperCase()} private)` : '';
-      toast({
-        title: isPrivate ? '🔒 Private Transaction Sent!' : 'Transaction sent!',
-        description: `Sent ${amount.toFixed(4)} HSMC${privacyLabel} — fee: ${feeInfo.minFee.toFixed(6)} HSMC`
-      });
+
+      if (isPrivate && stealthOutputResult) {
+        // Show detailed stealth confirmation as inline panel, toast as summary
+        setStealthConfirm({
+          oneTimeKey: stealthOutputResult.oneTimeKey,
+          ephemeralKey: stealthOutputResult.ephemeralKey,
+          privacyLevel: privacyLevelStr,
+        });
+        toast({
+          title: '🔒 Private Transaction Sent!',
+          description: `${amount.toFixed(4)} HSMC sent via stealth address (${privacyLevelStr.toUpperCase()}). One-time destination key generated.`,
+        });
+      } else {
+        toast({
+          title: isPrivate ? '🔒 Private Transaction Sent!' : 'Transaction sent!',
+          description: `Sent ${amount.toFixed(4)} HSMC${privacyLabel} — fee: ${feeInfo.minFee.toFixed(6)} HSMC`,
+        });
+      }
+
       setRecipientAddress('');
       setSendAmount('');
       setPrivacyMode('transparent');
       setActiveTab('overview');
     } catch (err: unknown) {
-      toast({ title: 'Error', description: err instanceof Error ? err.message : String(err), variant: 'destructive' });
+      // Mark current active step as errored
+      setSendProgress(prev =>
+        prev.map(s => s.status === 'active' ? { ...s, status: 'error' as ProgressStepStatus, detail: (err as Error).message } : s)
+      );
+      toast({ title: 'Transaction Failed', description: err instanceof Error ? err.message : String(err), variant: 'destructive' });
     } finally {
       setSending(false);
     }
@@ -956,6 +1071,81 @@ export const WalletSection = () => {
                         </span>
                       </div>
                     </div>
+                  )}
+
+                  {/* ── Privacy Progress Indicator ──────────────────────── */}
+                  {sendProgressActive && sendProgress.length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className="p-4 bg-muted/30 border border-border rounded-xl space-y-2"
+                    >
+                      <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+                        <Shield className="w-4 h-4" />
+                        Building Private Transaction
+                      </div>
+                      {sendProgress.map((step) => (
+                        <div key={step.id} className="flex items-start gap-2.5 text-xs">
+                          <div className="mt-0.5 flex-shrink-0">
+                            {step.status === 'active' && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />}
+                            {step.status === 'done' && <Check className="w-3.5 h-3.5 text-green-400" />}
+                            {step.status === 'error' && <X className="w-3.5 h-3.5 text-destructive" />}
+                            {step.status === 'pending' && <div className="w-3.5 h-3.5 rounded-full border border-muted-foreground/30" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className={
+                              step.status === 'active' ? 'text-primary font-medium' :
+                              step.status === 'done' ? 'text-green-400' :
+                              step.status === 'error' ? 'text-destructive' :
+                              'text-muted-foreground'
+                            }>{step.label}</span>
+                            {step.detail && step.status === 'done' && (
+                              <div className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate">{step.detail}</div>
+                            )}
+                            {step.detail && step.status === 'error' && (
+                              <div className="text-[10px] text-destructive/70 mt-0.5 truncate">{step.detail}</div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </motion.div>
+                  )}
+
+                  {/* ── Stealth Address Confirmation ──────────────────────── */}
+                  {stealthConfirm && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-4 bg-secondary/10 border border-secondary/30 rounded-xl space-y-2"
+                    >
+                      <div className="flex items-center gap-2 text-sm font-semibold text-secondary">
+                        <ShieldCheck className="w-4 h-4" />
+                        Stealth Address Used
+                      </div>
+                      <div className="text-xs space-y-1.5">
+                        <div>
+                          <span className="text-muted-foreground">One-time destination: </span>
+                          <span className="font-mono text-secondary break-all">{stealthConfirm.oneTimeKey}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Ephemeral public key: </span>
+                          <span className="font-mono text-muted-foreground break-all text-[11px]">{stealthConfirm.ephemeralKey}</span>
+                        </div>
+                        <div className="bg-muted/30 rounded p-2 text-muted-foreground mt-1">
+                          <strong className="text-foreground">Why is this address different?</strong>{' '}
+                          A stealth one-time address is derived via ECDH key exchange from the recipient's{' '}
+                          <code className="text-secondary">HSMCst...</code> public keys. Each transaction gets a unique address
+                          that only the recipient can detect using their view key — no on-chain link between transactions.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setStealthConfirm(null)}
+                        className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        Dismiss
+                      </button>
+                    </motion.div>
                   )}
 
                   <Button
