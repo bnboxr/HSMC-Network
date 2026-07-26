@@ -28,6 +28,8 @@ import type { ChainConnector, ChainConfig } from "./types";
 import type { ChainId } from "./types";
 
 export type { ChainId, ChainConnector, DepositEvent, WithdrawalRequest, ChainConfig, BridgeEvent, MintProposedEvent, MintFinalizedEvent, MintedEvent, MintChallengedEvent } from "./types";
+export { BridgeMonitor, createBridgeMonitor } from "./monitor";
+export type { ChainStatus, BridgeStatus, BridgeEvent as MonitorBridgeEvent, MonitorConfig } from "./monitor";
 
 // ─── Lazy connector cache ──────────────────────────────────────────────
 
