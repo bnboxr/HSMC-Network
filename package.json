@@ -11,8 +11,10 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "bunx vitest run",
+    "test:watch": "bunx vitest",
+    "test:integration": "bun test tests/",
+    "test:all": "bunx vitest run && bun test tests/"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

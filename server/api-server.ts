@@ -34,8 +34,8 @@ import {
 import { runStartupSecurityChecks } from "./db-security";
 import Stripe from "stripe";
 
-const DB_PATH = "/home/team/shared/hsmc.db";
-const PORT = 3001;
+const DB_PATH = process.env.HSMC_DB_PATH || "/home/team/shared/hsmc.db";
+const PORT = parseInt(process.env.HSMC_PORT || "3001", 10);
 
 // ── Schema (from schema.sqlite.sql) ──────────────────────────────────────────
 const SCHEMA_SQL = `
