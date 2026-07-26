@@ -561,6 +561,29 @@ pub enum TxPayload {
         reward:       f64,
         script_data:  String,
     },
+
+    /// Post-Quantum — ECDSA + Dilithium-5 hybrid signatures, Kyber-1024 KEM
+    /// Provides quantum-resistant authentication and key exchange for
+    /// forward-looking security. Compatible with all privacy levels.
+    PostQuantum {
+        /// Hybrid ECDSA + Dilithium-5 signature (hex-encoded)
+        hybrid_signature: String,
+        /// Dilithium-5 public key for signature verification
+        dilithium_pubkey: String,
+        /// Kyber-1024 ciphertext for key encapsulation (optional, for stealth)
+        kyber_ciphertext: Option<String>,
+        /// Kyber-1024 public key for KEM (optional)
+        kyber_pubkey: Option<String>,
+        /// Base privacy level (sets fee multiplier and proof requirements)
+        base_privacy: PrivacyLevel,
+        /// Underlying classic proofs (ring sig, stealth, commitments)
+        ring_signature: Option<RingSignatureProof>,
+        stealth_proof: Option<StealthProof>,
+        range_proof: Option<BulletproofRangeProof>,
+        input_commitments: Vec<PedersenCommitment>,
+        output_commitments: Vec<PedersenCommitment>,
+        excess_commitment: Option<PedersenCommitment>,
+    },
 }
 
 impl TxPayload {
@@ -573,6 +596,7 @@ impl TxPayload {
             Self::BridgeLock { stealth_proof, .. } =>
                 if stealth_proof.is_some() { PrivacyLevel::Stealth } else { PrivacyLevel::Transparent },
             Self::Coinbase { .. }=> PrivacyLevel::Transparent,
+            Self::PostQuantum { base_privacy, .. } => base_privacy.clone(),
         }
     }
 
@@ -582,6 +606,11 @@ impl TxPayload {
 
     pub fn is_bridge(&self) -> bool {
         matches!(self, Self::BridgeLock { .. })
+    }
+
+    /// Returns true if this transaction uses post-quantum cryptography
+    pub fn is_post_quantum(&self) -> bool {
+        matches!(self, Self::PostQuantum { .. })
     }
 }
 

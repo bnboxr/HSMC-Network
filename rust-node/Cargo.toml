@@ -55,3 +55,5 @@ base64             = "0.22"
 rayon              = "1"
 crossbeam-channel  = "0.5"
 randomx            = "1.1"
+fips204            = "0.4"  # Dilithium-5 (ML-DSA-87) — Post-Quantum signatures
+fips203            = "0.4"  # Kyber-1024 (ML-KEM-1024) — Post-Quantum KEM
