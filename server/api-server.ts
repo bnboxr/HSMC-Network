@@ -261,6 +261,65 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 );
 `;
 
+-- Card Issuance tables (Feature #14: Stripe Issuing Integration)
+CREATE TABLE IF NOT EXISTS cardholders (
+  id TEXT PRIMARY KEY,
+  stripe_cardholder_id TEXT UNIQUE,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT,
+  address_line1 TEXT,
+  address_city TEXT,
+  address_state TEXT,
+  address_postal TEXT,
+  address_country TEXT DEFAULT 'US',
+  date_of_birth TEXT,
+  id_last4 TEXT,
+  verification_status TEXT DEFAULT 'pending',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS cards (
+  id TEXT PRIMARY KEY,
+  stripe_card_id TEXT UNIQUE,
+  cardholder_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  last4 TEXT,
+  brand TEXT,
+  card_type TEXT CHECK(card_type IN ('virtual', 'physical')) DEFAULT 'virtual',
+  status TEXT CHECK(status IN ('active', 'inactive', 'frozen', 'cancelled', 'shipped', 'pending')) DEFAULT 'inactive',
+  daily_limit_usd REAL DEFAULT 1000,
+  monthly_limit_usd REAL DEFAULT 10000,
+  per_tx_limit_usd REAL DEFAULT 500,
+  card_balance_usd_cents INTEGER DEFAULT 0,
+  expiration_month INTEGER,
+  expiration_year INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  activated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS card_transactions (
+  id TEXT PRIMARY KEY,
+  stripe_tx_id TEXT UNIQUE,
+  card_id TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  merchant_name TEXT,
+  merchant_category TEXT,
+  tx_type TEXT CHECK(tx_type IN ('purchase', 'atm', 'refund', 'authorization', 'capture', 'decline')) DEFAULT 'purchase',
+  status TEXT CHECK(status IN ('pending', 'approved', 'declined', 'settled')) DEFAULT 'pending',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS card_funding_events (
+  id TEXT PRIMARY KEY,
+  card_id TEXT NOT NULL,
+  amount_hsmc REAL NOT NULL,
+  amount_usd_cents INTEGER NOT NULL,
+  exchange_rate REAL NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 // ── Seed Data (from Supabase extraction) ─────────────────────────────────────
 const SEED_SQL = `
 -- Blocks: 2 rows (block 1 and block 6)
@@ -492,6 +551,37 @@ async function verifyJWT(token: string): Promise<Record<string, unknown> | null>
   } catch {
     return null;
   }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Card Issuance / EMV Integration (Feature #14) — Stripe Issuing
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── JWT User Extraction ──────────────────────────────────────────────────────
+async function extractJWTUser(req: Request): Promise<string | null> {
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const token = authHeader.slice(7);
+  if (token.split(".").length !== 3) return null;
+  const payload = await verifyJWT(token);
+  if (!payload) return null;
+  return (payload.sub || payload.user_id || payload.id) as string | null;
+}
+
+async function requireJWTUser(req: Request): Promise<{ userId: string } | Response> {
+  const userId = await extractJWTUser(req);
+  if (!userId) {
+    return jsonResponse({ error: "Authentication required — valid JWT token needed" }, 401);
+  }
+  return { userId };
+}
+
+function getHsmcPrice(): number {
+  const metrics = db.query(
+    "SELECT price FROM token_metrics ORDER BY updated_at DESC LIMIT 1"
+  ).get() as { price: number } | null;
+  return Math.max(Number(metrics?.price ?? 1), 0.01);
 }
 
 // ── API Key Authentication ───────────────────────────────────────────────────
@@ -1371,6 +1461,348 @@ async function handleStripeCreatePaymentIntent(req: Request): Promise<Response> 
 // ── Stripe Webhook Handler ──────────────────────────────────────────────────
 
 /** POST /stripe/webhook — handle Stripe events with signature verification */
+
+// ── Cardholder Endpoints ─────────────────────────────────────────────────────
+
+async function handleCardholderCreate(req: Request): Promise<Response> {
+  const auth = await requireJWTUser(req);
+  if (auth instanceof Response) return auth;
+  const { userId } = auth;
+
+  let body: {
+    name?: string; email?: string; phone?: string;
+    address_line1?: string; address_city?: string; address_state?: string;
+    address_postal?: string; address_country?: string;
+    date_of_birth?: string; id_last4?: string;
+  };
+  try { body = await req.json(); } catch { return errorResponse("Invalid JSON body", 400); }
+
+  if (!body.name || !body.email) {
+    return errorResponse("name and email are required", 400);
+  }
+
+  const existing = db.query(
+    "SELECT id, stripe_cardholder_id, verification_status FROM cardholders WHERE user_id = ? LIMIT 1"
+  ).get(userId) as Record<string, unknown> | null;
+
+  if (existing?.verification_status === "verified") {
+    return jsonResponse({ message: "Cardholder already verified", cardholder: existing });
+  }
+
+  const cardholderId = randomUUID();
+  const now = new Date().toISOString();
+  let stripeCardholderId: string | null = null;
+
+  if (stripe) {
+    try {
+      const firstName = body.name.split(" ")[0] || body.name;
+      const lastName = body.name.split(" ").slice(1).join(" ") || body.name;
+      const stripeCH = await stripe.issuing.cardholders.create({
+        name: body.name,
+        email: body.email,
+        phone_number: body.phone || undefined,
+        status: "active",
+        type: "individual",
+        individual: {
+          first_name: firstName,
+          last_name: lastName,
+          ...(body.date_of_birth ? {
+            dob: {
+              day: parseInt(body.date_of_birth.split("-")[2] || "1"),
+              month: parseInt(body.date_of_birth.split("-")[1] || "1"),
+              year: parseInt(body.date_of_birth.split("-")[0] || "1990"),
+            }
+          } : {}),
+        },
+        billing: {
+          address: {
+            line1: body.address_line1 || "",
+            city: body.address_city || "",
+            state: body.address_state || "",
+            postal_code: body.address_postal || "",
+            country: body.address_country || "US",
+          },
+        },
+        spending_controls: {
+          spending_limits: [{ amount: 1000000, interval: "daily", categories: [] }],
+        },
+      });
+      stripeCardholderId = stripeCH.id;
+      console.log(`[Card] Stripe cardholder: ${stripeCardholderId}`);
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      console.error("[Card] Stripe cardholder creation failed:", e.message);
+      return errorResponse(`Cardholder creation failed: ${e.message || "Stripe API error"}`, 502);
+    }
+  }
+
+  db.run(
+    `INSERT INTO cardholders (id, stripe_cardholder_id, user_id, name, email, phone,
+     address_line1, address_city, address_state, address_postal, address_country,
+     date_of_birth, id_last4, verification_status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+    cardholderId, stripeCardholderId, userId, body.name, body.email,
+    body.phone || null, body.address_line1 || null, body.address_city || null,
+    body.address_state || null, body.address_postal || null,
+    body.address_country || "US", body.date_of_birth || null,
+    body.id_last4 || null, now
+  );
+
+  return jsonResponse({
+    id: cardholderId, stripe_cardholder_id: stripeCardholderId,
+    user_id: userId, name: body.name, email: body.email,
+    verification_status: "pending", created_at: now,
+  }, 201);
+}
+
+function handleCardholderGet(chId: string): Response {
+  const ch = db.query("SELECT * FROM cardholders WHERE id = ?").get(chId) as Record<string, unknown> | null;
+  if (!ch) return errorResponse("Cardholder not found", 404);
+  return jsonResponse(ch);
+}
+
+
+// ── Card Management Endpoints ────────────────────────────────────────────────
+
+async function handleCardCreate(req: Request): Promise<Response> {
+  const auth = await requireJWTUser(req);
+  if (auth instanceof Response) return auth;
+  const { userId } = auth;
+
+  let body: {
+    cardholder_name?: string; card_type?: "virtual" | "physical";
+    daily_limit_usd?: number; monthly_limit_usd?: number; per_tx_limit_usd?: number;
+  };
+  try { body = await req.json(); } catch { return errorResponse("Invalid JSON body", 400); }
+
+  const cardCount = (db.query(
+    "SELECT COUNT(*) as cnt FROM cards WHERE user_id = ? AND status != 'cancelled'"
+  ).get(userId) as { cnt: number }).cnt;
+  if (cardCount >= 3) return errorResponse("Maximum 3 active cards per user", 400);
+
+  const today = new Date().toISOString().split("T")[0];
+  const todayCount = (db.query(
+    "SELECT COUNT(*) as cnt FROM cards WHERE user_id = ? AND created_at >= ?"
+  ).get(userId, today) as { cnt: number }).cnt;
+  if (todayCount >= 1) return errorResponse("Maximum 1 card creation per day", 429);
+
+  let cardholder = db.query(
+    "SELECT id, stripe_cardholder_id FROM cardholders WHERE user_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(userId) as Record<string, unknown> | null;
+
+  if (!cardholder) {
+    return errorResponse("No cardholder found. Create one via POST /cardholders/create", 400);
+  }
+
+  const stripeCHId = cardholder.stripe_cardholder_id as string;
+  const cardType = body.card_type || "virtual";
+  const dailyL = body.daily_limit_usd || 1000;
+  const monthlyL = body.monthly_limit_usd || 10000;
+  const perTxL = body.per_tx_limit_usd || 500;
+
+  const cardId = randomUUID();
+  const now = new Date().toISOString();
+  let stripeCardId: string | null = null;
+  let last4: string | null = null;
+  let brand: string | null = null;
+  let expM: number | null = null;
+  let expY: number | null = null;
+
+  if (stripe && stripeCHId) {
+    try {
+      const sc = await stripe.issuing.cards.create({
+        cardholder: stripeCHId,
+        type: cardType,
+        currency: "usd",
+        status: "active",
+        spending_controls: {
+          spending_limits: [
+            { amount: Math.round(dailyL * 100), interval: "daily" },
+            { amount: Math.round(monthlyL * 100), interval: "monthly" },
+            { amount: Math.round(perTxL * 100), interval: "per_transaction" },
+          ],
+        },
+      });
+      stripeCardId = sc.id; last4 = sc.last4; brand = sc.brand;
+      expM = sc.exp_month; expY = sc.exp_year;
+      console.log(`[Card] Created: ${stripeCardId} (${brand} *${last4})`);
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      console.error("[Card] Stripe card creation failed:", e.message);
+      return errorResponse(`Card creation failed: ${e.message || "Stripe API error"}`, 502);
+    }
+  } else {
+    last4 = Math.floor(1000 + Math.random() * 9000).toString();
+    brand = "visa"; expM = Math.floor(1 + Math.random() * 12);
+    expY = new Date().getFullYear() + 3;
+    stripeCardId = `ic_mock_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  }
+
+  db.run(
+    `INSERT INTO cards (id, stripe_card_id, cardholder_id, user_id, last4, brand,
+     card_type, status, daily_limit_usd, monthly_limit_usd, per_tx_limit_usd,
+     expiration_month, expiration_year, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
+    cardId, stripeCardId, cardholder.id, userId, last4, brand,
+    cardType, dailyL, monthlyL, perTxL, expM, expY, now
+  );
+
+  return jsonResponse({
+    id: cardId, stripe_card_id: stripeCardId, cardholder_id: cardholder.id,
+    last4, brand, card_type: cardType, status: "active",
+    daily_limit_usd: dailyL, monthly_limit_usd: monthlyL, per_tx_limit_usd: perTxL,
+    expiration_month: expM, expiration_year: expY, created_at: now,
+  }, 201);
+}
+
+async function handleCardList(req: Request): Promise<Response> {
+  const auth = await requireJWTUser(req);
+  if (auth instanceof Response) return auth;
+  const rows = db.query(
+    "SELECT id, stripe_card_id, last4, brand, card_type, status, daily_limit_usd, monthly_limit_usd, per_tx_limit_usd, card_balance_usd_cents, expiration_month, expiration_year, created_at, activated_at FROM cards WHERE user_id = ? AND status != 'cancelled' ORDER BY created_at DESC"
+  ).all(auth.userId) as Array<Record<string, unknown>>;
+  return jsonResponse(rows.map(c => ({ ...c, card_balance_usd: Number(c.card_balance_usd_cents) / 100 })));
+}
+
+function handleCardGet(cardId: string): Response {
+  const c = db.query(
+    "SELECT id, stripe_card_id, cardholder_id, user_id, last4, brand, card_type, status, daily_limit_usd, monthly_limit_usd, per_tx_limit_usd, card_balance_usd_cents, expiration_month, expiration_year, created_at, activated_at FROM cards WHERE id = ?"
+  ).get(cardId) as Record<string, unknown> | null;
+  if (!c) return errorResponse("Card not found", 404);
+  return jsonResponse({ ...c, card_balance_usd: Number(c.card_balance_usd_cents) / 100 });
+}
+
+
+// ── Card Actions (freeze/unfreeze/cancel/limits/fund) ─────────────────────────
+
+async function handleCardFreeze(req: Request, cardId: string): Promise<Response> {
+  const auth = await requireJWTUser(req);
+  if (auth instanceof Response) return auth;
+  const c = db.query("SELECT id, stripe_card_id, status FROM cards WHERE id = ? AND user_id = ?").get(cardId, auth.userId) as Record<string, unknown> | null;
+  if (!c) return errorResponse("Card not found", 404);
+  if (c.status === "cancelled") return errorResponse("Card is cancelled", 400);
+  if (c.status === "frozen") return errorResponse("Card is already frozen", 400);
+  if (stripe && c.stripe_card_id) {
+    try { await stripe.issuing.cards.update(c.stripe_card_id as string, { status: "inactive" }); } catch {}
+  }
+  db.run("UPDATE cards SET status = 'frozen' WHERE id = ?", cardId);
+  return jsonResponse({ id: cardId, status: "frozen", message: "Card frozen" });
+}
+
+async function handleCardUnfreeze(req: Request, cardId: string): Promise<Response> {
+  const auth = await requireJWTUser(req);
+  if (auth instanceof Response) return auth;
+  const c = db.query("SELECT id, stripe_card_id, status FROM cards WHERE id = ? AND user_id = ?").get(cardId, auth.userId) as Record<string, unknown> | null;
+  if (!c) return errorResponse("Card not found", 404);
+  if (c.status !== "frozen") return errorResponse("Card is not frozen", 400);
+  if (stripe && c.stripe_card_id) {
+    try { await stripe.issuing.cards.update(c.stripe_card_id as string, { status: "active" }); } catch {}
+  }
+  db.run("UPDATE cards SET status = 'active' WHERE id = ?", cardId);
+  return jsonResponse({ id: cardId, status: "active", message: "Card unfrozen" });
+}
+
+async function handleCardCancel(req: Request, cardId: string): Promise<Response> {
+  const auth = await requireJWTUser(req);
+  if (auth instanceof Response) return auth;
+  const c = db.query("SELECT id, stripe_card_id, status FROM cards WHERE id = ? AND user_id = ?").get(cardId, auth.userId) as Record<string, unknown> | null;
+  if (!c) return errorResponse("Card not found", 404);
+  if (c.status === "cancelled") return errorResponse("Already cancelled", 400);
+  if (stripe && c.stripe_card_id) {
+    try { await stripe.issuing.cards.update(c.stripe_card_id as string, { status: "canceled" }); } catch {}
+  }
+  db.run("UPDATE cards SET status = 'cancelled' WHERE id = ?", cardId);
+  return jsonResponse({ id: cardId, status: "cancelled", message: "Card cancelled" });
+}
+
+async function handleCardSetLimits(req: Request, cardId: string): Promise<Response> {
+  const auth = await requireJWTUser(req);
+  if (auth instanceof Response) return auth;
+  const c = db.query("SELECT id, stripe_card_id FROM cards WHERE id = ? AND user_id = ? AND status != 'cancelled'").get(cardId, auth.userId) as Record<string, unknown> | null;
+  if (!c) return errorResponse("Card not found", 404);
+  let body: { daily_limit_usd?: number; monthly_limit_usd?: number; per_tx_limit_usd?: number };
+  try { body = await req.json(); } catch { return errorResponse("Invalid JSON body", 400); }
+  const updates: string[] = []; const params: (string | number)[] = [];
+  if (body.daily_limit_usd !== undefined) { updates.push("daily_limit_usd = ?"); params.push(body.daily_limit_usd); }
+  if (body.monthly_limit_usd !== undefined) { updates.push("monthly_limit_usd = ?"); params.push(body.monthly_limit_usd); }
+  if (body.per_tx_limit_usd !== undefined) { updates.push("per_tx_limit_usd = ?"); params.push(body.per_tx_limit_usd); }
+  if (updates.length === 0) return errorResponse("At least one limit required", 400);
+  if (stripe && c.stripe_card_id) {
+    try {
+      const sl: Array<{ amount: number; interval: string }> = [];
+      if (body.daily_limit_usd !== undefined) sl.push({ amount: Math.round(body.daily_limit_usd * 100), interval: "daily" });
+      if (body.monthly_limit_usd !== undefined) sl.push({ amount: Math.round(body.monthly_limit_usd * 100), interval: "monthly" });
+      if (body.per_tx_limit_usd !== undefined) sl.push({ amount: Math.round(body.per_tx_limit_usd * 100), interval: "per_transaction" });
+      if (sl.length > 0) await stripe.issuing.cards.update(c.stripe_card_id as string, { spending_controls: { spending_limits: sl } });
+    } catch {}
+  }
+  params.push(cardId);
+  db.run(`UPDATE cards SET ${updates.join(", ")} WHERE id = ?`, ...params);
+  return jsonResponse({ id: cardId, message: "Limits updated" });
+}
+
+
+// ── Card Funding ─────────────────────────────────────────────────────────────
+
+async function handleCardFund(req: Request, cardId: string): Promise<Response> {
+  const auth = await requireJWTUser(req);
+  if (auth instanceof Response) return auth;
+  const { userId } = auth;
+
+  let body: { amount_hsmc?: number };
+  try { body = await req.json(); } catch { return errorResponse("Invalid JSON body", 400); }
+  if (!body.amount_hsmc || body.amount_hsmc <= 0) {
+    return errorResponse("amount_hsmc must be positive", 400);
+  }
+
+  const amountHsmc = body.amount_hsmc;
+  const hsmcPrice = getHsmcPrice();
+  const amountUsdCents = Math.floor(amountHsmc * hsmcPrice * 100);
+  if (amountUsdCents <= 0) return errorResponse("Amount too small", 400);
+
+  const card = db.query(
+    "SELECT id, stripe_card_id, card_balance_usd_cents, status FROM cards WHERE id = ? AND user_id = ?"
+  ).get(cardId, userId) as Record<string, unknown> | null;
+  if (!card) return errorResponse("Card not found", 404);
+  if (card.status !== "active") return errorResponse("Card must be active to fund", 400);
+
+  try {
+    db.run("BEGIN IMMEDIATE");
+    const wallet = db.query(
+      "SELECT balance FROM wallets WHERE user_id = ? AND is_primary = 1 LIMIT 1"
+    ).get(userId) as { balance: number } | null;
+    if (!wallet) { db.run("ROLLBACK"); return errorResponse("No primary wallet found", 404); }
+    if (wallet.balance < amountHsmc) {
+      db.run("ROLLBACK");
+      return errorResponse(`Insufficient HSMC: ${wallet.balance.toFixed(6)} < ${amountHsmc}`, 400);
+    }
+
+    const now = new Date().toISOString();
+    db.run("UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE user_id = ? AND is_primary = 1",
+      amountHsmc, now, userId);
+    db.run("UPDATE cards SET card_balance_usd_cents = card_balance_usd_cents + ? WHERE id = ?",
+      amountUsdCents, cardId);
+
+    const fundEventId = randomUUID();
+    db.run(
+      "INSERT INTO card_funding_events (id, card_id, amount_hsmc, amount_usd_cents, exchange_rate, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      fundEventId, cardId, amountHsmc, amountUsdCents, hsmcPrice, now
+    );
+
+    db.run("COMMIT");
+
+    const newBalance = (Number(card.card_balance_usd_cents) + amountUsdCents) / 100;
+    return jsonResponse({
+      id: fundEventId, card_id: cardId, amount_hsmc: amountHsmc,
+      amount_usd: amountUsdCents / 100, exchange_rate: hsmcPrice,
+      new_card_balance_usd: newBalance, created_at: now,
+    });
+  } catch (err: unknown) {
+    try { db.run("ROLLBACK"); } catch {}
+    return errorResponse(`Funding failed: ${(err as Error).message}`, 500);
+  }
+}
+
 async function handleStripeWebhook(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return errorResponse("Method not allowed", 405);
@@ -1530,6 +1962,163 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         );
 
         return jsonResponse({ received: true, status: "marked_cancelled" });
+      }
+
+
+// ── Stripe Issuing Webhook Events ────────────────────────────────────────────
+// Add these cases to the existing switch in handleStripeWebhook
+
+      case "issuing_card.created": {
+        const ic = event.data.object as any;
+        console.log(`[Card Webhook] Card created: ${ic.id}, last4: ${ic.last4}`);
+        // Update local card if we have it
+        db.run("UPDATE cards SET last4 = ?, brand = ?, expiration_month = ?, expiration_year = ? WHERE stripe_card_id = ?",
+          ic.last4 || null, ic.brand || null, ic.exp_month || null, ic.exp_year || null, ic.id);
+        return jsonResponse({ received: true });
+      }
+
+      case "issuing_card.updated": {
+        const ic = event.data.object as any;
+        console.log(`[Card Webhook] Card updated: ${ic.id}, status: ${ic.status}`);
+        const newStatus = ic.status === "active" ? "active" :
+                          ic.status === "inactive" ? "frozen" :
+                          ic.status === "canceled" ? "cancelled" : null;
+        if (newStatus) {
+          db.run("UPDATE cards SET status = ? WHERE stripe_card_id = ?", newStatus, ic.id);
+        }
+        return jsonResponse({ received: true });
+      }
+
+      case "issuing_authorization.request": {
+        const ia = event.data.object as any;
+        const cardId = ia.card?.id;
+        console.log(`[Card Webhook] Auth request: ${ia.id}, card: ${cardId}, amount: $${(ia.amount / 100).toFixed(2)}, merchant: ${ia.merchant_data?.name || "unknown"}`);
+
+        // Find local card
+        const card = db.query(
+          "SELECT id, status, daily_limit_usd, monthly_limit_usd, per_tx_limit_usd, card_balance_usd_cents FROM cards WHERE stripe_card_id = ?"
+        ).get(cardId) as Record<string, unknown> | null;
+
+        if (!card) {
+          console.warn(`[Card Webhook] Card ${cardId} not found locally — approving by default`);
+          return jsonResponse({ approved: true });
+        }
+
+        const amountCents = Number(ia.amount || 0);
+        const amountUsd = amountCents / 100;
+
+        // Check card status
+        if (card.status !== "active") {
+          console.log(`[Card Webhook] Declined: card status is ${card.status}`);
+          return jsonResponse({ approved: false, reason: "card_not_active" });
+        }
+
+        // Check per-transaction limit
+        if (amountUsd > Number(card.per_tx_limit_usd || 500)) {
+          console.log(`[Card Webhook] Declined: per-tx limit ${card.per_tx_limit_usd} < ${amountUsd}`);
+          return jsonResponse({ approved: false, reason: "per_transaction_limit_exceeded" });
+        }
+
+        // Check daily limit
+        const today = new Date().toISOString().split("T")[0];
+        const dailyTotal = (db.query(
+          "SELECT COALESCE(SUM(amount_cents), 0) as total FROM card_transactions WHERE card_id = ? AND created_at >= ? AND status = 'approved'"
+        ).get(card.id, today) as { total: number }).total;
+        const dailyTotalUsd = dailyTotal / 100;
+        if (dailyTotalUsd + amountUsd > Number(card.daily_limit_usd || 1000)) {
+          console.log(`[Card Webhook] Declined: daily limit ${card.daily_limit_usd} exceeded (${dailyTotalUsd} + ${amountUsd})`);
+          return jsonResponse({ approved: false, reason: "daily_limit_exceeded" });
+        }
+
+        // Check card balance
+        const balanceCents = Number(card.card_balance_usd_cents || 0);
+        if (balanceCents < amountCents) {
+          console.log(`[Card Webhook] Declined: insufficient balance ${balanceCents} < ${amountCents}`);
+          return jsonResponse({ approved: false, reason: "insufficient_funds" });
+        }
+
+        console.log(`[Card Webhook] Approved: $${amountUsd.toFixed(2)} at ${ia.merchant_data?.name || "unknown"}`);
+        return jsonResponse({ approved: true });
+      }
+
+      case "issuing_authorization.created": {
+        const ia = event.data.object as any;
+        console.log(`[Card Webhook] Authorization created: ${ia.id}, approved: ${ia.approved}`);
+        // Log the authorization
+        const card = db.query("SELECT id FROM cards WHERE stripe_card_id = ?").get(ia.card?.id) as Record<string, unknown> | null;
+        if (card) {
+          const txId = randomUUID();
+          db.run(
+            `INSERT INTO card_transactions (id, stripe_tx_id, card_id, amount_cents, merchant_name, tx_type, status, created_at)
+             VALUES (?, ?, ?, ?, ?, 'authorization', ?, ?)`,
+            txId, ia.id, card.id, ia.amount || 0,
+            ia.merchant_data?.name || "Unknown Merchant",
+            ia.approved ? "approved" : "declined",
+            new Date().toISOString()
+          );
+        }
+        return jsonResponse({ received: true });
+      }
+
+      case "issuing_transaction.created": {
+        const itx = event.data.object as any;
+        console.log(`[Card Webhook] Transaction created: ${itx.id}, type: ${itx.type}, amount: $${(itx.amount / 100).toFixed(2)}`);
+
+        const card = db.query("SELECT id, card_balance_usd_cents FROM cards WHERE stripe_card_id = ?").get(itx.card?.id) as Record<string, unknown> | null;
+        if (!card) {
+          console.warn(`[Card Webhook] Card not found for transaction ${itx.id}`);
+          return jsonResponse({ received: true, warning: "card_not_found" });
+        }
+
+        // Deduct from card balance
+        if (itx.type === "capture" && itx.amount > 0) {
+          const newBalance = Math.max(0, Number(card.card_balance_usd_cents) - Number(itx.amount));
+          db.run("UPDATE cards SET card_balance_usd_cents = ? WHERE id = ?", newBalance, card.id);
+        }
+
+        // Record transaction
+        const txId = randomUUID();
+        db.run(
+          `INSERT INTO card_transactions (id, stripe_tx_id, card_id, amount_cents, merchant_name, merchant_category, tx_type, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'settled', ?)`,
+          txId, itx.id, card.id, itx.amount || 0,
+          itx.merchant_data?.name || "Unknown Merchant",
+          itx.merchant_data?.category || null,
+          itx.type === "capture" ? "purchase" : "refund",
+          new Date().toISOString()
+        );
+
+        // Send notification if we have the gateway configured
+        try {
+          const userId = (db.query("SELECT user_id FROM cards WHERE id = ?").get(card.id) as { user_id: string } | null)?.user_id;
+          if (userId) {
+            db.run(
+              `INSERT INTO notifications (id, user_id, title, message, type, read, data, created_at)
+               VALUES (?, ?, ?, ?, 'card_tx', 0, ?, ?)`,
+              randomUUID(), userId,
+              `Card transaction: $${(itx.amount / 100).toFixed(2)}`,
+              `${itx.merchant_data?.name || "Unknown"}: $${(itx.amount / 100).toFixed(2)}`,
+              JSON.stringify({
+                card_id: card.id, last4: itx.card?.last4,
+                amount: itx.amount, merchant: itx.merchant_data?.name,
+              }),
+              new Date().toISOString()
+            );
+          }
+        } catch { /* notification best-effort */ }
+
+        return jsonResponse({ received: true });
+      }
+
+      case "issuing_cardholder.updated": {
+        const chu = event.data.object as any;
+        console.log(`[Card Webhook] Cardholder updated: ${chu.id}`);
+        if (chu.requirements?.disabled_reason) {
+          db.run("UPDATE cardholders SET verification_status = 'rejected' WHERE stripe_cardholder_id = ?", chu.id);
+        } else if (chu.status === "active") {
+          db.run("UPDATE cardholders SET verification_status = 'verified' WHERE stripe_cardholder_id = ?", chu.id);
+        }
+        return jsonResponse({ received: true });
       }
 
       default:
@@ -2537,6 +3126,45 @@ async function handleRequestInner(req: Request): Promise<Response> {
     return handleShieldedProxy(req, "shielded/nullifier-check", "POST");
   }
 
+
+  // ── Card Issuance Endpoints (Feature #14) ─────────────────────────────────
+  if (path === "/cardholders/create" && req.method === "POST") {
+    return handleCardholderCreate(req);
+  }
+  if (path.startsWith("/cardholders/") && req.method === "GET") {
+    const chId = path.split("/")[2];
+    if (chId && chId !== "create") return handleCardholderGet(chId);
+  }
+
+  if (path === "/cards/create" && req.method === "POST") {
+    return handleCardCreate(req);
+  }
+  if (path === "/cards/list" && req.method === "GET") {
+    return handleCardList(req);
+  }
+  if (path.startsWith("/cards/") && req.method === "GET") {
+    const cardId = path.split("/")[2];
+    if (cardId && cardId !== "create" && cardId !== "list") return handleCardGet(cardId);
+  }
+  if (path.match(/^\/cards\/[^\/]+\/activate$/) && req.method === "POST") {
+    return jsonResponse({ message: "Physical card activation via PIN required — contact support" });
+  }
+  if (path.match(/^\/cards\/[^\/]+\/freeze$/) && req.method === "POST") {
+    return handleCardFreeze(req, path.split("/")[2]);
+  }
+  if (path.match(/^\/cards\/[^\/]+\/unfreeze$/) && req.method === "POST") {
+    return handleCardUnfreeze(req, path.split("/")[2]);
+  }
+  if (path.match(/^\/cards\/[^\/]+\/cancel$/) && req.method === "POST") {
+    return handleCardCancel(req, path.split("/")[2]);
+  }
+  if (path.match(/^\/cards\/[^\/]+\/set-limits$/) && req.method === "POST") {
+    return handleCardSetLimits(req, path.split("/")[2]);
+  }
+  if (path.match(/^\/cards\/[^\/]+\/fund$/) && req.method === "POST") {
+    return handleCardFund(req, path.split("/")[2]);
+  }
+
   // REST endpoints
   if (path.startsWith("/rest/v1/")) {
     const parsed = parseUrl(req.url);
@@ -2803,7 +3431,9 @@ console.log(`   Stripe Create PI: ${protocol}://localhost:${PORT}/stripe/create-
 console.log(`   Stripe Webhook: ${protocol}://localhost:${PORT}/stripe/webhook`);
 console.log(`   Treasury Balance: ${protocol}://localhost:${PORT}/treasury/balance`);
 console.log(`   Treasury Tx: ${protocol}://localhost:${PORT}/treasury/transactions`);
-console.log(`   Rate limit: 100 req/min (REST), 20 req/min (/auth/*), 10 req/min (/stripe/*)`);
+console.log(`   Rate limit: 100 req/min (REST), 20 req/min (/auth/*), 10 req/min (/stripe/*, /cards/*, /cardholders/*)`);
+console.log(`   Cards: ${protocol}://localhost:${PORT}/cards/create | /cards/list | /cards/:id | /cards/:id/freeze | /cards/:id/unfreeze | /cards/:id/cancel | /cards/:id/set-limits | /cards/:id/fund`);
+console.log(`   Cardholders: ${protocol}://localhost:${PORT}/cardholders/create | /cardholders/:id`);
 console.log(`   Max body size: 10 MB (default), 1 MB (/auth/*)`);
 console.log(`   Request timeout: 30s`);
 console.log(`   Auth mode: ${IS_DEV_MODE ? "DEV (no API key required)" : "PROTECTED (API key required)"}`);
