@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 use hsmc_core::{Chain, Mempool, governance::GovernanceState, state::StakingState};
 use hsmc_p2p::PeerRegistry;
 use hsmc_starks::ShieldedPool;
+use hsmc_stablecoin::CdpEngine;
 use tracing::info;
 use crate::handlers::*;
 use crate::bridge::*;
@@ -22,6 +23,7 @@ pub struct AppState {
     pub bridge:     Arc<RwLock<BridgeState>>,
     pub oracle:     Arc<hsmc_oracle::Oracle>,
     pub shielded:   Arc<RwLock<ShieldedPool>>,
+    pub stablecoin: Arc<RwLock<CdpEngine>>,
     pub chain_id:   u64,
     pub network:    String,
 }
@@ -44,6 +46,7 @@ pub async fn start_rpc_server(
         oracle: Arc::new(hsmc_oracle::Oracle::with_default_feeds(std::time::Duration::from_secs(30))),
         bridge: Arc::new(RwLock::new(BridgeState::default())),
         shielded,
+        stablecoin: Arc::new(RwLock::new(CdpEngine::new())),
         chain_id: 8888,
         network: "mainnet".into(),
     });
@@ -111,6 +114,16 @@ pub async fn start_rpc_server(
         .route("/shielded/verify",           post(shielded_verify))
         .route("/shielded/state",            get(shielded_pool_state))
         .route("/shielded/nullifier-check",  post(shielded_nullifier_check))
+        // ── Stablecoin (CDP Engine) ────────────────────────────
+        .route("/stablecoin/create",         post(stablecoin_create_cdp))
+        .route("/stablecoin/repay",          post(stablecoin_repay))
+        .route("/stablecoin/liquidate",      post(stablecoin_liquidate))
+        .route("/stablecoin/cdp/:id",        get(stablecoin_cdp_info))
+        .route("/stablecoin/cdps/owner/:addr", get(stablecoin_cdps_by_owner))
+        .route("/stablecoin/prices",         get(stablecoin_prices))
+        .route("/stablecoin/token/:type",    get(stablecoin_token_info))
+        .route("/stablecoin/liquidatable",   get(stablecoin_liquidatable_list))
+        .route("/stablecoin/transfer",       post(stablecoin_transfer))
         .layer(cors)
         .with_state(state);
 

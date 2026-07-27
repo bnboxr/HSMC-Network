@@ -1291,3 +1291,336 @@ fn compute_hashrate(difficulty: u64, blocks: &[Block]) -> String {
     else if hps >= 1e6  { format!("{:.2} MH/s", hps/1e6) }
     else                { format!("{:.2} KH/s", hps/1e3) }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// STABLECOIN — Over-collateralized CDP Engine
+// ═══════════════════════════════════════════════════════════════════
+
+/// POST /stablecoin/create
+/// Body: { "owner": "HSMC_...", "collateral_hsmc": 500.0, "stablecoin_type": "USDHSMC" }
+pub async fn stablecoin_create_cdp(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let owner = match req.get("owner").and_then(|v| v.as_str()) {
+        Some(o) if !o.is_empty() => o.to_string(),
+        _ => return Json(serde_json::json!({ "error": "owner address required" })),
+    };
+    let collateral_hsmc = match req.get("collateral_hsmc").and_then(|v| v.as_f64()) {
+        Some(a) if a > 0.0 => (a * hsmc_stablecoin::HSMC_ATOMIC as f64) as u64,
+        _ => return Json(serde_json::json!({ "error": "collateral_hsmc must be positive" })),
+    };
+    let st_str = match req.get("stablecoin_type").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return Json(serde_json::json!({ "error": "stablecoin_type required (USDHSMC, EURHSMC, XAUHSMC)" })),
+    };
+    let st = match hsmc_stablecoin::StablecoinType::from_str(st_str) {
+        Some(t) => t,
+        None => return Json(serde_json::json!({ "error": format!("Unknown stablecoin: {}", st_str) })),
+    };
+
+    // Fetch prices from oracle
+    let hsmc_price = match state.oracle.get_price("HSMC/USDT").await {
+        Ok(p) => p,
+        Err(e) => return Json(serde_json::json!({ "error": format!("Oracle unavailable: {}", e) })),
+    };
+    let eur_usd = state.oracle.get_price("EUR/USD").await.ok();
+    let xau_usd = state.oracle.get_price("XAU/USD").await.ok();
+
+    let chain = state.chain.read().await;
+    let height = chain.height();
+    drop(chain);
+    let now = chrono::Utc::now().timestamp();
+
+    let mut engine = state.stablecoin.write().await;
+    match engine.create_cdp(owner.clone(), collateral_hsmc, st, height, now, hsmc_price, eur_usd, xau_usd) {
+        Ok(cdp_id) => {
+            let cdp = engine.get_cdp(cdp_id);
+            let debt_normalized = cdp.map(|c| c.debt_amount as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64).unwrap_or(0.0);
+            Json(serde_json::json!({
+                "ok": true,
+                "cdp_id": cdp_id,
+                "owner": owner,
+                "collateral_hsmc": collateral_hsmc as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+                "debt": debt_normalized,
+                "stablecoin_type": st.as_str(),
+                "hsmc_price_usd": hsmc_price,
+                "eur_usd": eur_usd,
+                "xau_usd": xau_usd,
+                "block_height": height,
+            }))
+        }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// POST /stablecoin/repay
+/// Body: { "cdp_id": 1, "repay_amount": 10.0, "action": "close"|"partial" }
+pub async fn stablecoin_repay(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let cdp_id = match req.get("cdp_id").and_then(|v| v.as_u64()) {
+        Some(id) => id,
+        None => return Json(serde_json::json!({ "error": "cdp_id required" })),
+    };
+    let action = req.get("action").and_then(|v| v.as_str()).unwrap_or("close");
+    let now = chrono::Utc::now().timestamp();
+
+    let mut engine = state.stablecoin.write().await;
+
+    match action {
+        "close" => match engine.repay_and_close(cdp_id, now) {
+            Ok((collateral, debt)) => Json(serde_json::json!({
+                "ok": true,
+                "cdp_id": cdp_id,
+                "closed": true,
+                "released_collateral_hsmc": collateral as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+                "debt_repaid": debt as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64,
+            })),
+            Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+        },
+        "partial" => {
+            let repay_amount = match req.get("repay_amount").and_then(|v| v.as_f64()) {
+                Some(a) if a > 0.0 => (a * hsmc_stablecoin::STABLECOIN_ATOMIC as f64) as u64,
+                _ => return Json(serde_json::json!({ "error": "repay_amount must be positive" })),
+            };
+            match engine.repay_partial(cdp_id, repay_amount, now) {
+                Ok(released) => {
+                    let cdp = engine.get_cdp(cdp_id);
+                    Json(serde_json::json!({
+                        "ok": true,
+                        "cdp_id": cdp_id,
+                        "released_collateral_hsmc": released as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+                        "remaining_debt": cdp.map(|c| c.debt_amount as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64).unwrap_or(0.0),
+                        "remaining_collateral": cdp.map(|c| c.collateral_amount as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64).unwrap_or(0.0),
+                    }))
+                }
+                Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+            }
+        }
+        _ => Json(serde_json::json!({ "error": "action must be 'close' or 'partial'" })),
+    }
+}
+
+/// POST /stablecoin/liquidate
+/// Body: { "cdp_id": 1, "liquidator": "HSMC_..." }
+pub async fn stablecoin_liquidate(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let cdp_id = match req.get("cdp_id").and_then(|v| v.as_u64()) {
+        Some(id) => id,
+        None => return Json(serde_json::json!({ "error": "cdp_id required" })),
+    };
+    let liquidator = match req.get("liquidator").and_then(|v| v.as_str()) {
+        Some(l) if !l.is_empty() => l.to_string(),
+        None => return Json(serde_json::json!({ "error": "liquidator address required" })),
+    };
+
+    let hsmc_price = match state.oracle.get_price("HSMC/USDT").await {
+        Ok(p) => p,
+        Err(e) => return Json(serde_json::json!({ "error": format!("Oracle unavailable: {}", e) })),
+    };
+    let eur_usd = state.oracle.get_price("EUR/USD").await.ok();
+    let xau_usd = state.oracle.get_price("XAU/USD").await.ok();
+    let now = chrono::Utc::now().timestamp();
+
+    let mut engine = state.stablecoin.write().await;
+    match engine.liquidate(cdp_id, liquidator, now, hsmc_price, eur_usd, xau_usd) {
+        Ok(result) => Json(serde_json::json!({
+            "ok": true,
+            "cdp_id": result.cdp_id,
+            "liquidator": result.liquidator,
+            "original_owner": result.original_owner,
+            "debt_repaid": result.debt_repaid as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64,
+            "collateral_seized": result.collateral_seized as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+            "penalty": result.penalty as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+            "liquidator_reward": result.liquidator_reward as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+            "stablecoin_type": result.stablecoin_type.as_str(),
+        })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// GET /stablecoin/cdp/:id
+pub async fn stablecoin_cdp_info(
+    State(state): State<Arc<AppState>>,
+    Path(cdp_id): Path<u64>,
+) -> Json<serde_json::Value> {
+    let engine = state.stablecoin.read().await;
+
+    let hsmc_price = state.oracle.get_price("HSMC/USDT").await.ok().unwrap_or(0.0);
+    let eur_usd = state.oracle.get_price("EUR/USD").await.ok();
+    let xau_usd = state.oracle.get_price("XAU/USD").await.ok();
+
+    match engine.get_cdp_health(cdp_id, hsmc_price, eur_usd, xau_usd) {
+        Ok(health) => {
+            let cdp = engine.get_cdp(cdp_id);
+            Json(serde_json::json!({
+                "cdp_id": health.cdp_id,
+                "owner": cdp.map(|c| &c.owner),
+                "collateral_hsmc": health.collateral_amount as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+                "debt": health.debt_amount as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64,
+                "stablecoin_type": health.stablecoin_type.as_str(),
+                "ratio_bps": health.ratio_bps,
+                "ratio_percent": health.ratio_bps as f64 / 100.0,
+                "min_ratio_bps": health.min_ratio_bps,
+                "liquidation_ratio_bps": health.liquidation_ratio_bps,
+                "liquidation_price": health.liquidation_price,
+                "is_healthy": health.is_healthy,
+                "is_undercollateralized": health.is_undercollateralized,
+                "active": cdp.map(|c| c.active).unwrap_or(false),
+                "creation_block": cdp.map(|c| c.creation_block),
+                "hsmc_price_usd": hsmc_price,
+            }))
+        }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// GET /stablecoin/cdps/owner/:addr
+pub async fn stablecoin_cdps_by_owner(
+    State(state): State<Arc<AppState>>,
+    Path(addr): Path<String>,
+) -> Json<serde_json::Value> {
+    let engine = state.stablecoin.read().await;
+    let cdps: Vec<serde_json::Value> = engine
+        .get_cdps_by_owner(&addr)
+        .iter()
+        .map(|c| serde_json::json!({
+            "cdp_id": c.id,
+            "collateral_hsmc": c.collateral_amount as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+            "debt": c.debt_amount as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64,
+            "stablecoin_type": c.stablecoin_type.as_str(),
+            "creation_block": c.creation_block,
+        }))
+        .collect();
+
+    Json(serde_json::json!({
+        "owner": addr,
+        "cdp_count": cdps.len(),
+        "cdps": cdps,
+    }))
+}
+
+/// GET /stablecoin/prices
+pub async fn stablecoin_prices(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let hsmc_price = state.oracle.get_price("HSMC/USDT").await.ok();
+    let eur_usd = state.oracle.get_price("EUR/USD").await.ok();
+    let xau_usd = state.oracle.get_price("XAU/USD").await.ok();
+
+    Json(serde_json::json!({
+        "hsmc_usd": hsmc_price,
+        "eur_usd": eur_usd,
+        "xau_usd": xau_usd,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+/// GET /stablecoin/token/:type
+pub async fn stablecoin_token_info(
+    State(state): State<Arc<AppState>>,
+    Path(token_type): Path<String>,
+) -> Json<serde_json::Value> {
+    let st = match hsmc_stablecoin::StablecoinType::from_str(&token_type) {
+        Some(t) => t,
+        None => return Json(serde_json::json!({ "error": format!("Unknown stablecoin: {}", token_type) })),
+    };
+
+    let engine = state.stablecoin.read().await;
+    let supply = engine.total_supply(st);
+    let config = match st {
+        hsmc_stablecoin::StablecoinType::UsdHsmc => &engine.usd_config,
+        hsmc_stablecoin::StablecoinType::EurHsmc => &engine.eur_config,
+        hsmc_stablecoin::StablecoinType::XauHsmc => &engine.xau_config,
+    };
+
+    Json(serde_json::json!({
+        "token": st.as_str(),
+        "total_supply": supply as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64,
+        "total_supply_atomic": supply,
+        "min_collateral_ratio_percent": config.min_collateral_ratio_bps as f64 / 100.0,
+        "liquidation_ratio_percent": config.liquidation_ratio_bps as f64 / 100.0,
+        "liquidation_penalty_percent": config.liquidation_penalty_bps as f64 / 100.0,
+        "stability_fee_apr_percent": config.stability_fee_rate_bps as f64 / 100.0,
+    }))
+}
+
+/// GET /stablecoin/liquidatable
+pub async fn stablecoin_liquidatable_list(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let hsmc_price = match state.oracle.get_price("HSMC/USDT").await {
+        Ok(p) => p,
+        Err(e) => return Json(serde_json::json!({ "error": format!("Oracle unavailable: {}", e) })),
+    };
+    let eur_usd = state.oracle.get_price("EUR/USD").await.ok();
+    let xau_usd = state.oracle.get_price("XAU/USD").await.ok();
+
+    let engine = state.stablecoin.read().await;
+    let ids = engine.get_liquidatable_cdps(hsmc_price, eur_usd, xau_usd);
+
+    let details: Vec<serde_json::Value> = ids
+        .iter()
+        .filter_map(|&id| {
+            engine.get_cdp(id).map(|c| {
+                serde_json::json!({
+                    "cdp_id": c.id,
+                    "owner": c.owner,
+                    "collateral_hsmc": c.collateral_amount as f64 / hsmc_stablecoin::HSMC_ATOMIC as f64,
+                    "debt": c.debt_amount as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64,
+                    "stablecoin_type": c.stablecoin_type.as_str(),
+                })
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "count": details.len(),
+        "hsmc_price_usd": hsmc_price,
+        "liquidatable_cdps": details,
+    }))
+}
+
+/// POST /stablecoin/transfer
+/// Body: { "from": "...", "to": "...", "amount": 10.0, "stablecoin_type": "USDHSMC" }
+pub async fn stablecoin_transfer(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let from = match req.get("from").and_then(|v| v.as_str()) {
+        Some(a) if !a.is_empty() => a,
+        None => return Json(serde_json::json!({ "error": "from address required" })),
+    };
+    let to = match req.get("to").and_then(|v| v.as_str()) {
+        Some(a) if !a.is_empty() => a,
+        None => return Json(serde_json::json!({ "error": "to address required" })),
+    };
+    let amount = match req.get("amount").and_then(|v| v.as_f64()) {
+        Some(a) if a > 0.0 => (a * hsmc_stablecoin::STABLECOIN_ATOMIC as f64) as u64,
+        _ => return Json(serde_json::json!({ "error": "amount must be positive" })),
+    };
+    let st_str = match req.get("stablecoin_type").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return Json(serde_json::json!({ "error": "stablecoin_type required" })),
+    };
+    let st = match hsmc_stablecoin::StablecoinType::from_str(st_str) {
+        Some(t) => t,
+        None => return Json(serde_json::json!({ "error": format!("Unknown stablecoin: {}", st_str) })),
+    };
+
+    let mut engine = state.stablecoin.write().await;
+    match engine.transfer(from, to, amount, st) {
+        Ok(()) => Json(serde_json::json!({
+            "ok": true,
+            "from": from,
+            "to": to,
+            "amount": amount as f64 / hsmc_stablecoin::STABLECOIN_ATOMIC as f64,
+            "stablecoin_type": st.as_str(),
+        })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}

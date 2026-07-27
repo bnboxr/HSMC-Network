@@ -1128,6 +1128,7 @@ dependencies = [
  "hsmc-crypto",
  "hsmc-oracle",
  "hsmc-p2p",
+ "hsmc-stablecoin",
  "hsmc-starks",
  "reqwest",
  "serde",
@@ -1137,6 +1138,22 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "hsmc-stablecoin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "parking_lot",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]

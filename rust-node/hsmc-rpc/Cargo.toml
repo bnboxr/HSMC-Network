@@ -21,4 +21,5 @@ hsmc-p2p    = { path = "../hsmc-p2p" }
 hsmc-crypto = { path = "../hsmc-crypto" }
 hsmc-oracle = { path = "../hsmc-oracle" }
 hsmc-starks = { path = "../hsmc-starks" }
+hsmc-stablecoin = { path = "../hsmc-stablecoin" }
 

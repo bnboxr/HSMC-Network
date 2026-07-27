@@ -13,6 +13,7 @@ members = [
     "hsmc-pos",
     "hsmc-mpc",
     "hsmc-starks",
+    "hsmc-stablecoin",
 ]
 
 [workspace.dependencies]
