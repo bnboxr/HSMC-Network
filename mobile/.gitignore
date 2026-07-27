@@ -1,0 +1,23 @@
+# HSMC Mobile Wallet — React Native
+
+node_modules/
+.expo/
+dist/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+.env
+.env.local
+.env.production
+ios/Pods/
+android/.gradle/
+android/app/build/
+android/build/
+*.hprof
+metro-cache/
+.DS_Store
+*.tsbuildinfo
