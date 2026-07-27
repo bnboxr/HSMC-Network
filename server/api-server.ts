@@ -2520,6 +2520,23 @@ async function handleRequestInner(req: Request): Promise<Response> {
     return handleInternalTransfer(req);
   }
 
+  // ── Shielded Pool (zk-STARK privacy pool) — proxy to Rust node ──────────────
+  if (path === "/shielded/deposit" && req.method === "POST") {
+    return handleShieldedProxy(req, "shielded/deposit", "POST");
+  }
+  if (path === "/shielded/withdraw" && req.method === "POST") {
+    return handleShieldedProxy(req, "shielded/withdraw", "POST");
+  }
+  if (path === "/shielded/verify" && req.method === "POST") {
+    return handleShieldedProxy(req, "shielded/verify", "POST");
+  }
+  if (path === "/shielded/state" && req.method === "GET") {
+    return handleShieldedProxy(req, "shielded/state", "GET");
+  }
+  if (path === "/shielded/nullifier-check" && req.method === "POST") {
+    return handleShieldedProxy(req, "shielded/nullifier-check", "POST");
+  }
+
   // REST endpoints
   if (path.startsWith("/rest/v1/")) {
     const parsed = parseUrl(req.url);
@@ -2706,6 +2723,50 @@ async function handleRequestInner(req: Request): Promise<Response> {
   }
 
   return errorResponse("Not found", 404);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Shielded Pool proxy — forwards to HSMC Rust node (port 8080)
+// ══════════════════════════════════════════════════════════════════════════════
+
+const NODE_RPC_URL = process.env.HSMC_NODE_RPC || "http://127.0.0.1:8080";
+
+async function handleShieldedProxy(req: Request, endpoint: string, method: string): Promise<Response> {
+  try {
+    const url = `${NODE_RPC_URL}/${endpoint}`;
+    const fetchOpts: RequestInit = {
+      method,
+      headers: { "Content-Type": "application/json" },
+    };
+    if (method !== "GET") {
+      const body = await req.json().catch(() => ({}));
+      fetchOpts.body = JSON.stringify(body);
+    }
+    const nodeResp = await fetch(url, fetchOpts);
+    const data = await nodeResp.json().catch(() => ({ error: "Invalid JSON from node" }));
+    return new Response(JSON.stringify(data), {
+      status: nodeResp.status,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": CORS_ORIGIN,
+        ...securityHeaders(USING_TLS),
+      },
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[Shielded Proxy] Error contacting node at ${NODE_RPC_URL}/${endpoint}:`, msg);
+    return new Response(JSON.stringify({
+      error: "Shielded pool unavailable — Rust node not reachable",
+      detail: msg,
+    }), {
+      status: 502,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": CORS_ORIGIN,
+        ...securityHeaders(USING_TLS),
+      },
+    });
+  }
+}
 }
 
 // ── Start Server ──────────────────────────────────────────────────────────────

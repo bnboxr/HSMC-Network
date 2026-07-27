@@ -1071,6 +1071,197 @@ pub async fn oracle_price(
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// SHIELDED POOL — zk-STARK private transaction pool
+// ═══════════════════════════════════════════════════════════════════
+
+/// POST /shielded/deposit
+/// Body: { "amount_satoshis": 100000000 }
+/// Returns: { note, proof, commitment_hex, tvl }
+pub async fn shielded_deposit(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let amount = match req.get("amount_satoshis").and_then(|v| v.as_u64()) {
+        Some(a) if a > 0 => a,
+        _ => return Json(serde_json::json!({
+            "error": "amount_satoshis required (positive u64)"
+        })),
+    };
+
+    let mut pool = state.shielded.write().await;
+    match pool.deposit(amount) {
+        Ok((note, proof)) => {
+            let proof_json = hsmc_starks::StarkProof(proof).to_json();
+            Json(serde_json::json!({
+                "ok": true,
+                "note": {
+                    "commitment": hex::encode(note.commitment),
+                    "amount": note.amount,
+                    "blinding": hex::encode(note.blinding),
+                    "leaf_index": note.leaf_index,
+                },
+                "proof": proof_json,
+                "tvl": pool.total_value_locked,
+                "note_count": pool.notes.len(),
+            }))
+        }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// POST /shielded/withdraw
+/// Body: { "note": { "commitment": "hex", "amount": 1000, "blinding": "hex", "leaf_index": 0 }, "secret_hex": "hex..." }
+/// Returns: { amount, proof, nullifier_hex }
+pub async fn shielded_withdraw(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    // Parse note
+    let note_obj = match req.get("note") {
+        Some(n) => n,
+        None => return Json(serde_json::json!({ "error": "note object required" })),
+    };
+    let secret_hex = match req.get("secret_hex").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return Json(serde_json::json!({ "error": "secret_hex required" })),
+    };
+
+    let commitment_hex = note_obj.get("commitment").and_then(|v| v.as_str()).unwrap_or("");
+    let blinding_hex = note_obj.get("blinding").and_then(|v| v.as_str()).unwrap_or("");
+    let amount = note_obj.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
+    let leaf_index = note_obj.get("leaf_index").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    let mut commitment = [0u8; 32];
+    let mut blinding = [0u8; 32];
+    let mut secret = [0u8; 32];
+
+    if let Ok(b) = hex::decode(commitment_hex) { if b.len() == 32 { commitment.copy_from_slice(&b); } }
+    else { return Json(serde_json::json!({ "error": "Invalid commitment hex" })); }
+    if let Ok(b) = hex::decode(blinding_hex) { if b.len() == 32 { blinding.copy_from_slice(&b); } }
+    else { return Json(serde_json::json!({ "error": "Invalid blinding hex" })); }
+    if let Ok(b) = hex::decode(secret_hex) { if b.len() == 32 { secret.copy_from_slice(&b); } }
+    else { return Json(serde_json::json!({ "error": "Invalid secret hex" })); }
+
+    let note = hsmc_starks::Note {
+        commitment,
+        amount,
+        blinding,
+        leaf_index,
+    };
+
+    let mut pool = state.shielded.write().await;
+    match pool.withdraw(&note, &secret) {
+        Ok((wd_amount, proof)) => {
+            let nullifier = hsmc_starks::ShieldedPool::derive_nullifier(&commitment, &secret, leaf_index);
+            let proof_json = hsmc_starks::StarkProof(proof).to_json();
+            Json(serde_json::json!({
+                "ok": true,
+                "amount": wd_amount,
+                "nullifier": hex::encode(nullifier.0),
+                "proof": proof_json,
+                "tvl": pool.total_value_locked,
+            }))
+        }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// POST /shielded/verify
+/// Body: { "proof": { "proof_hex": "..." }, "pub_inputs": { "merkle_root": "hex", "operation": 0, "nullifier": "hex" } }
+pub async fn shielded_verify(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let proof_json = match req.get("proof") {
+        Some(p) => p,
+        None => return Json(serde_json::json!({ "error": "proof object required" })),
+    };
+    let pub_inputs = match req.get("pub_inputs") {
+        Some(p) => p,
+        None => return Json(serde_json::json!({ "error": "pub_inputs object required" })),
+    };
+
+    let stark_proof = match hsmc_starks::StarkProof::from_json(proof_json) {
+        Ok(sp) => sp,
+        Err(e) => return Json(serde_json::json!({ "error": format!("Invalid proof: {}", e) })),
+    };
+
+    let merkle_root_hex = pub_inputs.get("merkle_root").and_then(|v| v.as_str()).unwrap_or("");
+    let operation = pub_inputs.get("operation").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+    let nullifier_hex = pub_inputs.get("nullifier").and_then(|v| v.as_str()).unwrap_or("");
+
+    let mut merkle_root = [0u8; 32];
+    let mut nullifier_bytes = [0u8; 32];
+    if let Ok(b) = hex::decode(merkle_root_hex) { if b.len() == 32 { merkle_root.copy_from_slice(&b); } }
+    if let Ok(b) = hex::decode(nullifier_hex) { if b.len() == 32 { nullifier_bytes.copy_from_slice(&b); } }
+
+    let pub_inputs_struct = hsmc_starks::PoolPublicInputs {
+        merkle_root,
+        operation,
+        nullifier: hsmc_starks::Nullifier(nullifier_bytes),
+    };
+
+    let pool = state.shielded.read().await;
+    match pool.verify_proof(&stark_proof.0, &pub_inputs_struct) {
+        Ok(()) => Json(serde_json::json!({
+            "valid": true,
+            "operation": operation,
+        })),
+        Err(e) => Json(serde_json::json!({
+            "valid": false,
+            "error": e.to_string(),
+        })),
+    }
+}
+
+/// GET /shielded/state
+/// Returns: { tvl, note_count, root_hex, depth }
+pub async fn shielded_pool_state(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let pool = state.shielded.read().await;
+    Json(serde_json::json!({
+        "tvl": pool.total_value_locked,
+        "note_count": pool.notes.len(),
+        "root_hex": hex::encode(pool.tree.root()),
+        "depth": pool.depth,
+        "nullifier_count": pool.nullifier_set.len(),
+    }))
+}
+
+/// POST /shielded/nullifier-check
+/// Body: { "nullifier_hex": "hex..." }
+/// Returns: { spent: bool }
+pub async fn shielded_nullifier_check(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let nullifier_hex = match req.get("nullifier_hex").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return Json(serde_json::json!({ "error": "nullifier_hex required" })),
+    };
+
+    let mut nullifier_bytes = [0u8; 32];
+    if let Ok(b) = hex::decode(nullifier_hex) {
+        if b.len() == 32 {
+            nullifier_bytes.copy_from_slice(&b);
+        } else {
+            return Json(serde_json::json!({ "error": "nullifier must be 32 bytes" }));
+        }
+    } else {
+        return Json(serde_json::json!({ "error": "Invalid nullifier hex" }));
+    }
+
+    let pool = state.shielded.read().await;
+    let nullifier = hsmc_starks::Nullifier(nullifier_bytes);
+    let spent = pool.nullifier_set.contains(&nullifier);
+    Json(serde_json::json!({
+        "nullifier": nullifier_hex,
+        "spent": spent,
+    }))
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════
 

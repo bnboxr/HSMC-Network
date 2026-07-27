@@ -29,6 +29,7 @@ use hsmc_core::{
 };
 use hsmc_p2p::{PeerRegistry, SyncService};
 use hsmc_rpc::server::start_rpc_server;
+use hsmc_starks::ShieldedPool;
 use hsmc_stratum::StratumServer;
 use hsmc_storage::{open_db, BlockStore, TxStore, MempoolStore, StateStore, UtxoStore};
 
@@ -150,6 +151,151 @@ fn env_usize(k: &str, default: usize) -> usize {
     std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
+// ── CLI: Shielded Pool commands ─────────────────────────────────────────────
+// Usage: hsmc-node shielded <subcommand> [args...]
+
+fn run_shielded_cli() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 3 || args[1] != "shielded" {
+        return Ok(()); // Not a shielded CLI command — proceed to server
+    }
+
+    let mut pool = ShieldedPool::new(16);
+    // Try loading existing state
+    let data_dir = env_str("HSMC_DATA_DIR", "./hsmc-data");
+    let path = std::path::Path::new(&data_dir).join("shielded_pool.json");
+    if path.exists() {
+        if let Ok(json_str) = std::fs::read_to_string(&path) {
+            if let Ok(saved) = serde_json::from_str::<ShieldedPool>(&json_str) {
+                pool.tree = saved.tree;
+                pool.nullifier_set = saved.nullifier_set;
+                pool.total_value_locked = saved.total_value_locked;
+                pool.notes = saved.notes;
+            }
+        }
+    }
+
+    match args[2].as_str() {
+        "deposit" => {
+            if args.len() < 4 {
+                eprintln!("Usage: hsmc-node shielded deposit <amount_satoshis>");
+                std::process::exit(1);
+            }
+            let amount: u64 = args[3].parse().map_err(|_| anyhow::anyhow!("Invalid amount"))?;
+            match pool.deposit(amount) {
+                Ok((note, proof)) => {
+                    let proof_json = hsmc_starks::StarkProof(proof).to_json();
+                    println!("{}", serde_json::json!({
+                        "ok": true,
+                        "note": {
+                            "commitment": hex::encode(note.commitment),
+                            "amount": note.amount,
+                            "blinding": hex::encode(note.blinding),
+                            "leaf_index": note.leaf_index,
+                        },
+                        "proof": proof_json,
+                    }));
+                    // Persist
+                    if let Ok(json_str) = serde_json::to_string(&pool) {
+                        let _ = std::fs::write(&path, &json_str);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "withdraw" => {
+            if args.len() < 5 {
+                eprintln!("Usage: hsmc-node shielded withdraw <note_json> <secret_hex>");
+                std::process::exit(1);
+            }
+            let note_json: serde_json::Value = serde_json::from_str(&args[3])
+                .map_err(|_| anyhow::anyhow!("Invalid note JSON"))?;
+            let secret_hex = &args[4];
+
+            let commitment_hex = note_json["commitment"].as_str().unwrap_or("");
+            let blinding_hex = note_json["blinding"].as_str().unwrap_or("");
+            let amount = note_json["amount"].as_u64().unwrap_or(0);
+            let leaf_index = note_json["leaf_index"].as_u64().unwrap_or(0);
+
+            let mut commitment = [0u8; 32];
+            let mut blinding = [0u8; 32];
+            let mut secret = [0u8; 32];
+            hex::decode_to_slice(commitment_hex, &mut commitment).map_err(|_| anyhow::anyhow!("Invalid commitment"))?;
+            hex::decode_to_slice(blinding_hex, &mut blinding).map_err(|_| anyhow::anyhow!("Invalid blinding"))?;
+            hex::decode_to_slice(secret_hex, &mut secret).map_err(|_| anyhow::anyhow!("Invalid secret"))?;
+
+            let note = hsmc_starks::Note { commitment, amount, blinding, leaf_index };
+            match pool.withdraw(&note, &secret) {
+                Ok((wd_amount, proof)) => {
+                    let nullifier = ShieldedPool::derive_nullifier(&commitment, &secret, leaf_index);
+                    let proof_json = hsmc_starks::StarkProof(proof).to_json();
+                    println!("{}", serde_json::json!({
+                        "ok": true,
+                        "amount": wd_amount,
+                        "nullifier": hex::encode(nullifier.0),
+                        "proof": proof_json,
+                    }));
+                    if let Ok(json_str) = serde_json::to_string(&pool) {
+                        let _ = std::fs::write(&path, &json_str);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "verify" => {
+            if args.len() < 5 {
+                eprintln!("Usage: hsmc-node shielded verify <proof_json> <pub_inputs_json>");
+                std::process::exit(1);
+            }
+            let proof_json: serde_json::Value = serde_json::from_str(&args[3])
+                .map_err(|_| anyhow::anyhow!("Invalid proof JSON"))?;
+            let pub_inputs: serde_json::Value = serde_json::from_str(&args[4])
+                .map_err(|_| anyhow::anyhow!("Invalid pub_inputs JSON"))?;
+
+            let stark_proof = hsmc_starks::StarkProof::from_json(&proof_json)
+                .map_err(|e| anyhow::anyhow!("Invalid proof: {}", e))?;
+
+            let mut merkle_root = [0u8; 32];
+            let mut nullifier_bytes = [0u8; 32];
+            let mr_hex = pub_inputs["merkle_root"].as_str().unwrap_or("");
+            let nf_hex = pub_inputs["nullifier"].as_str().unwrap_or("");
+            hex::decode_to_slice(mr_hex, &mut merkle_root).unwrap_or_default();
+            hex::decode_to_slice(nf_hex, &mut nullifier_bytes).unwrap_or_default();
+
+            let pi = hsmc_starks::PoolPublicInputs {
+                merkle_root,
+                operation: pub_inputs["operation"].as_u64().unwrap_or(0) as u8,
+                nullifier: hsmc_starks::Nullifier(nullifier_bytes),
+            };
+
+            match pool.verify_proof(&stark_proof.0, &pi) {
+                Ok(()) => println!("{}", serde_json::json!({"valid": true})),
+                Err(e) => println!("{}", serde_json::json!({"valid": false, "error": e.to_string()})),
+            }
+        }
+        "stats" => {
+            println!("{}", serde_json::json!({
+                "tvl": pool.total_value_locked,
+                "note_count": pool.notes.len(),
+                "root_hex": hex::encode(pool.tree.root()),
+                "depth": pool.depth,
+                "nullifier_count": pool.nullifier_set.len(),
+            }));
+        }
+        cmd => {
+            eprintln!("Unknown shielded command: {}\nCommands: deposit, withdraw, verify, stats", cmd);
+            std::process::exit(1);
+        }
+    }
+    std::process::exit(0);
+}
+
 // ── Shared application state ──────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -168,6 +314,9 @@ pub struct AppState {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = NodeConfig::from_env();
+
+    // ── CLI mode: handle shielded subcommands ──────────────────────────────────
+    run_shielded_cli()?;
 
     // ── Logging ──────────────────────────────────────────────────────────────
     tracing_subscriber::fmt()
@@ -202,6 +351,7 @@ async fn main() -> Result<()> {
     let governance = Arc::new(RwLock::new(GovernanceState::new()));
     let fee_market = Arc::new(RwLock::new(FeeMarket::new()));
     let staking    = Arc::new(RwLock::new(StakingState::new()));
+    let shielded   = Arc::new(RwLock::new(ShieldedPool::new(16)));
     let peers      = Arc::new(PeerRegistry::new());
 
     let app = AppState {
@@ -228,6 +378,9 @@ async fn main() -> Result<()> {
 
     // ── Restore staking registry ──────────────────────────────────────────────
     restore_staking(&staking, &state_store).await;
+
+    // ── Restore shielded pool ────────────────────────────────────────────────
+    restore_shielded_pool(&shielded, &cfg.data_dir).await;
 
     // ── Spawn background services ─────────────────────────────────────────────
     let node_start = Instant::now();
@@ -281,10 +434,11 @@ async fn main() -> Result<()> {
     let rpc_peers     = peers.clone();
     let rpc_gov       = governance.clone();
     let rpc_staking   = staking.clone();
+    let rpc_shielded  = shielded.clone();
     let rpc_port      = cfg.rpc_port;
     let mut rx        = shutdown_tx.subscribe();
     tokio::select! {
-        res = start_rpc_server(rpc_chain, rpc_mempool, rpc_peers, rpc_gov, rpc_staking, rpc_port) => {
+        res = start_rpc_server(rpc_chain, rpc_mempool, rpc_peers, rpc_gov, rpc_staking, rpc_shielded, rpc_port) => {
             if let Err(e) = res { error!("RPC server error: {}", e); }
         }
         _ = rx.recv() => { info!("RPC server shutting down"); }
@@ -292,7 +446,7 @@ async fn main() -> Result<()> {
 
     // ── Flush RocksDB before exit ─────────────────────────────────────────────
     info!("💾 Flushing state to RocksDB...");
-    flush_state(&chain, &mempool, &staking, &governance,
+    flush_state(&chain, &mempool, &staking, &governance, &shielded,
                 &block_store, &mempool_store, &state_store).await;
     info!("✅ Node shutdown complete");
     Ok(())
@@ -389,6 +543,32 @@ async fn restore_staking(staking: &Arc<RwLock<StakingState>>, state: &Arc<StateS
         }
         Ok(None) => info!("🥩 Staking registry: no prior state"),
         Err(e)   => warn!("⚠️  Staking restore failed: {}", e),
+    }
+}
+
+async fn restore_shielded_pool(shielded: &Arc<RwLock<ShieldedPool>>, data_dir: &str) {
+    let path = std::path::Path::new(data_dir).join("shielded_pool.json");
+    if path.exists() {
+        match std::fs::read_to_string(&path) {
+            Ok(json_str) => {
+                match serde_json::from_str::<ShieldedPool>(&json_str) {
+                    Ok(pool) => {
+                        let mut sp = shielded.write().await;
+                        sp.tree = pool.tree;
+                        sp.nullifier_set = pool.nullifier_set;
+                        sp.total_value_locked = pool.total_value_locked;
+                        sp.notes = pool.notes;
+                        sp.depth = pool.depth;
+                        info!("🔒 Shielded pool restored: {} notes, TVL={}",
+                            sp.notes.len(), sp.total_value_locked);
+                    }
+                    Err(e) => warn!("⚠️  Shielded pool deserialization failed: {}", e),
+                }
+            }
+            Err(e) => warn!("⚠️  Cannot read shielded pool state: {}", e),
+        }
+    } else {
+        info!("🔒 Shielded pool: fresh state (no prior data)");
     }
 }
 
@@ -814,6 +994,7 @@ async fn flush_state(
     mempool: &Arc<RwLock<Mempool>>,
     staking: &Arc<RwLock<StakingState>>,
     governance: &Arc<RwLock<GovernanceState>>,
+    shielded: &Arc<RwLock<ShieldedPool>>,
     block_store: &Arc<BlockStore>,
     mempool_store: &Arc<MempoolStore>,
     state_store: &Arc<StateStore>,
@@ -853,6 +1034,24 @@ async fn flush_state(
             warn!("Flush: governance snapshot failed: {}", e);
         } else {
             info!("  ✓ Governance state persisted");
+        }
+    }
+
+    // Persist shielded pool
+    {
+        let sp = shielded.read().await;
+        match serde_json::to_string(&*sp) {
+            Ok(json_str) => {
+                let path = std::path::Path::new(".").join("shielded_pool.json");
+                // Use the data_dir that was provided at startup
+                if let Err(e) = std::fs::write("shielded_pool.json", &json_str) {
+                    warn!("Flush: shielded pool persist failed: {}", e);
+                } else {
+                    info!("  ✓ Shielded pool persisted ({} notes, TVL={})",
+                        sp.notes.len(), sp.total_value_locked);
+                }
+            }
+            Err(e) => warn!("Flush: shielded pool serialization failed: {}", e),
         }
     }
 }

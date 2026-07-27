@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use hsmc_core::{Chain, Mempool, governance::GovernanceState, state::StakingState};
 use hsmc_p2p::PeerRegistry;
+use hsmc_starks::ShieldedPool;
 use tracing::info;
 use crate::handlers::*;
 use crate::bridge::*;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub staking:    Arc<RwLock<StakingState>>,
     pub bridge:     Arc<RwLock<BridgeState>>,
     pub oracle:     Arc<hsmc_oracle::Oracle>,
+    pub shielded:   Arc<RwLock<ShieldedPool>>,
     pub chain_id:   u64,
     pub network:    String,
 }
@@ -30,6 +32,7 @@ pub async fn start_rpc_server(
     peers:      Arc<PeerRegistry>,
     governance: Arc<RwLock<GovernanceState>>,
     staking:    Arc<RwLock<StakingState>>,
+    shielded:   Arc<RwLock<ShieldedPool>>,
     port:       u16,
 ) -> anyhow::Result<()> {
     let state = Arc::new(AppState {
@@ -40,6 +43,7 @@ pub async fn start_rpc_server(
         staking,
         oracle: Arc::new(hsmc_oracle::Oracle::with_default_feeds(std::time::Duration::from_secs(30))),
         bridge: Arc::new(RwLock::new(BridgeState::default())),
+        shielded,
         chain_id: 8888,
         network: "mainnet".into(),
     });
@@ -101,6 +105,12 @@ pub async fn start_rpc_server(
         .route("/crypto/range-proof",      post(generate_range_proof))
         // ── Oracle (multi-source price feed) ─────────────────────
         .route("/oracle/price/:pair",      get(oracle_price))
+        // ── Shielded Pool (zk-STARK privacy pool) ─────────────
+        .route("/shielded/deposit",          post(shielded_deposit))
+        .route("/shielded/withdraw",         post(shielded_withdraw))
+        .route("/shielded/verify",           post(shielded_verify))
+        .route("/shielded/state",            get(shielded_pool_state))
+        .route("/shielded/nullifier-check",  post(shielded_nullifier_check))
         .layer(cors)
         .with_state(state);
 

@@ -132,6 +132,50 @@ pub struct MerkleTree {
     leaf_count: u64,
 }
 
+impl Serialize for MerkleTree {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("MerkleTree", 3)?;
+        st.serialize_field("depth", &self.depth)?;
+        // Serialize default_nodes as hex strings
+        let hex_nodes: Vec<String> = self.default_nodes.iter().map(|n| hex::encode(n)).collect();
+        st.serialize_field("default_nodes", &hex_nodes)?;
+        // Serialize nodes map as Vec of ((level,idx), hex)
+        let entries: Vec<((usize, u64), String)> = self.nodes.iter()
+            .map(|(k, v)| (*k, hex::encode(v)))
+            .collect();
+        st.serialize_field("nodes", &entries)?;
+        st.serialize_field("leaf_count", &self.leaf_count)?;
+        st.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for MerkleTree {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct MtHelper {
+            depth: usize,
+            default_nodes: Vec<String>,
+            nodes: Vec<((usize, u64), String)>,
+            leaf_count: u64,
+        }
+        let h = MtHelper::deserialize(d)?;
+        let default_nodes: Vec<[u8; 32]> = h.default_nodes.iter().map(|s| {
+            let mut arr = [0u8; 32];
+            let bytes = hex::decode(s).map_err(serde::de::Error::custom)?;
+            arr.copy_from_slice(&bytes);
+            Ok(arr)
+        }).collect::<Result<_, D::Error>>()?;
+        let nodes: HashMap<(usize, u64), [u8; 32]> = h.nodes.into_iter().map(|(k, s)| {
+            let mut arr = [0u8; 32];
+            let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+            arr.copy_from_slice(&bytes);
+            Ok((k, arr))
+        }).collect::<Result<_, D::Error>>()?;
+        Ok(MerkleTree { depth: h.depth, default_nodes, nodes, leaf_count: h.leaf_count })
+    }
+}
+
 impl MerkleTree {
     pub fn new(depth: usize) -> Self {
         let mut default_nodes = vec![[0u8; 32]; depth + 1];
@@ -362,6 +406,27 @@ impl Prover for PoolProver {
 // ShieldedPool — the main pool implementation
 // ═══════════════════════════════════════════════════════════════════════════════════
 
+/// Serializable wrapper for winterfell Proof.
+/// winterfell::Proof has to_bytes()/from_bytes() but no serde impl.
+#[derive(Debug, Clone)]
+pub struct StarkProof(pub Proof);
+
+impl StarkProof {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "proof_hex": hex::encode(self.0.to_bytes())
+        })
+    }
+    pub fn from_json(json: &serde_json::Value) -> Result<Self, String> {
+        let hex_str = json.get("proof_hex")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing proof_hex field")?;
+        let bytes = hex::decode(hex_str).map_err(|e| e.to_string())?;
+        let proof = Proof::from_bytes(&bytes).map_err(|e| format!("{:?}", e))?;
+        Ok(StarkProof(proof))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ShieldedPool {
     pub depth: usize,
@@ -370,6 +435,50 @@ pub struct ShieldedPool {
     pub total_value_locked: u64,
     pub notes: Vec<Note>,
     pub proof_options: ProofOptions,
+}
+
+impl Serialize for ShieldedPool {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("ShieldedPool", 6)?;
+        st.serialize_field("depth", &self.depth)?;
+        st.serialize_field("tree", &self.tree)?;
+        st.serialize_field("nullifier_set", &self.nullifier_set)?;
+        st.serialize_field("total_value_locked", &self.total_value_locked)?;
+        st.serialize_field("notes", &self.notes)?;
+        // ProofOptions is not serializable — store as default params string
+        st.serialize_field("proof_opts_str", &"default")?;
+        st.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ShieldedPool {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct SpHelper {
+            depth: usize,
+            tree: MerkleTree,
+            nullifier_set: HashSet<Nullifier>,
+            total_value_locked: u64,
+            notes: Vec<Note>,
+            #[serde(default)]
+            proof_opts_str: Option<String>,
+        }
+        let h = SpHelper::deserialize(d)?;
+        // Reconstruct proof options from defaults
+        let proof_options = ProofOptions::new(
+            32, 8, 0, FieldExtension::None, 8, 31,
+            BatchingMethod::Linear, BatchingMethod::Linear,
+        );
+        Ok(ShieldedPool {
+            depth: h.depth,
+            tree: h.tree,
+            nullifier_set: h.nullifier_set,
+            total_value_locked: h.total_value_locked,
+            notes: h.notes,
+            proof_options,
+        })
+    }
 }
 
 impl ShieldedPool {

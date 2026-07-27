@@ -25,3 +25,4 @@ hsmc-p2p           = { path = "../hsmc-p2p" }
 hsmc-rpc           = { path = "../hsmc-rpc" }
 hsmc-storage       = { path = "../hsmc-storage" }
 hsmc-stratum       = { path = "../hsmc-stratum" }
+hsmc-starks        = { path = "../hsmc-starks" }

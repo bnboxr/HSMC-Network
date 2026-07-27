@@ -25,6 +25,7 @@ import Terminal from '@/components/Terminal';
 import Documentation from '@/components/Documentation';
 import Footer from '@/components/Footer';
 import HSMCCopilot from '@/components/HSMCCopilot';
+import ShieldedPool from '@/components/ShieldedPool';
 import { useAutoBackup } from '@/hooks/useAutoBackup';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useAuth } from '@/hooks/useAuth';
@@ -73,6 +74,9 @@ export const AppPage = () => {
       <ErrorBoundary name="Staking"><StakingDashboard onOpenAuth={() => navigate('/onboarding')} /></ErrorBoundary>
       <ErrorBoundary name="Tokenomics"><TokenomicsSection /></ErrorBoundary>
       <ErrorBoundary name="Privacy"><PrivacySection /></ErrorBoundary>
+      <section id="shielded-pool" className="container mx-auto px-4 py-12">
+        <ErrorBoundary name="Shielded Pool"><ShieldedPool /></ErrorBoundary>
+      </section>
       <ErrorBoundary name="Network"><NetworkSection /></ErrorBoundary>
       <ErrorBoundary name="Explorer"><Explorer /></ErrorBoundary>
       <ErrorBoundary name="Mempool"><Mempool /></ErrorBoundary>
