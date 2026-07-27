@@ -10,9 +10,9 @@ pub mod ecdsa;
 pub mod schnorr;
 pub mod threshold;
 pub mod hd_keys;
-//pub mod pq_dilithium; // TODO: fix fips204 API mismatches
-//pub mod pq_kyber; // TODO: fix fips203 API mismatches
-//pub mod hybrid; // TODO: depends on pq modules
+pub mod pq_dilithium;
+pub mod pq_kyber;
+pub mod hybrid;
 
 pub use pow::*;
 pub use ring_sig::*;

@@ -1,4 +1,3 @@
-use fips204::traits::SerDes;
 /// Post-Quantum Signature — Dilithium-5 (ML-DSA-87 / FIPS 204)
 ///
 /// Wraps the `fips204` crate (ML-DSA-87 / Dilithium-5 parameter set).
@@ -14,6 +13,7 @@ use fips204::traits::SerDes;
 /// NIST security level 5 (equivalent to AES-256).
 
 use fips204::ml_dsa_87;
+use fips204::traits::{SerDes, Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -84,7 +84,7 @@ pub struct PqDilithiumSignature {
 /// Generate a fresh Dilithium-5 (ML-DSA-87) key pair using OS CSPRNG
 pub fn pq_dilithium_keygen() -> Result<PqDilithiumKeyPair, PqDilithiumError> {
     let (pk, sk) = ml_dsa_87::try_keygen()
-        .map_err(|e| PqDilithiumError::KeyGen(format!("ML-DSA-87 keygen failed: {:?}", e)))?;
+        .map_err(|e| PqDilithiumError::KeyGen(format!("ML-DSA-87 keygen failed: {}", e)))?;
 
     Ok(PqDilithiumKeyPair {
         public_key: PqDilithiumPublicKey {
@@ -104,18 +104,19 @@ pub fn pq_dilithium_keygen() -> Result<PqDilithiumKeyPair, PqDilithiumError> {
 ///
 /// The message can be arbitrary bytes. Internally, ML-DSA-87 hashes
 /// the message as part of the signing process (hash-then-sign).
+/// Uses empty context (ctx = &[]) for standard signing.
 pub fn pq_dilithium_sign(
     message: &[u8],
     secret_key: &PqDilithiumSecretKey,
 ) -> Result<PqDilithiumSignature, PqDilithiumError> {
-    let sk = ml_dsa_87::SigningKey::try_from_bytes(&secret_key.key_bytes)
-        .map_err(|e| PqDilithiumError::InvalidKeyFormat)?;
+    let sk = deser_private_key(&secret_key.key_bytes)?;
 
-    let sig = sk.try_sign(message)
-        .map_err(|e| PqDilithiumError::Signing(format!("ML-DSA-87 sign failed: {:?}", e)))?;
+    // Signature is type [u8; SIG_LEN] — a bare byte array
+    let sig: [u8; 4627] = sk.try_sign(message, &[])
+        .map_err(|e| PqDilithiumError::Signing(format!("ML-DSA-87 sign failed: {}", e)))?;
 
     Ok(PqDilithiumSignature {
-        sig_bytes: sig.into_bytes().to_vec(),
+        sig_bytes: sig.to_vec(),
     })
 }
 
@@ -137,16 +138,44 @@ pub fn pq_dilithium_verify(
     signature: &PqDilithiumSignature,
     public_key: &PqDilithiumPublicKey,
 ) -> Result<bool, PqDilithiumError> {
-    let pk = ml_dsa_87::VerifyingKey::try_from_bytes(&public_key.key_bytes)
-        .map_err(|e| PqDilithiumError::InvalidKeyFormat)?;
+    let pk = deser_public_key(&public_key.key_bytes)?;
+    let sig = deser_signature(&signature.sig_bytes)?;
 
-    let sig = ml_dsa_87::Signature::try_from_bytes(&signature.sig_bytes)
-        .map_err(|e| PqDilithiumError::InvalidKeyFormat)?;
+    Ok(pk.verify(message, &sig, &[]))
+}
 
-    match pk.try_verify(message, &sig) {
-        Ok(()) => Ok(true),
-        Err(_) => Ok(false),
+// ─────────────────────────────────────────────────────────────
+// Deserialization helpers (handle fixed-array conversion)
+// ─────────────────────────────────────────────────────────────
+
+fn deser_public_key(bytes: &[u8]) -> Result<ml_dsa_87::PublicKey, PqDilithiumError> {
+    if bytes.len() != ml_dsa_87::PK_LEN {
+        return Err(PqDilithiumError::InvalidKeyFormat);
     }
+    let mut arr = [0u8; 2592];
+    arr.copy_from_slice(bytes);
+    ml_dsa_87::PublicKey::try_from_bytes(arr)
+        .map_err(|e| PqDilithiumError::Serialization(format!("deser public key: {}", e)))
+}
+
+fn deser_private_key(bytes: &[u8]) -> Result<ml_dsa_87::PrivateKey, PqDilithiumError> {
+    if bytes.len() != ml_dsa_87::SK_LEN {
+        return Err(PqDilithiumError::InvalidKeyFormat);
+    }
+    let mut arr = [0u8; 4896];
+    arr.copy_from_slice(bytes);
+    ml_dsa_87::PrivateKey::try_from_bytes(arr)
+        .map_err(|e| PqDilithiumError::Serialization(format!("deser private key: {}", e)))
+}
+
+/// Signature in fips204 is type [u8; SIG_LEN] — no SerDes needed, just copy bytes
+fn deser_signature(bytes: &[u8]) -> Result<[u8; 4627], PqDilithiumError> {
+    if bytes.len() != ml_dsa_87::SIG_LEN {
+        return Err(PqDilithiumError::InvalidKeyFormat);
+    }
+    let mut arr = [0u8; 4627];
+    arr.copy_from_slice(bytes);
+    Ok(arr)
 }
 
 // ─────────────────────────────────────────────────────────────

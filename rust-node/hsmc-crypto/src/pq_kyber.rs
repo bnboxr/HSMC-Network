@@ -1,4 +1,3 @@
-use fips203::traits::SerDes;
 /// Post-Quantum Key Encapsulation — Kyber-1024 (ML-KEM-1024 / FIPS 203)
 ///
 /// Wraps the `fips203` crate (ML-KEM-1024 / Kyber-1024 parameter set).
@@ -14,6 +13,7 @@ use fips203::traits::SerDes;
 /// NIST security level 5 (equivalent to AES-256).
 
 use fips203::ml_kem_1024;
+use fips203::traits::{SerDes, Encaps, Decaps, KeyGen};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -93,8 +93,8 @@ impl Drop for PqKyberSharedSecret {
 
 /// Generate a fresh Kyber-1024 (ML-KEM-1024) key pair using OS CSPRNG
 pub fn pq_kyber_keygen() -> Result<PqKyberKeyPair, PqKyberError> {
-    let (ek, dk) = ml_kem_1024::try_keygen()
-        .map_err(|e| PqKyberError::KeyGen(format!("ML-KEM-1024 keygen failed: {:?}", e)))?;
+    let (ek, dk) = ml_kem_1024::KG::try_keygen()
+        .map_err(|e| PqKyberError::KeyGen(format!("ML-KEM-1024 keygen failed: {}", e)))?;
 
     Ok(PqKyberKeyPair {
         public_key: PqKyberPublicKey {
@@ -118,17 +118,15 @@ pub fn pq_kyber_keygen() -> Result<PqKyberKeyPair, PqKyberError> {
 pub fn pq_kyber_encapsulate(
     public_key: &PqKyberPublicKey,
 ) -> Result<(PqKyberCiphertext, PqKyberSharedSecret), PqKyberError> {
-    let ek = ml_kem_1024::EncapsKey::try_from_bytes(&public_key.key_bytes)
-        .map_err(|e| PqKyberError::InvalidKeyFormat)?;
+    let ek = deser_encaps_key(&public_key.key_bytes)?;
 
-    let (ct, ss) = ek.try_encaps()
-        .map_err(|e| PqKyberError::Encapsulation(format!("ML-KEM-1024 encaps failed: {:?}", e)))?;
+    let (ss, ct) = ek.try_encaps()
+        .map_err(|e| PqKyberError::Encapsulation(format!("ML-KEM-1024 encaps failed: {}", e)))?;
 
-    let ct_bytes = ct.into_bytes();
     let ss_bytes: [u8; 32] = ss.into_bytes();
 
     Ok((
-        PqKyberCiphertext { ct_bytes: ct_bytes.to_vec() },
+        PqKyberCiphertext { ct_bytes: ct.into_bytes().to_vec() },
         PqKyberSharedSecret { secret_bytes: ss_bytes },
     ))
 }
@@ -149,18 +147,49 @@ pub fn pq_kyber_decapsulate(
     ciphertext: &PqKyberCiphertext,
     secret_key: &PqKyberSecretKey,
 ) -> Result<PqKyberSharedSecret, PqKyberError> {
-    let dk = ml_kem_1024::DecapsKey::try_from_bytes(&secret_key.key_bytes)
-        .map_err(|e| PqKyberError::InvalidKeyFormat)?;
-
-    let ct = ml_kem_1024::Ciphertext::try_from_bytes(&ciphertext.ct_bytes)
-        .map_err(|e| PqKyberError::InvalidKeyFormat)?;
+    let dk = deser_decaps_key(&secret_key.key_bytes)?;
+    let ct = deser_ciphertext(&ciphertext.ct_bytes)?;
 
     let ss = dk.try_decaps(&ct)
-        .map_err(|e| PqKyberError::Decapsulation(format!("ML-KEM-1024 decaps failed: {:?}", e)))?;
+        .map_err(|e| PqKyberError::Decapsulation(format!("ML-KEM-1024 decaps failed: {}", e)))?;
 
     let ss_bytes: [u8; 32] = ss.into_bytes();
 
     Ok(PqKyberSharedSecret { secret_bytes: ss_bytes })
+}
+
+// ─────────────────────────────────────────────────────────────
+// Deserialization helpers (handle fixed-array conversion)
+// ─────────────────────────────────────────────────────────────
+
+fn deser_encaps_key(bytes: &[u8]) -> Result<ml_kem_1024::EncapsKey, PqKyberError> {
+    if bytes.len() != ml_kem_1024::EK_LEN {
+        return Err(PqKyberError::InvalidKeyFormat);
+    }
+    let mut arr = [0u8; 1568];
+    arr.copy_from_slice(bytes);
+    ml_kem_1024::EncapsKey::try_from_bytes(arr)
+        .map_err(|e| PqKyberError::Serialization(format!("deser encaps key: {}", e)))
+}
+
+fn deser_decaps_key(bytes: &[u8]) -> Result<ml_kem_1024::DecapsKey, PqKyberError> {
+    if bytes.len() != ml_kem_1024::DK_LEN {
+        return Err(PqKyberError::InvalidKeyFormat);
+    }
+    let mut arr = [0u8; 3168];
+    arr.copy_from_slice(bytes);
+    ml_kem_1024::DecapsKey::try_from_bytes(arr)
+        .map_err(|e| PqKyberError::Serialization(format!("deser decaps key: {}", e)))
+}
+
+fn deser_ciphertext(bytes: &[u8]) -> Result<ml_kem_1024::CipherText, PqKyberError> {
+    if bytes.len() != ml_kem_1024::CT_LEN {
+        return Err(PqKyberError::InvalidKeyFormat);
+    }
+    let mut arr = [0u8; 1568];
+    arr.copy_from_slice(bytes);
+    ml_kem_1024::CipherText::try_from_bytes(arr)
+        .map_err(|e| PqKyberError::Serialization(format!("deser ciphertext: {}", e)))
 }
 
 // ─────────────────────────────────────────────────────────────

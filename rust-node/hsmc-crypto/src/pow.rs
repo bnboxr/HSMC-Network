@@ -36,22 +36,29 @@ pub enum PowAlgorithm {
 
 impl Default for PowAlgorithm {
     fn default() -> Self {
-        Self::Sha256d  // RandomX temporarily disabled (clang-sys version conflict)
+        Self::Sha256d  // Safe default: SHA-256d always available
     }
 }
 
 impl PowAlgorithm {
     /// Read algorithm from the `HSMC_POW_ALGORITHM` env var.
-    /// Valid values: "randomx" (default), "sha256d".
-    /// Falls back to RandomX if the env var is absent or unrecognized.
+    /// Valid values: "randomx" (needs randomx-pow feature), "sha256d".
+    /// Falls back to SHA-256d if RandomX is requested but not available.
     pub fn from_env() -> Self {
         match std::env::var("HSMC_POW_ALGORITHM").as_deref() {
             Ok("sha256d") => {
                 info!("HSMC_POW_ALGORITHM=sha256d — using SHA-256d PoW");
                 Self::Sha256d
             }
-            Ok("randomx") | Ok(_) => Self::RandomX,
-            Err(_) => Self::RandomX,
+            #[cfg(feature = "randomx-pow")]
+            Ok("randomx") => Self::RandomX,
+            #[cfg(not(feature = "randomx-pow"))]
+            Ok("randomx") => {
+                warn!("HSMC_POW_ALGORITHM=randomx requested but randomx-pow feature not enabled — falling back to SHA-256d");
+                Self::Sha256d
+            }
+            Ok(_) => Self::Sha256d,
+            Err(_) => Self::Sha256d,
         }
     }
 
@@ -63,8 +70,13 @@ impl PowAlgorithm {
     }
 
     pub fn is_implemented(&self) -> bool {
-        // Both are now implemented
-        true
+        match self {
+            #[cfg(feature = "randomx-pow")]
+            Self::RandomX => true,
+            #[cfg(not(feature = "randomx-pow"))]
+            Self::RandomX => false,
+            Self::Sha256d => true,
+        }
     }
 }
 
@@ -164,14 +176,15 @@ pub fn build_block_template(block: &Block) -> Vec<u8> {
 // RandomX hash
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Hash a block using RandomX.
+/// Hash a block using RandomX. Only available with the `randomx-pow` feature.
 ///
 /// The `key` (block template) is used as the RandomX key to initialize the VM's scratchpad.
 /// The input is `key || nonce` (the key + nonce bytes).
 ///
 /// Returns the 32-byte RandomX hash output.
+#[cfg(feature = "randomx-pow")]
 fn randomx_hash(key: &[u8], nonce: u64, mode: RandomXMode) -> [u8; 32] {
-    //use randomx disabled
+    use randomx::{RandomXCache, RandomXDataset, RandomXFlag, RandomXVM};
 
     let flags = match mode {
         RandomXMode::Fast => RandomXFlag::FLAG_DEFAULT | RandomXFlag::FLAG_FULL_MEM,
@@ -214,6 +227,17 @@ fn randomx_hash(key: &[u8], nonce: u64, mode: RandomXMode) -> [u8; 32] {
             Sha256::digest(&mid).into()
         }
     }
+}
+
+#[cfg(not(feature = "randomx-pow"))]
+fn randomx_hash(key: &[u8], nonce: u64, _mode: RandomXMode) -> [u8; 32] {
+    // Fallback to SHA-256d when RandomX feature is not compiled in
+    let nonce_bytes = nonce.to_le_bytes();
+    let mut input = Vec::with_capacity(key.len() + 8);
+    input.extend_from_slice(key);
+    input.extend_from_slice(&nonce_bytes);
+    let mid = Sha256::digest(&input);
+    Sha256::digest(&mid).into()
 }
 
 /// Hex-encode a RandomX hash result (64-char hex string)

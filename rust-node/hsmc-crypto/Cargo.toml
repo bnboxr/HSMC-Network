@@ -3,6 +3,10 @@ name = "hsmc-crypto"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+randomx-pow = []  # Opt-in: enables RandomX PoW (needs clang-sys, conflicts with rocksdb)
+
 [dependencies]
 sha2             = { workspace = true }
 sha3             = { workspace = true }
@@ -25,7 +29,6 @@ merlin           = { workspace = true }
 once_cell        = { workspace = true }
 rayon            = { workspace = true }
 num_cpus         = { workspace = true }
-# randomx disabled
 fips204            = { workspace = true }
 fips203            = { workspace = true }
 hsmc-core        = { path = "../hsmc-core" }

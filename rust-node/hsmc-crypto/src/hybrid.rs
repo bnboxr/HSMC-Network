@@ -13,12 +13,12 @@
 
 use crate::ecdsa::{KeyPair as EcdsaKeyPair, EcdsaSignature};
 use crate::pq_dilithium::{
-    PqDilithiumKeyPair, PqDilithiumPublicKey, PqDilithiumSecretKey,
-    PqDilithiumSignature, PqDilithiumError,
+    PqDilithiumKeyPair, PqDilithiumPublicKey, PqDilithiumSignature,
+    PqDilithiumError,
     pq_dilithium_sign, pq_dilithium_verify,
 };
 use crate::pq_kyber::{
-    PqKyberKeyPair, PqKyberPublicKey, PqKyberSecretKey,
+    PqKyberKeyPair, PqKyberPublicKey,
     PqKyberCiphertext, PqKyberSharedSecret, PqKyberError,
     pq_kyber_encapsulate, pq_kyber_decapsulate,
 };
