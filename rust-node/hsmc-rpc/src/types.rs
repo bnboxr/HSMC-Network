@@ -143,3 +143,40 @@ pub struct RangeProofRequest {
     pub amount_satoshis: u64,
     pub commitment_hex:  String,
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// VM (WASM Smart Contract Engine)
+// ═══════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct VmDeployRequest {
+    pub deployer_address: String,
+    pub bytecode_hex:     String,
+    pub name:             Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VmCallRequest {
+    pub contract_address: String,
+    pub caller_address:   String,
+    pub function_name:    String,
+    pub args_hex:         Option<String>,
+    pub gas_limit:        Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VmGasEstimateRequest {
+    pub contract_address: String,
+    pub function_name:    String,
+    pub args_hex:         Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VmListContractsQuery {
+    pub owner: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VmContractStateQuery {
+    pub key_hex: String,
+}

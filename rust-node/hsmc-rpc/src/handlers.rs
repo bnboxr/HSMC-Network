@@ -1624,3 +1624,252 @@ pub async fn stablecoin_transfer(
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// VM — WASM SMART CONTRACT ENGINE
+// ═══════════════════════════════════════════════════════════════════
+
+/// POST /vm/deploy
+/// Body: { "deployer_address": "HSMC_...", "bytecode_hex": "0061736d...", "name": "MyContract" }
+pub async fn vm_deploy_contract(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let deployer_str = match req.get("deployer_address").and_then(|v| v.as_str()) {
+        Some(a) if !a.is_empty() => a,
+        _ => return Json(serde_json::json!({ "error": "deployer_address required" })),
+    };
+    let bytecode_hex = match req.get("bytecode_hex").and_then(|v| v.as_str()) {
+        Some(h) if !h.is_empty() => h,
+        _ => return Json(serde_json::json!({ "error": "bytecode_hex required" })),
+    };
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unnamed");
+
+    let bytecode = match hex::decode(bytecode_hex) {
+        Ok(b) => b,
+        Err(e) => return Json(serde_json::json!({ "error": format!("Invalid hex: {}", e) })),
+    };
+
+    // Derive deployer bytes from address string
+    let mut deployer = [0u8; 32];
+    let deployer_hash = sha2::Sha256::digest(deployer_str.as_bytes());
+    deployer.copy_from_slice(&deployer_hash[..32]);
+
+    let block_height = state.chain.read().await.height();
+
+    let vm = state.vm.read().await;
+    match vm.deploy(deployer, bytecode.clone(), block_height) {
+        Ok(address) => {
+            let meta = vm.get_contract(&address);
+            Json(serde_json::json!({
+                "ok": true,
+                "contract_address": address.to_hex(),
+                "name": name,
+                "bytecode_len": bytecode.len(),
+                "deployment_block": block_height,
+                "code_hash": meta.map(|m| hex::encode(m.code_hash)),
+            }))
+        }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// POST /vm/call
+/// Body: { "contract_address": "0x...", "caller_address": "HSMC_...", "function_name": "run", "args_hex": "0102", "gas_limit": 1000000 }
+pub async fn vm_call_contract(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let addr_str = match req.get("contract_address").and_then(|v| v.as_str()) {
+        Some(a) if !a.is_empty() => a,
+        _ => return Json(serde_json::json!({ "error": "contract_address required" })),
+    };
+    let caller_str = match req.get("caller_address").and_then(|v| v.as_str()) {
+        Some(a) if !a.is_empty() => a,
+        _ => return Json(serde_json::json!({ "error": "caller_address required" })),
+    };
+    let func_name = match req.get("function_name").and_then(|v| v.as_str()) {
+        Some(f) if !f.is_empty() => f,
+        _ => return Json(serde_json::json!({ "error": "function_name required" })),
+    };
+    let args = req
+        .get("args_hex")
+        .and_then(|v| v.as_str())
+        .and_then(|h| hex::decode(h).ok())
+        .unwrap_or_default();
+    let gas_limit = req.get("gas_limit").and_then(|v| v.as_u64());
+
+    let address = match hsmc_vm::ContractAddress::from_hex(addr_str) {
+        Some(a) => a,
+        None => return Json(serde_json::json!({ "error": format!("Invalid contract address: {}", addr_str) })),
+    };
+
+    let mut caller = [0u8; 32];
+    let caller_hash = sha2::Sha256::digest(caller_str.as_bytes());
+    caller.copy_from_slice(&caller_hash[..32]);
+
+    let chain = state.chain.read().await;
+    let block_height = chain.height();
+    let timestamp = chrono::Utc::now().timestamp();
+    let tx_hash = {
+        let mut h = [0u8; 32];
+        let hash = sha2::Sha256::digest(&rand::random::<[u8; 32]>());
+        h.copy_from_slice(&hash);
+        h
+    };
+    drop(chain);
+
+    let vm = state.vm.read().await;
+    match vm.call(
+        &address,
+        caller,
+        func_name,
+        &args,
+        block_height,
+        timestamp,
+        tx_hash,
+        gas_limit,
+    ) {
+        Ok(result) => Json(serde_json::json!({
+            "ok": result.success,
+            "gas_used": result.gas_used,
+            "return_data": hex::encode(&result.return_data),
+            "events_count": result.events.len(),
+            "events": result.events.iter().map(|e| serde_json::json!({
+                "topic": hex::encode(&e.topic),
+                "data": hex::encode(&e.data),
+                "block": e.block_height,
+            })).collect::<Vec<_>>(),
+            "error": result.error,
+        })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// GET /vm/contract/:address
+pub async fn vm_get_contract(
+    State(state): State<Arc<AppState>>,
+    Path(address): Path<String>,
+) -> Json<serde_json::Value> {
+    let addr = match hsmc_vm::ContractAddress::from_hex(&address) {
+        Some(a) => a,
+        None => return Json(serde_json::json!({ "error": format!("Invalid contract address: {}", address) })),
+    };
+
+    let vm = state.vm.read().await;
+    match vm.get_contract(&addr) {
+        Some(meta) => Json(serde_json::json!({
+            "address": meta.address.to_hex(),
+            "owner": hex::encode(&meta.owner),
+            "code_hash": hex::encode(&meta.code_hash),
+            "bytecode_len": meta.bytecode_len,
+            "deployment_block": meta.deployment_block,
+            "deployment_timestamp": meta.deployment_timestamp,
+            "state_root": hex::encode(&meta.state_root),
+            "call_count": meta.call_count,
+            "state_entries": vm.state_entry_count(&addr),
+        })),
+        None => Json(serde_json::json!({ "error": "Contract not found", "address": address })),
+    }
+}
+
+/// GET /vm/contract/:address/state?key_hex=...
+pub async fn vm_get_contract_state(
+    State(state): State<Arc<AppState>>,
+    Path(address): Path<String>,
+    Query(query): Query<VmContractStateQuery>,
+) -> Json<serde_json::Value> {
+    let addr = match hsmc_vm::ContractAddress::from_hex(&address) {
+        Some(a) => a,
+        None => return Json(serde_json::json!({ "error": format!("Invalid contract address: {}", address) })),
+    };
+
+    let key = match hex::decode(&query.key_hex) {
+        Ok(k) => k,
+        Err(e) => return Json(serde_json::json!({ "error": format!("Invalid key hex: {}", e) })),
+    };
+
+    let vm = state.vm.read().await;
+    match vm.get_state(&addr, &key) {
+        Some(value) => Json(serde_json::json!({
+            "found": true,
+            "value_hex": hex::encode(&value),
+            "value_len": value.len(),
+        })),
+        None => Json(serde_json::json!({
+            "found": false,
+            "key_hex": query.key_hex,
+        })),
+    }
+}
+
+/// GET /vm/contracts?owner=...
+pub async fn vm_list_contracts(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<VmListContractsQuery>,
+) -> Json<serde_json::Value> {
+    let owner = query.owner.as_deref().and_then(|o| {
+        let hash = sha2::Sha256::digest(o.as_bytes());
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&hash[..32]);
+        Some(arr)
+    });
+
+    let vm = state.vm.read().await;
+    let contracts = vm.list_contracts(owner.as_ref());
+
+    Json(serde_json::json!({
+        "count": contracts.len(),
+        "contracts": contracts.iter().map(|c| serde_json::json!({
+            "address": c.address.to_hex(),
+            "owner": hex::encode(&c.owner),
+            "code_hash": hex::encode(&c.code_hash),
+            "bytecode_len": c.bytecode_len,
+            "deployment_block": c.deployment_block,
+            "call_count": c.call_count,
+            "state_root": hex::encode(&c.state_root),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+/// POST /vm/gas-estimate
+/// Body: { "contract_address": "0x...", "function_name": "run", "args_hex": "0102" }
+pub async fn vm_get_gas_estimate(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let addr_str = match req.get("contract_address").and_then(|v| v.as_str()) {
+        Some(a) if !a.is_empty() => a,
+        _ => return Json(serde_json::json!({ "error": "contract_address required" })),
+    };
+    let func_name = match req.get("function_name").and_then(|v| v.as_str()) {
+        Some(f) if !f.is_empty() => f,
+        _ => return Json(serde_json::json!({ "error": "function_name required" })),
+    };
+    let args = req
+        .get("args_hex")
+        .and_then(|v| v.as_str())
+        .and_then(|h| hex::decode(h).ok())
+        .unwrap_or_default();
+
+    let address = match hsmc_vm::ContractAddress::from_hex(addr_str) {
+        Some(a) => a,
+        None => return Json(serde_json::json!({ "error": format!("Invalid contract address: {}", addr_str) })),
+    };
+
+    let block_height = state.chain.read().await.height();
+    let timestamp = chrono::Utc::now().timestamp();
+
+    let vm = state.vm.read().await;
+    match vm.estimate_gas(&address, func_name, &args, block_height, timestamp) {
+        Ok(gas) => Json(serde_json::json!({
+            "estimated_gas": gas,
+            "gas_price_nano_hsmc": vm.config().gas_price_nano_hsmc,
+            "estimated_cost_hsmc": (gas * vm.config().gas_price_nano_hsmc) as f64 / 1_000_000_000.0,
+        })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
