@@ -23,4 +23,5 @@ hsmc-oracle = { path = "../hsmc-oracle" }
 hsmc-starks = { path = "../hsmc-starks" }
 hsmc-stablecoin = { path = "../hsmc-stablecoin" }
 hsmc-vm = { path = "../hsmc-vm" }
+hsmc-rollup = { path = "../hsmc-rollup" }
 

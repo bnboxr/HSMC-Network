@@ -1,0 +1,21 @@
+[package]
+name = "hsmc-rollup"
+version = "0.1.0"
+edition = "2021"
+description = "HSMC ZK Sovereign Rollup — L2 batch execution, zk-STARK validity proofs, sharding framework"
+
+[dependencies]
+winterfell        = { workspace = true }
+sha2              = { workspace = true }
+sha3              = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+hex               = { workspace = true }
+rand              = { workspace = true }
+thiserror         = { workspace = true }
+anyhow            = { workspace = true }
+tracing           = { workspace = true }
+zeroize           = { workspace = true }
+bincode           = { workspace = true }
+chrono            = { workspace = true }
+getrandom         = "0.2"

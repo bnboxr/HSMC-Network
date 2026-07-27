@@ -15,6 +15,7 @@ members = [
     "hsmc-starks",
     "hsmc-stablecoin",
     "hsmc-vm",
+    "hsmc-rollup",
 ]
 
 [workspace.dependencies]

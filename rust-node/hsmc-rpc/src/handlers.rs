@@ -1873,3 +1873,273 @@ pub async fn vm_get_gas_estimate(
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// ROLLUP (L2 ZK Sovereign Rollup)
+// ═══════════════════════════════════════════════════════════════════
+
+use hsmc_rollup::{L2Transaction, RollupManager};
+
+/// POST /rollup/submit-batch
+/// Sequencer submits a batch of L2 transactions to L1.
+pub async fn rollup_submit_batch(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RollupSubmitBatchRequest>,
+) -> Json<serde_json::Value> {
+    let mut rollup = state.rollup.write().await;
+    rollup.l1_block_number = req.l1_block_number;
+
+    // Submit each transaction
+    for tx_req in &req.transactions {
+        let from = match hex_to_address(&tx_req.from) {
+            Ok(a) => a,
+            Err(e) => return Json(serde_json::json!({ "error": e })),
+        };
+        let to = match hex_to_address(&tx_req.to) {
+            Ok(a) => a,
+            Err(e) => return Json(serde_json::json!({ "error": e })),
+        };
+        let data = tx_req.data_hex.as_ref()
+            .and_then(|h| hex::decode(h).ok())
+            .unwrap_or_default();
+        let sig = match hex_to_fixed64(&tx_req.signature_hex) {
+            Ok(s) => s,
+            Err(e) => return Json(serde_json::json!({ "error": e })),
+        };
+
+        let mut tx = L2Transaction::new(from, to, tx_req.amount, tx_req.fee, tx_req.nonce, data);
+        tx.sign(sig);
+
+        if let Err(e) = rollup.submit_tx(tx) {
+            return Json(serde_json::json!({ "error": e.to_string() }));
+        }
+    }
+
+    // Build and commit batch
+    match rollup.build_batch() {
+        Ok(mut batch) => {
+            let batch_id = batch.batch_id;
+            let pre = batch.pre_state_root;
+            match rollup.commit_batch(batch) {
+                Ok(id) => {
+                    // Generate STARK proof for the batch
+                    let committed = rollup.batches.get(&id).unwrap();
+                    match rollup.generate_proof(committed) {
+                        Ok(proof_bytes) => {
+                            let _ = rollup.attach_proof(id, proof_bytes);
+                            Json(serde_json::json!({
+                                "status": "committed",
+                                "batch_id": id,
+                                "tx_count": committed.txs.len(),
+                                "pre_state_root": hex::encode(pre),
+                                "post_state_root": hex::encode(committed.post_state_root),
+                                "proven": true,
+                            }))
+                        }
+                        Err(e) => Json(serde_json::json!({
+                            "status": "committed_unproven",
+                            "batch_id": id,
+                            "error": e.to_string(),
+                        })),
+                    }
+                }
+                Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+            }
+        }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// GET /rollup/batch/:batch_id
+/// Get batch details.
+pub async fn rollup_get_batch(
+    State(state): State<Arc<AppState>>,
+    Path(batch_id): Path<u64>,
+) -> Json<serde_json::Value> {
+    let rollup = state.rollup.read().await;
+    match rollup.batches.get(&batch_id) {
+        Some(batch) => Json(serde_json::json!({
+            "batch_id": batch.batch_id,
+            "l1_block_number": batch.l1_block_number,
+            "tx_count": batch.txs.len(),
+            "pre_state_root": hex::encode(batch.pre_state_root),
+            "post_state_root": hex::encode(batch.post_state_root),
+            "txs_data_hash": hex::encode(batch.txs_data_hash),
+            "has_proof": batch.proof.is_some(),
+            "timestamp": batch.timestamp,
+            "transactions": batch.txs.iter().map(|tx| serde_json::json!({
+                "from": hex::encode(tx.from),
+                "to": hex::encode(tx.to),
+                "amount": tx.amount,
+                "fee": tx.fee,
+                "nonce": tx.nonce,
+                "hash": hex::encode(tx.hash),
+            })).collect::<Vec<_>>(),
+        })),
+        None => Json(serde_json::json!({ "error": format!("Batch {} not found", batch_id) })),
+    }
+}
+
+/// GET /rollup/l2-state?address=...
+/// Get L2 account state.
+pub async fn rollup_get_l2_state(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let addr_str = match params.get("address") {
+        Some(a) => a,
+        None => return Json(serde_json::json!({ "error": "address required" })),
+    };
+    let address = match hex_to_address(addr_str) {
+        Ok(a) => a,
+        Err(e) => return Json(serde_json::json!({ "error": e })),
+    };
+
+    let rollup = state.rollup.read().await;
+    match rollup.accounts.get(&address) {
+        Some(acct) => Json(serde_json::json!({
+            "address": hex::encode(acct.address),
+            "nonce": acct.nonce,
+            "balance": acct.balance,
+            "contract_code_hash": hex::encode(acct.contract_code_hash),
+            "storage_root": hex::encode(acct.storage_root),
+            "state_root": hex::encode(rollup.state_root()),
+            "shard_id": hsmc_rollup::address_to_shard(&address, rollup.shard_registry.num_shards),
+        })),
+        None => Json(serde_json::json!({
+            "address": addr_str,
+            "nonce": 0,
+            "balance": 0,
+            "exists": false,
+        })),
+    }
+}
+
+/// GET /rollup/bridge-state
+/// Get bridge balances and status.
+pub async fn rollup_get_bridge_state(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rollup = state.rollup.read().await;
+    let pending_wd: usize = rollup.bridge_withdrawals.values().filter(|w| !w.processed).count();
+
+    Json(serde_json::json!({
+        "deposits": rollup.bridge_deposits.len(),
+        "withdrawals": rollup.bridge_withdrawals.len(),
+        "pending_withdrawals": pending_wd,
+        "total_value_locked_l2": rollup.accounts.values().map(|a| a.balance).sum::<u64>(),
+    }))
+}
+
+/// POST /rollup/deposit
+/// L1→L2 deposit: lock HSMC on L1, credit on L2.
+pub async fn rollup_deposit(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RollupDepositRequest>,
+) -> Json<serde_json::Value> {
+    let l2_address = match hex_to_address(&req.l2_address) {
+        Ok(a) => a,
+        Err(e) => return Json(serde_json::json!({ "error": e })),
+    };
+
+    let mut rollup = state.rollup.write().await;
+    match rollup.bridge_deposit(&req.l1_address, l2_address, req.amount, req.l1_block) {
+        Ok(deposit_id) => Json(serde_json::json!({
+            "status": "credited",
+            "deposit_id": deposit_id,
+            "l2_balance": rollup.accounts.get(&l2_address).map(|a| a.balance).unwrap_or(0),
+        })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// POST /rollup/withdraw
+/// L2→L1 withdrawal: burn on L2, release on L1.
+pub async fn rollup_withdraw(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RollupWithdrawRequest>,
+) -> Json<serde_json::Value> {
+    let l2_address = match hex_to_address(&req.l2_address) {
+        Ok(a) => a,
+        Err(e) => return Json(serde_json::json!({ "error": e })),
+    };
+
+    let mut rollup = state.rollup.write().await;
+    match rollup.bridge_withdraw(l2_address, &req.l1_address, req.amount) {
+        Ok(withdrawal_id) => Json(serde_json::json!({
+            "status": "burned",
+            "withdrawal_id": withdrawal_id,
+            "l2_balance": rollup.accounts.get(&l2_address).map(|a| a.balance).unwrap_or(0),
+            "note": "awaiting L1 release (challenge period applies)",
+        })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+/// GET /rollup/shard/:shard_id
+/// Get shard info.
+pub async fn rollup_shard_info(
+    State(state): State<Arc<AppState>>,
+    Path(shard_id): Path<u64>,
+) -> Json<serde_json::Value> {
+    let rollup = state.rollup.read().await;
+    match rollup.shard_registry.get_shard(shard_id) {
+        Some(shard) => Json(serde_json::json!({
+            "shard_id": shard.shard_id,
+            "state_root": hex::encode(shard.state_root),
+            "latest_block": shard.latest_block,
+            "account_count": shard.account_count,
+            "total_value_locked": shard.total_value_locked,
+        })),
+        None => Json(serde_json::json!({ "error": format!("Shard {} not found", shard_id) })),
+    }
+}
+
+/// GET /rollup/shards
+/// List all shards.
+pub async fn rollup_shard_list(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let rollup = state.rollup.read().await;
+    let shards: Vec<serde_json::Value> = rollup.shard_registry.list_shards()
+        .iter()
+        .map(|s| serde_json::json!({
+            "shard_id": s.shard_id,
+            "state_root": hex::encode(s.state_root),
+            "latest_block": s.latest_block,
+            "account_count": s.account_count,
+            "total_value_locked": s.total_value_locked,
+        }))
+        .collect();
+
+    Json(serde_json::json!({
+        "num_shards": rollup.shard_registry.num_shards,
+        "shards": shards,
+    }))
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ROLLUP HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════
+
+fn hex_to_address(hex_str: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(hex_str.trim_start_matches("0x"))
+        .map_err(|e| format!("Invalid hex: {}", e))?;
+    if bytes.len() != 32 {
+        return Err(format!("Address must be 32 bytes, got {}", bytes.len()));
+    }
+    let mut addr = [0u8; 32];
+    addr.copy_from_slice(&bytes);
+    Ok(addr)
+}
+
+fn hex_to_fixed64(hex_str: &str) -> Result<[u8; 64], String> {
+    let bytes = hex::decode(hex_str.trim_start_matches("0x"))
+        .map_err(|e| format!("Invalid hex: {}", e))?;
+    if bytes.len() != 64 {
+        return Err(format!("Signature must be 64 bytes, got {}", bytes.len()));
+    }
+    let mut sig = [0u8; 64];
+    sig.copy_from_slice(&bytes);
+    Ok(sig)
+}

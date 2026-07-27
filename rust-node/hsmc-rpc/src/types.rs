@@ -180,3 +180,81 @@ pub struct VmListContractsQuery {
 pub struct VmContractStateQuery {
     pub key_hex: String,
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// ROLLUP (L2 ZK Sovereign Rollup)
+// ═══════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct RollupSubmitBatchRequest {
+    pub l1_block_number: u64,
+    pub transactions: Vec<RollupTxRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RollupTxRequest {
+    pub from: String,
+    pub to: String,
+    pub amount: u64,
+    pub fee: u64,
+    pub nonce: u64,
+    pub data_hex: Option<String>,
+    pub signature_hex: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RollupDepositRequest {
+    pub l1_address: String,
+    pub l2_address: String,
+    pub amount: u64,
+    pub l1_block: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RollupWithdrawRequest {
+    pub l2_address: String,
+    pub l1_address: String,
+    pub amount: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RollupBatchResponse {
+    pub batch_id: u64,
+    pub l1_block_number: u64,
+    pub tx_count: usize,
+    pub pre_state_root: String,
+    pub post_state_root: String,
+    pub txs_data_hash: String,
+    pub has_proof: bool,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RollupAccountResponse {
+    pub address: String,
+    pub nonce: u64,
+    pub balance: u64,
+    pub contract_code_hash: String,
+    pub storage_root: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BridgeStateResponse {
+    pub deposits_count: usize,
+    pub withdrawals_count: usize,
+    pub pending_withdrawals: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ShardInfoResponse {
+    pub shard_id: u64,
+    pub state_root: String,
+    pub latest_block: u64,
+    pub account_count: u64,
+    pub total_value_locked: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RollupL2StateQuery {
+    pub address: String,
+}

@@ -11,6 +11,7 @@ use hsmc_p2p::PeerRegistry;
 use hsmc_starks::ShieldedPool;
 use hsmc_stablecoin::CdpEngine;
 use hsmc_vm::HsmcVm;
+use hsmc_rollup::RollupManager;
 use tracing::info;
 use crate::handlers::*;
 use crate::bridge::*;
@@ -26,6 +27,7 @@ pub struct AppState {
     pub shielded:   Arc<RwLock<ShieldedPool>>,
     pub stablecoin: Arc<RwLock<CdpEngine>>,
     pub vm:         Arc<RwLock<HsmcVm>>,
+    pub rollup:     Arc<RwLock<RollupManager>>,
     pub chain_id:   u64,
     pub network:    String,
 }
@@ -43,6 +45,10 @@ pub async fn start_rpc_server(
         hsmc_vm::HsmcVm::default_vm().expect("Failed to initialize HSMC WASM VM")
     ));
 
+    let rollup = Arc::new(RwLock::new(
+        RollupManager::new(20, 4, 100),
+    ));
+
     let state = Arc::new(AppState {
         chain,
         mempool,
@@ -54,6 +60,7 @@ pub async fn start_rpc_server(
         shielded,
         stablecoin: Arc::new(RwLock::new(CdpEngine::new())),
         vm,
+        rollup,
         chain_id: 8888,
         network: "mainnet".into(),
     });
@@ -138,6 +145,15 @@ pub async fn start_rpc_server(
         .route("/vm/contract/:address/state", get(vm_get_contract_state))
         .route("/vm/contracts",              get(vm_list_contracts))
         .route("/vm/gas-estimate",           post(vm_get_gas_estimate))
+        // ── Rollup (L2 ZK Sovereign Rollup) ──────────────────────
+        .route("/rollup/submit-batch",        post(rollup_submit_batch))
+        .route("/rollup/batch/:batch_id",     get(rollup_get_batch))
+        .route("/rollup/l2-state",            get(rollup_get_l2_state))
+        .route("/rollup/bridge-state",        get(rollup_get_bridge_state))
+        .route("/rollup/deposit",             post(rollup_deposit))
+        .route("/rollup/withdraw",            post(rollup_withdraw))
+        .route("/rollup/shard/:shard_id",     get(rollup_shard_info))
+        .route("/rollup/shards",              get(rollup_shard_list))
         .layer(cors)
         .with_state(state);
 
@@ -147,7 +163,7 @@ pub async fn start_rpc_server(
     info!("╠══════════════════════════════════════════════════════════╣");
     info!("║  Chain │ Tx │ UTXO │ Mempool │ Mining │ Stats │ Supply  ║");
     info!("║  Governance (propose/vote) │ Staking (stake/unstake)     ║");
-    info!("║  Fee EIP-1559 │ Peers │ Bridge (BSC/ETH/MATIC/SOL/XMR)  ║");
+    info!("║  Rollup (L2 ZK-Sovereign) │ Bridge (BSC/ETH/MATIC/SOL/XMR) ║");
     info!("║  VM (WASM deploy/call/estimate) │ Stablecoin CDPs       ║");
     info!("╚══════════════════════════════════════════════════════════╝");
 
