@@ -18,3 +18,5 @@ tracing            = { workspace = true }
 chrono             = { workspace = true }
 parking_lot        = { workspace = true }
 bincode            = { workspace = true }
+ed25519-dalek      = { workspace = true }
+curve25519-dalek   = { workspace = true }

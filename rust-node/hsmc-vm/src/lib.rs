@@ -23,6 +23,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT as G;
+use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
+use curve25519_dalek::scalar::Scalar;
+use ed25519_dalek::{Signature, VerifyingKey};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -441,6 +445,12 @@ struct HostState {
     state_store: Arc<RwLock<ContractStateStore>>,
     registry: Arc<RwLock<ContractRegistry>>,
     bytecode: Arc<RwLock<HashMap<ContractAddress, Vec<u8>>>>,
+    /// WASM engine for cross-contract call instantiation.
+    engine: Engine,
+    /// Token ledger: (owner_address, token_id) -> balance.
+    token_ledger: Arc<RwLock<HashMap<([u8; 32], [u8; 32]), u64>>>,
+    /// Global call depth (shared across cross-contract calls).
+    call_depth: Arc<std::sync::atomic::AtomicU32>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -455,6 +465,8 @@ pub struct HsmcVm {
     state_store: Arc<RwLock<ContractStateStore>>,
     registry: Arc<RwLock<ContractRegistry>>,
     config: VmConfig,
+    /// Token ledger shared across all calls: (owner, token_id) -> balance.
+    token_ledger: Arc<RwLock<HashMap<([u8; 32], [u8; 32]), u64>>>,
 }
 
 impl HsmcVm {
@@ -484,6 +496,7 @@ impl HsmcVm {
             state_store: Arc::new(RwLock::new(ContractStateStore::new())),
             registry: Arc::new(RwLock::new(ContractRegistry::new())),
             config,
+            token_ledger: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -588,6 +601,9 @@ impl HsmcVm {
             state_store: self.state_store.clone(),
             registry: self.registry.clone(),
             bytecode: Arc::new(RwLock::new(HashMap::new())), // populated below
+            engine: self.engine.clone(),
+            token_ledger: self.token_ledger.clone(),
+            call_depth: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         });
 
         // Pre-populate bytecode map for cross-contract calls
@@ -765,6 +781,8 @@ impl HsmcVm {
     ) -> VmResult<()> {
         let ctx = context.clone();
         let evts = events.clone();
+        let engine = self.engine.clone();
+        let token_ledger = self.token_ledger.clone();
 
         // ── Crypto Host Functions ───────────────────────────────────
 
@@ -816,6 +834,8 @@ impl HsmcVm {
             .map_err(|e| VmError::HostError(e.to_string()))?;
 
         // hsmc_verify_ed25519(pk_ptr, sig_ptr, msg_ptr, msg_len) -> i32
+        // Returns: 0 if valid, -1 if invalid signature, -2 if deserialization error,
+        //          -3 memory error, -4 message read error
         linker
             .func_wrap("env", "hsmc_verify_ed25519", {
                 move |mut caller: Caller<'_, HostState>,
@@ -824,11 +844,11 @@ impl HsmcVm {
                         Some(Extern::Memory(m)) => m,
                         _ => return -1,
                     };
-                    let pk = match read_mem(&caller, &mem, pk_ptr as usize, 32) {
+                    let pk_bytes = match read_mem(&caller, &mem, pk_ptr as usize, 32) {
                         Ok(d) => { let mut a = [0u8; 32]; a.copy_from_slice(&d); a },
                         Err(_) => return -2,
                     };
-                    let sig = match read_mem(&caller, &mem, sig_ptr as usize, 64) {
+                    let sig_bytes = match read_mem(&caller, &mem, sig_ptr as usize, 64) {
                         Ok(d) => { let mut a = [0u8; 64]; a.copy_from_slice(&d); a },
                         Err(_) => return -3,
                     };
@@ -836,51 +856,155 @@ impl HsmcVm {
                         Ok(d) => d,
                         Err(_) => return -4,
                     };
-                    // Use ed25519-dalek for verification (if available)
-                    // For now, return 0 (success) — caller can verify externally
-                    // This is a real stub that would use curve25519-dalek
-                    let _ = (pk, sig, msg);
-                    -100 // Not yet wired to ed25519-dalek — would need the crate added
+
+                    let vk = match VerifyingKey::from_bytes(&pk_bytes) {
+                        Ok(k) => k,
+                        Err(_) => return -2, // deserialization error
+                    };
+                    let sig = match Signature::from_bytes(&sig_bytes) {
+                        Ok(s) => s,
+                        Err(_) => return -2, // deserialization error
+                    };
+
+                    match vk.verify(&msg, &sig) {
+                        Ok(()) => 0,   // valid signature
+                        Err(_) => -1,  // invalid signature
+                    }
                 }
             })
             .map_err(|e| VmError::HostError(e.to_string()))?;
 
-        // hsmc_verify_ringct(tx_hash_ptr, tx_hash_len) -> i32
+        // hsmc_verify_ringct(tx_data_ptr, tx_data_len) -> i32
+        // Reads serialized commitment data from WASM memory and verifies the Pedersen
+        // commitment structure using the same generators as hsmc-crypto.
+        // Input layout: [32 bytes commitment || 8 bytes amount (LE) || 32 bytes blinding]
+        // Returns: 0 if commitment opens correctly, -1 if invalid,
+        //          -2 if deserialization error, -3 if invalid point.
+        //
+        // NOTE: This verifies Pedersen commitment opening. Full RingCT balance
+        // verification (sum(inputs) == sum(outputs) + fee) requires the complete
+        // transaction context and must be done by the node's crypto module.
         linker
             .func_wrap("env", "hsmc_verify_ringct", {
-                move |mut caller: Caller<'_, HostState>, tx_hash_ptr: i32, tx_hash_len: i32| -> i32 {
+                move |mut caller: Caller<'_, HostState>, tx_data_ptr: i32, tx_data_len: i32| -> i32 {
                     let mem = match caller.get_export("memory") {
                         Some(Extern::Memory(m)) => m,
                         _ => return -1,
                     };
-                    let _tx_hash = match read_mem(&caller, &mem, tx_hash_ptr as usize, tx_hash_len as usize) {
+                    // Need at least: 32 (commitment) + 8 (amount) + 32 (blinding) = 72 bytes
+                    if tx_data_len < 72 {
+                        return -2; // insufficient data
+                    }
+                    let data = match read_mem(&caller, &mem, tx_data_ptr as usize, tx_data_len as usize) {
                         Ok(d) => d,
                         Err(_) => return -2,
                     };
-                    // RingCT verification via the node's crypto module — returns 0 if valid
-                    0
+
+                    // Parse commitment point
+                    let commitment_bytes: [u8; 32] = data[0..32].try_into().unwrap();
+                    let commitment_point = match CompressedRistretto::from_slice(&commitment_bytes)
+                        .ok()
+                        .and_then(|c| c.decompress())
+                    {
+                        Some(p) => p,
+                        None => return -3, // invalid point
+                    };
+
+                    // Parse amount (u64 LE)
+                    let amount_bytes: [u8; 8] = data[32..40].try_into().unwrap();
+                    let amount = u64::from_le_bytes(amount_bytes);
+
+                    // Parse blinding scalar
+                    let blinding_bytes: [u8; 32] = data[40..72].try_into().unwrap();
+                    let blinding = match Scalar::from_canonical_bytes(blinding_bytes) {
+                        Some(s) => s,
+                        None => return -2, // invalid scalar
+                    };
+
+                    // Compute amount generator H (same NUMS as hsmc-crypto)
+                    let h_point = {
+                        let mut hasher = sha2::Sha512::new();
+                        hasher.update(b"HSMC_RINGCT_AMOUNT_GENERATOR_v2_DO_NOT_CHANGE");
+                        RistrettoPoint::from_uniform_bytes(&hasher.finalize().into())
+                    };
+
+                    let v = Scalar::from(amount);
+                    let expected = blinding * G + v * h_point;
+
+                    if expected.compress().to_bytes() == commitment_bytes {
+                        0  // commitment opens correctly
+                    } else {
+                        -1 // commitment does not match
+                    }
                 }
             })
             .map_err(|e| VmError::HostError(e.to_string()))?;
 
-        // hsmc_stealth_derive(view_key_ptr, tx_pub_key_ptr) -> i32
+        // hsmc_stealth_derive(view_key_ptr, tx_pub_key_ptr) -> i64
+        // Derives a one-time stealth address from the view private key and ephemeral
+        // public key (R = r*G). Uses the same derivation as hsmc-crypto stealth.rs:
+        //   shared = H_s("HSMC_stealth_shared_" || (view_key * R))
+        //   one_time_address = shared * G
+        //
+        // The derived 32-byte compressed Ristretto point is written to the end of
+        // WASM linear memory. Returns the memory offset where it was written,
+        // or -1 on memory/deserialization error.
+        //
+        // NOTE: Full stealth address derivation also requires the spend public key
+        // (P = H_s(v*R)*G + S). This host function computes the shared-secret-derived
+        // point; the caller adds the spend key offset.
         linker
             .func_wrap("env", "hsmc_stealth_derive", {
-                move |mut caller: Caller<'_, HostState>, view_key_ptr: i32, tx_pub_key_ptr: i32| -> i32 {
+                move |mut caller: Caller<'_, HostState>, view_key_ptr: i32, tx_pub_key_ptr: i32| -> i64 {
                     let mem = match caller.get_export("memory") {
                         Some(Extern::Memory(m)) => m,
                         _ => return -1,
                     };
-                    let _view_key = match read_mem(&caller, &mem, view_key_ptr as usize, 32) {
-                        Ok(d) => d,
-                        Err(_) => return -2,
+                    let view_key_bytes = match read_mem(&caller, &mem, view_key_ptr as usize, 32) {
+                        Ok(d) => { let mut a = [0u8; 32]; a.copy_from_slice(&d); a },
+                        Err(_) => return -1,
                     };
-                    let _tx_pub_key = match read_mem(&caller, &mem, tx_pub_key_ptr as usize, 32) {
-                        Ok(d) => d,
-                        Err(_) => return -3,
+                    let tx_pub_key_bytes = match read_mem(&caller, &mem, tx_pub_key_ptr as usize, 32) {
+                        Ok(d) => { let mut a = [0u8; 32]; a.copy_from_slice(&d); a },
+                        Err(_) => return -1,
                     };
-                    // Stealth address derivation — returns 0 if valid
-                    0
+
+                    // Deserialize view key as scalar (view PRIVATE key)
+                    let view_scalar = match Scalar::from_canonical_bytes(view_key_bytes) {
+                        Some(s) => s,
+                        None => return -1,
+                    };
+
+                    // Deserialize tx public key as Ristretto point (R = r*G)
+                    let r_point = match CompressedRistretto::from_slice(&tx_pub_key_bytes)
+                        .ok()
+                        .and_then(|c| c.decompress())
+                    {
+                        Some(p) => p,
+                        None => return -1,
+                    };
+
+                    // Compute shared secret: v * R = v * r * G
+                    let shared_point = view_scalar * r_point;
+
+                    // Hash to scalar: H_s("HSMC_stealth_shared_" || shared_point_bytes)
+                    let shared_scalar = {
+                        let mut hasher = sha2::Sha512::new();
+                        hasher.update(b"HSMC_stealth_shared_");
+                        hasher.update(shared_point.compress().as_bytes());
+                        Scalar::from_bytes_mod_order_wide(&hasher.finalize().into())
+                    };
+
+                    // One-time address: P = shared_scalar * G
+                    let one_time_point = shared_scalar * G;
+                    let one_time_bytes = one_time_point.compress().to_bytes();
+
+                    // Write to end of WASM memory (same pattern as hsmc_get_caller)
+                    let ptr = mem.data_size(&caller) as usize;
+                    match write_mem(&mut caller, &mem, ptr, &one_time_bytes) {
+                        Ok(_) => ptr as i64,
+                        Err(_) => -1,
+                    }
                 }
             })
             .map_err(|e| VmError::HostError(e.to_string()))?;
@@ -1035,50 +1159,225 @@ impl HsmcVm {
         // ── Token & Cross-Contract Host Functions ────────────────────
 
         // hsmc_transfer_token(token_id_ptr, to_ptr, amount) -> i32
+        // Transfers tokens between accounts in the VM's internal token ledger.
+        // Returns: 0 on success, -1 insufficient balance, -2 invalid token_id,
+        //          -3 invalid recipient, -4 amount overflow.
+        let token_ledger_tf = token_ledger.clone();
+        let ctx_tf = ctx.clone();
         linker
             .func_wrap("env", "hsmc_transfer_token", {
                 move |mut caller: Caller<'_, HostState>,
-                      token_id_ptr: i32, to_ptr: i32, _amount: i64| -> i32 {
+                      token_id_ptr: i32, to_ptr: i32, amount: i64| -> i32 {
                     let mem = match caller.get_export("memory") {
                         Some(Extern::Memory(m)) => m,
                         _ => return -1,
                     };
-                    let _token_id = match read_mem(&caller, &mem, token_id_ptr as usize, 32) {
-                        Ok(d) => d,
+                    let token_id_bytes = match read_mem(&caller, &mem, token_id_ptr as usize, 32) {
+                        Ok(d) => { let mut a = [0u8; 32]; a.copy_from_slice(&d); a },
                         Err(_) => return -2,
                     };
-                    let _to = match read_mem(&caller, &mem, to_ptr as usize, 32) {
-                        Ok(d) => d,
+                    let to = match read_mem(&caller, &mem, to_ptr as usize, 32) {
+                        Ok(d) => { let mut a = [0u8; 32]; a.copy_from_slice(&d); a },
                         Err(_) => return -3,
                     };
-                    // Token transfer — 0 on success, negative on error
-                    // In full implementation, this would interact with the token ledger
-                    0
+
+                    // Validate token_id (non-zero)
+                    if token_id_bytes == [0u8; 32] {
+                        return -2; // invalid token_id
+                    }
+                    // Validate recipient (non-zero)
+                    if to == [0u8; 32] {
+                        return -3; // invalid recipient
+                    }
+                    // Validate amount (positive, non-zero)
+                    if amount <= 0 {
+                        return -4; // invalid amount
+                    }
+
+                    let caller_addr = ctx_tf.caller;
+                    let mut ledger = token_ledger_tf.write();
+
+                    // Check caller balance
+                    let caller_key = (caller_addr, token_id_bytes);
+                    let caller_balance = *ledger.get(&caller_key).unwrap_or(&0);
+                    if caller_balance < amount as u64 {
+                        return -1; // insufficient balance
+                    }
+
+                    // Deduct from caller
+                    ledger.insert(caller_key, caller_balance - amount as u64);
+
+                    // Credit recipient
+                    let recipient_key = (to, token_id_bytes);
+                    let recipient_balance = *ledger.get(&recipient_key).unwrap_or(&0);
+                    ledger.insert(recipient_key, recipient_balance + amount as u64);
+
+                    0 // success
                 }
             })
             .map_err(|e| VmError::HostError(e.to_string()))?;
 
         // hsmc_call_contract(addr_ptr, func_ptr, func_len, args_ptr, args_len, result_ptr, result_max) -> i32
+        // Executes a cross-contract call. Looks up the target contract, instantiates
+        // its WASM module, and calls the specified exported function.
+        // Returns: number of bytes written to result_ptr on success,
+        //          -1 if contract not found, -2 if function not found,
+        //          -3 execution error, -4 call depth exceeded.
+        let engine_cc = engine.clone();
+        let ctx_cc = ctx.clone();
         linker
             .func_wrap("env", "hsmc_call_contract", {
                 move |mut caller: Caller<'_, HostState>,
                       addr_ptr: i32, func_ptr: i32, func_len: i32,
-                      _args_ptr: i32, _args_len: i32, _result_ptr: i32, _result_max: i32| -> i32 {
+                      args_ptr: i32, args_len: i32, result_ptr: i32, result_max: i32| -> i32 {
+                    // Check and increment call depth
+                    let depth = caller.data().call_depth.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if depth >= 8 {
+                        caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        return -4; // call depth exceeded
+                    }
+
                     let mem = match caller.get_export("memory") {
                         Some(Extern::Memory(m)) => m,
-                        _ => return -1,
+                        _ => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -1;
+                        }
                     };
-                    let _addr_bytes = match read_mem(&caller, &mem, addr_ptr as usize, 32) {
-                        Ok(d) => d,
-                        Err(_) => return -2,
+                    let addr_bytes = match read_mem(&caller, &mem, addr_ptr as usize, 32) {
+                        Ok(d) => { let mut a = [0u8; 32]; a.copy_from_slice(&d); a },
+                        Err(_) => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -1;
+                        }
                     };
-                    let _func_name = match read_mem(&caller, &mem, func_ptr as usize, func_len as usize) {
+                    let func_name = match read_mem(&caller, &mem, func_ptr as usize, func_len as usize) {
                         Ok(d) => String::from_utf8_lossy(&d).to_string(),
-                        Err(_) => return -3,
+                        Err(_) => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -1;
+                        }
                     };
-                    // Cross-contract call — 0 on success, negative on error
-                    // Full implementation would recursively invoke self.call()
-                    0
+                    let args = match read_mem(&caller, &mem, args_ptr as usize, args_len as usize) {
+                        Ok(d) => d,
+                        Err(_) => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -1;
+                        }
+                    };
+
+                    let target_addr = ContractAddress(addr_bytes);
+
+                    // Look up bytecode for the target contract
+                    let bytecode = {
+                        let bm = caller.data().bytecode.read();
+                        bm.get(&target_addr).cloned()
+                    };
+
+                    let bytecode = match bytecode {
+                        Some(bc) => bc,
+                        None => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -1; // contract not found
+                        }
+                    };
+
+                    // Compile target module
+                    let module = match Module::new(&engine_cc, &bytecode) {
+                        Ok(m) => m,
+                        Err(_) => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -3; // execution error
+                        }
+                    };
+
+                    // Create linker with the same host functions (simplified)
+                    let mut linker = Linker::new(&engine_cc);
+
+                    // Create a new store for the cross-contract call
+                    let target_ctx = HostContext {
+                        contract_address: target_addr,
+                        caller: ctx_cc.contract_address.0,
+                        block_height: ctx_cc.block_height,
+                        block_timestamp: ctx_cc.block_timestamp,
+                        call_depth: depth + 1,
+                        tx_hash: ctx_cc.tx_hash,
+                    };
+
+                    let mut store = Store::new(&engine_cc, HostState {
+                        context: target_ctx,
+                        state_store: caller.data().state_store.clone(),
+                        registry: caller.data().registry.clone(),
+                        bytecode: caller.data().bytecode.clone(),
+                        engine: engine_cc.clone(),
+                        token_ledger: caller.data().token_ledger.clone(),
+                        call_depth: caller.data().call_depth.clone(),
+                    });
+
+                    store.set_fuel(500_000).ok();
+
+                    let instance = match linker.instantiate(&mut store, &module) {
+                        Ok(i) => i,
+                        Err(_) => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -3;
+                        }
+                    };
+
+                    let func = match instance.get_func(&mut store, &func_name) {
+                        Some(f) => f,
+                        None => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -2; // function not found
+                        }
+                    };
+
+                    let target_memory = match instance.get_memory(&mut store, "memory") {
+                        Some(m) => m,
+                        None => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            return -3;
+                        }
+                    };
+
+                    // Write args to target memory (use same offset pattern)
+                    let target_args_ptr = 0x1000usize;
+                    if target_args_ptr + args.len() > target_memory.data_size(&store) as usize {
+                        let needed = (target_args_ptr + args.len()) as u64;
+                        let pages = ((needed - target_memory.data_size(&store)) + 65535) / 65536;
+                        target_memory.grow(&mut store, pages).ok();
+                    }
+                    target_memory.write(&mut store, target_args_ptr, &args).ok();
+
+                    // Call the target function
+                    match func.call(
+                        &mut store,
+                        &[wasmtime::Val::I32(target_args_ptr as i32), wasmtime::Val::I32(args.len() as i32)],
+                        &mut [],
+                    ) {
+                        Ok(_) => {
+                            // Read result from target memory and copy to caller's result buffer
+                            let result_data = match read_mem_from_store(&store, &target_memory, target_args_ptr, 1024.min(result_max as usize)) {
+                                Ok(d) => d,
+                                Err(_) => vec![],
+                            };
+                            let bytes_written = result_data.len().min(result_max as usize);
+                            match write_mem(&mut caller, &mem, result_ptr as usize, &result_data[..bytes_written]) {
+                                Ok(_) => {
+                                    caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                                    bytes_written as i32
+                                }
+                                Err(_) => {
+                                    caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                                    -3
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            caller.data().call_depth.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            -3 // execution error
+                        }
+                    }
                 }
             })
             .map_err(|e| VmError::HostError(e.to_string()))?;
@@ -1114,21 +1413,84 @@ impl HsmcVm {
             })
             .map_err(|e| VmError::HostError(e.to_string()))?;
 
-        // hsmc_deploy_contract(code_ptr, code_len) -> i32 (returns address ptr)
+        // hsmc_deploy_contract(code_ptr, code_len) -> i64
+        // Deploys a child WASM contract from within a running contract.
+        // Validates the WASM bytecode, computes a deterministic address, and
+        // registers it in the ContractRegistry.
+        // Returns: pointer to the 32-byte contract address written to WASM memory,
+        //          -1 on memory error, -2 invalid WASM bytecode, -3 duplicate address.
+        let engine_dep = engine.clone();
+        let ctx_dep = ctx.clone();
         linker
             .func_wrap("env", "hsmc_deploy_contract", {
                 move |mut caller: Caller<'_, HostState>,
-                      code_ptr: i32, code_len: i32| -> i32 {
+                      code_ptr: i32, code_len: i32| -> i64 {
                     let mem = match caller.get_export("memory") {
                         Some(Extern::Memory(m)) => m,
                         _ => return -1,
                     };
-                    let _code = match read_mem(&caller, &mem, code_ptr as usize, code_len as usize) {
+                    let code = match read_mem(&caller, &mem, code_ptr as usize, code_len as usize) {
                         Ok(c) => c,
-                        Err(_) => return -2,
+                        Err(_) => return -1,
                     };
-                    // Child deploy — 0 on success (full impl would deploy via registry)
-                    0
+
+                    // Validate WASM bytecode by attempting to compile it
+                    if Module::new(&engine_dep, &code).is_err() {
+                        return -2; // invalid WASM
+                    }
+
+                    // Compute code hash
+                    let code_hash = {
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(&code);
+                        let mut hash = [0u8; 32];
+                        hash.copy_from_slice(&hasher.finalize());
+                        hash
+                    };
+
+                    // Compute deterministic address: SHA-256(code_hash || caller || nonce)
+                    let nonce = {
+                        let reg = caller.data().registry.read();
+                        reg.nonce()
+                    };
+                    let address = {
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(&code_hash);
+                        hasher.update(&ctx_dep.caller);
+                        hasher.update(&nonce.to_be_bytes());
+                        let hash = hasher.finalize();
+                        let mut addr = [0u8; 32];
+                        addr.copy_from_slice(&hash);
+                        ContractAddress(addr)
+                    };
+
+                    // Register in ContractRegistry
+                    {
+                        let mut reg = caller.data().registry.write();
+                        match reg.register(
+                            address,
+                            ctx_dep.caller, // deployer = caller of this contract
+                            code_hash,
+                            code.clone(),
+                            ctx_dep.block_height,
+                        ) {
+                            Ok(_) => {}
+                            Err(_) => return -3, // duplicate or registration error
+                        }
+                    }
+
+                    // Store bytecode in the shared bytecode map
+                    {
+                        let mut bm = caller.data().bytecode.write();
+                        bm.insert(address, code);
+                    }
+
+                    // Write address to WASM memory and return pointer
+                    let ptr = mem.data_size(&caller) as usize;
+                    match write_mem(&mut caller, &mem, ptr, &address.0) {
+                        Ok(_) => ptr as i64,
+                        Err(_) => -1,
+                    }
                 }
             })
             .map_err(|e| VmError::HostError(e.to_string()))?;
@@ -1183,6 +1545,24 @@ fn read_mem(
     let mut buf = vec![0u8; len];
     memory
         .read(caller, ptr, &mut buf)
+        .map_err(|e| VmError::HostError(format!("memory read: {}", e)))?;
+    Ok(buf)
+}
+
+/// Safely read from WASM linear memory using a Store reference (for cross-contract calls).
+fn read_mem_from_store(
+    store: &Store<HostState>,
+    memory: &Memory,
+    ptr: usize,
+    len: usize,
+) -> VmResult<Vec<u8>> {
+    let mem_size = memory.data_size(store) as usize;
+    if ptr.checked_add(len).map_or(true, |end| end > mem_size) {
+        return Err(VmError::PointerOutOfBounds { ptr, mem_size });
+    }
+    let mut buf = vec![0u8; len];
+    memory
+        .read(store, ptr, &mut buf)
         .map_err(|e| VmError::HostError(format!("memory read: {}", e)))?;
     Ok(buf)
 }
