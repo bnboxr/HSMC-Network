@@ -320,69 +320,14 @@ CREATE TABLE IF NOT EXISTS card_funding_events (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
-// ── Seed Data (from Supabase extraction) ─────────────────────────────────────
+// ── Seed Data ────────────────────────────────────────────────────────────────
+// Production note: No fake data is seeded. All tables start empty.
+// Token metrics, network stats, peers, and price history are populated
+// exclusively by live oracle/nodes at runtime — never hardcoded.
 const SEED_SQL = `
--- Blocks: 2 rows (block 1 and block 6)
+-- Genesis block (block 0) — minimal anchor for the chain
 INSERT OR IGNORE INTO blocks (id, block_number, hash, prev_hash, miner_address, transactions_count, nonce, difficulty, created_at, privacy_protocol)
-VALUES ('b1fd653c-f274-4ccc-b6b4-5428b34e17b9', 1, '0x00d15d11b099623231ba07087b7b68d8e9d5e4d8e4bf458c8f0bb9c3a3dfa4f1', '0x0', '0xd07ea42e083dadbe5bc04ff3bf91997faf3987ca', 0, 11505971, 4000000, '2026-03-08T16:52:13.178018+00:00', 'RingCT-v2');
-
-INSERT OR IGNORE INTO blocks (id, block_number, hash, prev_hash, miner_address, transactions_count, nonce, difficulty, created_at, privacy_protocol)
-VALUES ('a72e4f3e-a8e9-4cad-91b6-0f497458613b', 6, '0x00e1b7a57873a0c31017cf923b8204270a4cf5903c8cf1f7d371c5a6bd50cb64', '0x00d15d11b099623231ba07087b7b68d8e9d5e4d8e4bf458c8f0bb9c3a3dfa4f1', '0xd07ea42e083dadbe5bc04ff3bf91997faf3987ca', 1, 8273619, 4000000, '2026-03-29T02:18:30.171000+00:00', 'RingCT-v2');
-
--- Transactions: 1 row (250 HSMC transfer)
-INSERT OR IGNORE INTO transactions (id, hash, from_address, to_address, amount, fee, status, created_at, confirmed_at, privacy_level)
-VALUES ('dc657c11-3d0b-4371-96f8-3ccb2f18cc8a', '0x845af0d688ec3beea286ca476544c82f11cb2ac97004a30c211681af845ec325', '0xhsmcpay_treasury_000000000000000000000000', '0xd07ea42e083dadbe5bc04ff3bf91997faf3987ca', 250.0, 0.0001, 'confirmed', '2026-03-29T02:18:30.197372+00:00', '2026-03-29T02:18:30.171+00:00', 'transparent');
-
--- Governance: 1 proposal
-INSERT OR IGNORE INTO governance_proposals (id, title, description, proposer_address, user_id, proposal_type, status, votes_for, votes_against, quorum_required, parameter_key, ends_at, created_at)
-VALUES ('e21301a6-8514-4a85-9e6f-2fa06f2240a7', 'APR 20%', 'staking apreciasion', '0xd07ea42e083dadbe5bc04ff3bf91997faf3987ca', '90fd15a4-1e1d-4d70-afd7-efcfa0ee7349', 'treasury', 'active', 1, 0, 1000, 'staking', '2026-03-15T14:46:11.958885+00:00', '2026-03-08T14:46:11.958885+00:00');
-
--- Governance: 1 vote
-INSERT OR IGNORE INTO governance_votes (id, proposal_id, user_id, voter_address, vote_weight, vote_choice, created_at)
-VALUES ('9f37d0c7-9306-4459-a7a1-7bd831089d2d', 'e21301a6-8514-4a85-9e6f-2fa06f2240a7', '90fd15a4-1e1d-4d70-afd7-efcfa0ee7349', '0xd07ea42e083dadbe5bc04ff3bf91997faf3987ca', 1, 'for', '2026-03-08T14:46:23.395721+00:00');
-
--- Staking pools: 2 rows
-INSERT OR IGNORE INTO staking_pools (id, name, validator_address, total_staked, commission_rate, apr, min_stake, status, created_at)
-VALUES ('2ed61898-286b-4f4d-ac72-b71a0306d7d1', 'Genesis Pool', '0x742d35Cc6634C0532925a3b844Bc9e7595f8bE7a', 0.0, 5.0, 12.5, 100.0, 'active', '2026-01-20T02:59:09.234415+00:00');
-
-INSERT OR IGNORE INTO staking_pools (id, name, validator_address, total_staked, commission_rate, apr, min_stake, status, created_at)
-VALUES ('a26b1814-82a1-4863-8b27-8b79647c042e', 'Beta Validator', '0xvalidator_beta_00000000000000000000002', 0.0, 3.5, 18.0, 500.0, 'active', '2026-02-15T12:00:00.000000+00:00');
-
--- Token metrics
-INSERT OR IGNORE INTO token_metrics (id, price, price_change_24h, market_cap, market_cap_change_24h, volume_24h, volume_change_24h, fully_diluted_valuation, circulating_supply, total_supply, staked_supply, all_time_high, all_time_high_date, token_holders, ytd_return, updated_at)
-VALUES ('b9fe8407-b131-4235-9584-848f3367249a', 0.045, 2.5, 2925000, 1.8, 125000, -3.2, 22500000, 65000000, 500000000, 0, 0.089, 'Mar 2026', 4, 15.0, '2026-07-21T18:52:06.753+00:00');
-
--- Price history: 4+ rows
-INSERT OR IGNORE INTO price_history (id, price, volume, timestamp)
-VALUES ('5da731bf-a7db-4c79-ab6b-d5f417dd0c69', 0.04502042, 0, '2026-03-08T21:43:16.419+00:00');
-INSERT OR IGNORE INTO price_history (id, price, volume, timestamp)
-VALUES ('896997f8-4276-4c5a-92c2-90fadab9e58d', 0.0450908, 0, '2026-03-08T22:00:09.370+00:00');
-INSERT OR IGNORE INTO price_history (id, price, volume, timestamp)
-VALUES ('4b7d0b80-f126-4abb-87cf-0c45ea7b79d2', 0.04511909, 0, '2026-03-08T23:00:10.566+00:00');
-INSERT OR IGNORE INTO price_history (id, price, volume, timestamp)
-VALUES ('21ed5852-46e0-461a-aec2-671a35623a05', 0.04511909, 554.0891893, '2026-03-08T23:08:01.033+00:00');
-
--- Smart contracts: 1 row (HSMC Token)
-INSERT OR IGNORE INTO smart_contracts (id, address, name, deployer_address, user_id, source_code, contract_type, status, version, interactions_count, created_at)
-VALUES ('06a07543-99fd-42e6-8295-9ca715c07645', '0x06e639e88f2bf970f16bb02558c244e75e18799a', 'HSMC', '0xd07ea42e083dadbe5bc04ff3bf91997faf3987ca', '90fd15a4-1e1d-4d70-afd7-efcfa0ee7349', '// HSMC Smart Contract — Privacy Token\npragma hsmc ^2.0;\n\ncontract PrivacyToken {\n  mapping(address => uint256) private balances;\n  uint256 public totalSupply;\n  string public name = "HSMC Token";\n  \n  event Transfer(address indexed from, address indexed to, uint256 value);\n}', 'token', 'active', '1.0.0', 0, '2026-03-08T14:00:00.000+00:00');
-
--- Platform stats default
-INSERT OR IGNORE INTO platform_stats (id, countries_count, developers_count, tvl, updated_at, uptime_percent)
-VALUES ('default', 45, 1200, 2500000, '2026-07-21T18:52:06.753+00:00', 99.98);
-
--- Network stats default
-INSERT OR IGNORE INTO network_stats (id, active_nodes, block_height, consensus_state, hash_rate, latency, network_difficulty, total_transactions, tps, updated_at)
-VALUES ('default', 12, 6, 'synced', '4.2 MH/s', 32, 4000000, 1, 0.01, '2026-07-21T18:52:06.753+00:00');
-
--- Platform config default
-INSERT OR IGNORE INTO platform_config (id, hsmcpay_intermediary_enabled, updated_at)
-VALUES (1, 1, '2026-07-21T18:52:06.753+00:00');
-
--- Network peers (2 sample peers)
-INSERT OR IGNORE INTO network_peers (id, ip_address, last_seen_at, latency, peer_id, port, region, status, version, created_at)
-VALUES ('peer-001', '45.33.12.8', '2026-07-21T18:50:00.000+00:00', 24, '12D3KooWQqwerty123456', 8333, 'us-west', 'online', '0.2.1', '2026-07-01T00:00:00.000+00:00');
-INSERT OR IGNORE INTO network_peers (id, ip_address, last_seen_at, latency, peer_id, port, region, status, version, created_at)
-VALUES ('peer-002', '185.220.101.45', '2026-07-21T18:51:00.000+00:00', 45, '12D3KooWAsdfgh789012', 8333, 'eu-de', 'online', '0.2.1', '2026-07-01T00:00:00.000+00:00');
+VALUES ('00000000-0000-0000-0000-000000000000', 0, '0x0000000000000000000000000000000000000000000000000000000000000000', '', '0x0000000000000000000000000000000000000000', 0, 0, 0, datetime('now'), 'none');
 `;
 
 // ── Initialize DB ────────────────────────────────────────────────────────────
@@ -396,7 +341,7 @@ console.log("✅ Created 35 tables");
 
 // Seed data
 db.exec(SEED_SQL);
-console.log("✅ Seeded test data");
+console.log("✅ Genesis block seeded (no fake data)");
 
 // ── Security: encryption + schema integrity + file permissions ────────────
 const DB_SECURITY_STRICT = process.env.DB_SECURITY_STRICT === "true"; // non-strict by default (warn-only)
