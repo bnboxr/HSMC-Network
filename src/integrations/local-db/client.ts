@@ -1,10 +1,14 @@
 /**
- * Local DB Client — drop-in replacement for the DB client.
+ * Local DB Client — thin wrapper around the API server.
  *
- * Talks to the local API server via Vite proxy on /rest/v1/:table
- * Returns data in DB-compatible shape: { data, error }
+ * Talks to the local API server via Vite proxy on /rest/v1/:table.
+ * Returns data in DB-compatible shape: { data, error }.
  *
  * Import: import { localDb } from '@/integrations/local-db/client';
+ *
+ * NOTE: Auth is handled by the API server (JWT). There is NO local auth mock.
+ * Features not backed by the API server (realtime channels, storage, edge functions)
+ * throw clear errors rather than silently succeeding with fake data.
  */
 
 const API_BASE = "/rest/v1";
@@ -53,6 +57,13 @@ async function fetchApi(url: string, options?: RequestInit): Promise<{ data: any
     console.warn("[localDb] API unreachable:", err.message);
     return { data: null, error: { message: err.message } };
   }
+}
+
+/** Returns a consistent "feature not available" error object. */
+function notAvailable(feature: string): { data: null; error: { message: string } } {
+  const msg = `Feature not available: ${feature}. Use the API server for this functionality.`;
+  console.warn(`[localDb] ${msg}`);
+  return { data: null, error: { message: msg } };
 }
 
 // ── Builder pattern (matches the DB query builder) ─────────────────────────
@@ -173,15 +184,12 @@ class QueryBuilder {
     return fetchApi(url, { method: "POST", body: JSON.stringify(data) });
   }
 
-  /** Upsert one or more rows (simulated as insert with conflict handling on server) */
+  /** Upsert one or more rows */
   async upsert(data: any | any[], _opts?: any): Promise<{ data: any; error: any }> {
-    // For local DB, we treat upsert as a combination:
-    // Try to update first, if 0 rows affected, insert.
     const rows = Array.isArray(data) ? data : [data];
     const results: any[] = [];
     for (const row of rows) {
       if (row.id || row.user_id) {
-        // Try update first
         let updateFilters: Record<string, string> = {};
         if (row.id) updateFilters.id = `eq.${row.id}`;
         else if (row.user_id) updateFilters.user_id = `eq.${row.user_id}`;
@@ -231,230 +239,87 @@ class QueryBuilder {
   }
 }
 
-// ── No-op channel (for compatibility with the DB channel API) ────────────────
+// ── Feature-not-available stubs (no mock data, no silent success) ─────────
 
-class NoopChannel {
-  private _listeners: Array<() => void> = [];
-
-  on(_event: string, _filter: any, _callback: Function): this {
-    return this;
-  }
-
-  subscribe(callback?: (status: string, err?: Error) => void): this {
-    if (callback) callback("SUBSCRIBED");
-    return this;
-  }
-
-  unsubscribe(): this {
-    this._listeners = [];
-    return this;
-  }
-
-  // Tracked for cleanup
-  _id = Math.random().toString(36).slice(2);
-}
-
-// ── Local auth stubs (seed-auth handles real auth offline) ───────────────────
-
-// H3 FIX: local-db is for development only. Block in production to prevent
-// complete auth bypass via passwordless login.
-if (typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD) {
-  throw new Error(
-    'local-db is NOT allowed in production. ' +
-    'It accepts any email/password without verification, which would be a complete auth bypass. ' +
-    'Use a real auth provider in production.'
-  );
-}
-
-interface LocalUser {
-  id: string;
-  email?: string;
-  user_metadata?: Record<string, any>;
-  app_metadata?: Record<string, any>;
-  aud?: string;
-  created_at?: string;
-}
-
-interface LocalSession {
-  access_token: string;
-  refresh_token: string;
-  expires_at?: number;
-  user: LocalUser;
-}
-
-type AuthCallback = (event: string, session: LocalSession | null) => void;
-
-const LS_AUTH_KEY = "hsmc_local_auth";
-
-function getLocalAuth(): { user: LocalUser | null; session: LocalSession | null } {
-  try {
-    const raw = localStorage.getItem(LS_AUTH_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return { user: parsed.user || null, session: parsed.session || null };
-    }
-  } catch {}
-  return { user: null, session: null };
-}
-
-function setLocalAuth(user: LocalUser | null, session: LocalSession | null): void {
-  if (user && session) {
-    localStorage.setItem(LS_AUTH_KEY, JSON.stringify({ user, session }));
-  } else {
-    localStorage.removeItem(LS_AUTH_KEY);
-  }
-}
-
-const _authListeners: Set<AuthCallback> = new Set();
-
-function notifyAuthListeners(event: string, session: LocalSession | null): void {
-  for (const cb of _authListeners) {
-    try { cb(event, session); } catch {}
-  }
-}
-
-const localAuth = {
-  getSession: async () => {
-    const { session } = getLocalAuth();
-    return { data: { session }, error: null as any };
-  },
-
-  getUser: async () => {
-    const { user } = getLocalAuth();
-    return { data: { user }, error: null as any };
-  },
-
-  onAuthStateChange: (callback: AuthCallback) => {
-    _authListeners.add(callback);
-    // Fire initial state
-    const { session } = getLocalAuth();
-    try { callback("INITIAL_SESSION", session); } catch {}
-    return {
-      data: {
-        subscription: {
-          unsubscribe: () => { _authListeners.delete(callback); },
-        },
-      },
-    };
-  },
-
-  signUp: async (credentials: { email: string; password: string; options?: any }) => {
-    const user: LocalUser = {
-      id: "local-" + Date.now().toString(36),
-      email: credentials.email,
-      user_metadata: credentials.options?.data || {},
-    };
-    const session: LocalSession = {
-      access_token: "local-token-" + Date.now(),
-      refresh_token: "local-refresh-" + Date.now(),
-      user,
-    };
-    setLocalAuth(user, session);
-    notifyAuthListeners("SIGNED_IN", session);
-    return { data: { user, session }, error: null as any };
-  },
-
-  signInWithPassword: async (credentials: { email: string; password: string }) => {
-    const user: LocalUser = {
-      id: "local-" + Date.now().toString(36),
-      email: credentials.email,
-    };
-    const session: LocalSession = {
-      access_token: "local-token-" + Date.now(),
-      refresh_token: "local-refresh-" + Date.now(),
-      user,
-    };
-    setLocalAuth(user, session);
-    notifyAuthListeners("SIGNED_IN", session);
-    return { data: { user, session }, error: null as any };
-  },
-
-  signOut: async () => {
-    setLocalAuth(null, null);
-    notifyAuthListeners("SIGNED_OUT", null);
-    return { error: null as any };
-  },
-
-  updateUser: async (_attrs: any) => {
-    return { data: { user: getLocalAuth().user }, error: null as any };
-  },
-
-  setSession: async (tokens: { access_token: string; refresh_token: string }) => {
-    const user: LocalUser = {
-      id: "local-session-" + Date.now().toString(36),
-    };
-    const session: LocalSession = { ...tokens, user };
-    setLocalAuth(user, session);
-    notifyAuthListeners("SIGNED_IN", session);
-    return { data: { user, session }, error: null as any };
-  },
-
-  // OAuth beta typing stub
-  oauth: undefined as unknown,
-};
-
-// ── Local storage stubs ──────────────────────────────────────────────────────
-
-const localStorage_ = {
-  from: (_bucket: string) => ({
-    upload: async (_path: string, _file: any, _opts?: any) => {
-      return { data: { path: _path }, error: null as any };
+/**
+ * Realtime channels are not supported in local mode.
+ * The API server does not expose a WebSocket/subscription endpoint yet.
+ * Use polling via localDb.from() instead, or deploy a real Supabase instance.
+ */
+function createChannelStub(_name: string) {
+  console.warn("[localDb] realtime channels not available. Use polling via localDb.from() instead.");
+  return {
+    on(_event: string, _filter: any, _callback: Function): ReturnType<typeof createChannelStub> {
+      return this;
     },
-    getPublicUrl: (path: string) => {
-      return { data: { publicUrl: `local://storage/${path}` } };
+    subscribe(callback?: (status: string, err?: Error) => void): ReturnType<typeof createChannelStub> {
+      if (callback) callback("CLOSED", new Error("Feature not available: realtime channels. Use API server."));
+      return this;
     },
-    download: async (_path: string) => {
-      return { data: null, error: { message: "Storage not available in local mode" } as any };
+    unsubscribe(): ReturnType<typeof createChannelStub> {
+      return this;
     },
-  }),
-};
-
-// ── Edge functions stub ──────────────────────────────────────────────────────
-
-const localFunctions = {
-  invoke: async (_name: string, _opts?: any) => {
-    console.debug(`[localDb] Edge function "${_name}" not available in local mode`);
-    return { data: null, error: { message: `Edge function "${_name}" not available in local mode` } };
-  },
-};
+  };
+}
 
 // ── Main localDb object ──────────────────────────────────────────────────────
 
-const _channels: Map<string, NoopChannel> = new Map();
-
 export const localDb = {
+  /** Query builder — real HTTP calls to the API server */
   from(table: string): QueryBuilder {
     return new QueryBuilder(table);
   },
 
-  channel(name: string): NoopChannel {
-    const ch = new NoopChannel();
-    _channels.set(name, ch);
-    return ch;
+  /**
+   * Auth is handled by the API server (JWT tokens).
+   * There is no local auth bypass — callers must obtain a real JWT from the API server.
+   */
+  get auth() {
+    throw new Error(
+      "Feature not available: localDb.auth. Auth is handled by the API server via JWT. " +
+      "Use fetch() to POST /auth/login or /auth/register on the API server."
+    );
   },
 
-  removeChannel(channel: NoopChannel): void {
-    channel.unsubscribe();
-    for (const [name, c] of _channels) {
-      if (c._id === channel._id) {
-        _channels.delete(name);
-        break;
-      }
-    }
+  /**
+   * Realtime channels are not supported.
+   * Use localDb.from() with polling instead.
+   */
+  channel(name: string) {
+    return createChannelStub(name);
   },
 
-  /** Direct RPC-style call — returns no-op success for compatibility */
-  rpc(_fn: string, _args?: any): Promise<{ data: any; error: null | { message: string } }> {
-    console.debug(`[localDb] RPC "${_fn}" not available in local mode`);
-    return Promise.resolve({ data: null, error: null });
+  /** Remove a channel (no-op since channels are not supported) */
+  removeChannel(_channel: ReturnType<typeof createChannelStub>): void {
+    // no-op
   },
 
-  /** Auth stubs — seed-auth.ts handles real auth offline */
-  auth: localAuth,
+  /**
+   * Direct RPC calls are not supported.
+   * Use the API server's REST endpoints instead.
+   */
+  async rpc(_fn: string, _args?: any): Promise<{ data: null; error: { message: string } }> {
+    return notAvailable(`rpc("${_fn}")`);
+  },
 
-  /** Storage stubs */
-  storage: localStorage_,
+  /**
+   * File storage is not available in local mode.
+   * Use the API server's upload endpoints instead.
+   */
+  get storage() {
+    throw new Error(
+      "Feature not available: localDb.storage. File uploads must go through the API server. " +
+      "Use fetch() to POST /storage/upload."
+    );
+  },
 
-  /** Edge Functions stubs */
-  functions: localFunctions,
+  /**
+   * Edge functions are not available in local mode.
+   * Use the API server endpoints directly.
+   */
+  get functions() {
+    throw new Error(
+      "Feature not available: localDb.functions. Invoke server-side logic via the API server's REST endpoints."
+    );
+  },
 };

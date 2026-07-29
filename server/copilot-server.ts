@@ -258,8 +258,12 @@ const AGENTS: Record<string, AgentConfig> = {
 };
 
 // ── CORS headers ─────────────────────────────────────────────────────────
+const CORS_ORIGIN = (typeof Bun !== "undefined" && Bun.env.CORS_ORIGIN)
+  || process.env.CORS_ORIGIN
+  || "http://localhost:3000";
+
 const corsHeaders: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": CORS_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-user-id",
   "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
 };

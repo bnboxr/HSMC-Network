@@ -25,6 +25,9 @@ import { createServer, IncomingMessage, ServerResponse } from "http";
 import type { ChainConnector, ChainId } from "./types";
 import { getConnector, hasConnector, listConnectors } from "./index";
 
+// ─── CORS ───────────────────────────────────────────────────────────────────
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
+
 // ─── Types ────────────────────────────────────────────────────────────────
 
 export interface ChainStatus {
@@ -210,7 +213,7 @@ export class BridgeMonitor {
   async statusHandler(_req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const status = await this.checkAllChains();
-      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": CORS_ORIGIN });
       res.end(JSON.stringify(status, null, 2));
     } catch (err) {
       res.writeHead(500, { "Content-Type": "application/json" });
@@ -228,7 +231,7 @@ export class BridgeMonitor {
       ? this.eventLogger.getByChain(chain, limit)
       : this.eventLogger.getRecent(limit);
 
-    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": CORS_ORIGIN });
     res.end(JSON.stringify({ count: events.length, events }, null, 2));
   }
 
@@ -247,7 +250,7 @@ export class BridgeMonitor {
       const status = await this.checkChain(chain);
       res.writeHead(status.healthy ? 200 : 503, {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": CORS_ORIGIN,
       });
       res.end(JSON.stringify(status, null, 2));
     } catch (err) {
@@ -263,7 +266,7 @@ export class BridgeMonitor {
     // CORS preflight
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": CORS_ORIGIN,
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
       });

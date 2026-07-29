@@ -3,7 +3,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tower_http::cors::{CorsLayer, Any};
+use tower_http::cors::{CorsLayer, AllowOrigin, Any};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use hsmc_core::{Chain, Mempool, governance::GovernanceState, state::StakingState};
@@ -65,8 +65,16 @@ pub async fn start_rpc_server(
         network: "mainnet".into(),
     });
 
+    // Read allowed CORS origins from env var (comma-separated), with sensible defaults
+    let origins_env = std::env::var("CORS_ORIGIN")
+        .unwrap_or_else(|_| "https://hsmc-network.ctonew.app,http://localhost:3000".to_string());
+    let allowed_origins: Vec<axum::http::HeaderValue> = origins_env
+        .split(',')
+        .filter_map(|s| s.trim().parse::<axum::http::HeaderValue>().ok())
+        .collect();
+
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(AllowOrigin::list(allowed_origins))
         .allow_methods(Any)
         .allow_headers(Any);
 
