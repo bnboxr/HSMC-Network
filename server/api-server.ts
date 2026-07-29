@@ -443,10 +443,10 @@ if (STRIPE_SECRET_KEY) {
   stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2025-06-30.basil" as any });
   console.log(`💳 Stripe initialized (${STRIPE_MODE} mode)`);
   if (!STRIPE_WEBHOOK_SECRET) {
-    console.warn("⚠️  STRIPE_WEBHOOK_SECRET not set — webhook signature verification disabled");
+    console.warn("⚠️  STRIPE_WEBHOOK_SECRET not set — webhooks will return 503");
   }
 } else {
-  console.warn("⚠️  STRIPE_SECRET_KEY not set — Stripe payments disabled, using mock mode");
+  console.warn("⚠️  STRIPE_SECRET_KEY not set — Stripe endpoints will return 503");
 }
 
 if (IS_DEV_MODE) {
@@ -969,12 +969,15 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
     const sessionId = `pi_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
     // Stripe publishable key
-    const stripePublishableKey = process.env.STRIPE_PUBLISHABLE_KEY || "pk_test_placeholder";
+    const stripePublishableKey = process.env.STRIPE_PUBLISHABLE_KEY || "";
 
     const now = new Date().toISOString();
 
     // ── Real Stripe PaymentIntent ──────────────────────────────────────────
     if (stripe) {
+      if (!stripePublishableKey) {
+        return jsonResponse({ error: "Stripe publishable key not configured", status: "service_unavailable" }, 503);
+      }
       try {
         const paymentIntent = await stripe.paymentIntents.create({
           amount: amountCents,
@@ -1041,29 +1044,8 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
       }
     }
 
-    // ── Mock mode (no Stripe key configured) ───────────────────────────────
-    const paymentIntentId = `pi_mock_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    const clientSecret = `${paymentIntentId}_secret_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-
-    const encryptedClientSecret = await encryptField(clientSecret);
-
-    db.run(
-      `INSERT INTO payment_sessions (id, user_id, amount_usd, amount_hsmc, session_id,
-       stripe_payment_intent_id, stripe_client_secret, status, processor, created_at, otp_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'stripe', ?, ?)`,
-      randomUUID(), "local-user", amountUsd, amountHsmc, sessionId,
-      paymentIntentId, encryptedClientSecret, now,
-      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-    );
-
-    return jsonResponse({
-      session_id: sessionId,
-      payment_intent_id: paymentIntentId,
-      client_secret: clientSecret,
-      stripe_publishable_key: stripePublishableKey,
-      amount_hsmc: amountHsmc.toFixed(6),
-      amount_usd: amountUsd,
-    });
+    // ── Stripe not configured ───────────────────────────────────────────────
+    return jsonResponse({ error: "Stripe not configured", status: "service_unavailable" }, 503);
   }
 
   if (action === "settle") {
@@ -1153,7 +1135,7 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
 }
 
 // ── Stripe Payout Endpoint (for HSMCPay Sell) ─────────────────────────────────
-const SELL_DEPOSIT_ADDRESS = "0xHSMC_Treasury_Sell_0000000000000000000";
+const SELL_DEPOSIT_ADDRESS = process.env.HSMC_TREASURY_ADDRESS || "";
 
 async function handleStripePayout(req: Request): Promise<Response> {
   if (req.method !== "POST") {
@@ -1170,6 +1152,9 @@ async function handleStripePayout(req: Request): Promise<Response> {
   const action = body.action || "";
 
   if (action === "initiate") {
+    if (!SELL_DEPOSIT_ADDRESS) {
+      return jsonResponse({ error: "Treasury address not configured", status: "service_unavailable" }, 503);
+    }
     const amountUsd = Number(body.amount_usd);
     if (!amountUsd || amountUsd < 1 || !Number.isFinite(amountUsd)) {
       return errorResponse("amount_usd must be a positive number >= 1", 400);
@@ -1632,10 +1617,7 @@ async function handleCardCreate(req: Request): Promise<Response> {
       return errorResponse(`Card creation failed: ${e.message || "Stripe API error"}`, 502);
     }
   } else {
-    last4 = Math.floor(1000 + Math.random() * 9000).toString();
-    brand = "visa"; expM = Math.floor(1 + Math.random() * 12);
-    expY = new Date().getFullYear() + 3;
-    stripeCardId = `ic_mock_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    return jsonResponse({ error: "Stripe not configured", status: "service_unavailable" }, 503);
   }
 
   db.run(
@@ -1827,17 +1809,8 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
       return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
     }
   } else {
-    // No webhook secret configured — parse without verification (dev mode only)
-    if (STRIPE_MODE !== "test") {
-      console.error("[Stripe] Webhook received but STRIPE_WEBHOOK_SECRET not configured in live mode");
-      return errorResponse("Webhook secret not configured", 500);
-    }
-    try {
-      event = JSON.parse(rawBody) as Stripe.Event;
-    } catch {
-      return errorResponse("Invalid webhook JSON body", 400);
-    }
-    console.warn("[Stripe] ⚠️  Webhook signature NOT verified — STRIPE_WEBHOOK_SECRET not set");
+    console.error("[Stripe] Webhook received but STRIPE_WEBHOOK_SECRET not configured");
+    return jsonResponse({ error: "Webhook secret not configured", status: "service_unavailable" }, 503);
   }
 
   // ── Idempotency check — don't process the same event twice ──────────────
