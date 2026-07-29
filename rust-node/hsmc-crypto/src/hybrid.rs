@@ -15,12 +15,12 @@ use crate::ecdsa::{KeyPair as EcdsaKeyPair, EcdsaSignature};
 use crate::pq_dilithium::{
     PqDilithiumKeyPair, PqDilithiumPublicKey, PqDilithiumSignature,
     PqDilithiumError,
-    pq_dilithium_sign, pq_dilithium_verify,
+    pq_dilithium_sign, pq_dilithium_verify, pq_dilithium_keygen,
 };
 use crate::pq_kyber::{
     PqKyberKeyPair, PqKyberPublicKey,
     PqKyberCiphertext, PqKyberSharedSecret, PqKyberError,
-    pq_kyber_encapsulate, pq_kyber_decapsulate,
+    pq_kyber_encapsulate, pq_kyber_decapsulate, pq_kyber_keygen,
 };
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -198,14 +198,8 @@ pub struct HybridEncapsulation {
 /// Combined shared secret from both ECDH and Kyber-1024
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct HybridSharedSecret {
-    #[zeroize(skip)]
+    /// 64-byte combined secret (zeroized on drop via ZeroizeOnDrop)
     pub secret_bytes: [u8; 64], // first 32 = ECDH-derived, last 32 = Kyber-derived, combined via SHA-512
-}
-
-impl Drop for HybridSharedSecret {
-    fn drop(&mut self) {
-        self.secret_bytes.zeroize();
-    }
 }
 
 /// HybridKEM: combines ECDH (Curve25519) with Kyber-1024 for dual key exchange.

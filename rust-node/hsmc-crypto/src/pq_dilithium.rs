@@ -50,18 +50,8 @@ pub struct PqDilithiumPublicKey {
 /// Dilithium-5 secret key (4896 bytes)
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct PqDilithiumSecretKey {
-    /// Raw ML-DSA-87 secret key bytes
-    #[zeroize(skip)] // underlying bytes already handled; Vec<u8> zeroizes on drop
+    /// Raw ML-DSA-87 secret key bytes (zeroized on drop via ZeroizeOnDrop)
     pub key_bytes: Vec<u8>,
-}
-
-impl Drop for PqDilithiumSecretKey {
-    fn drop(&mut self) {
-        // Explicitly zeroize secret key material
-        for byte in self.key_bytes.iter_mut() {
-            *byte = 0;
-        }
-    }
 }
 
 /// Dilithium-5 key pair

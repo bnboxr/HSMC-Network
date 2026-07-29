@@ -13,6 +13,34 @@ use serde::{Deserialize, Serialize};
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use merlin::Transcript;
 
+// Bridge types: bulletproofs v4 uses curve25519-dalek-ng internally,
+// while our codebase uses curve25519-dalek v4. Both use the same
+// Ristretto encoding, so we convert via canonical bytes.
+use curve25519_dalek_ng::scalar::Scalar as NgScalar;
+use curve25519_dalek_ng::ristretto::RistrettoPoint as NgRistrettoPoint;
+use curve25519_dalek_ng::ristretto::CompressedRistretto as NgCompressedRistretto;
+
+/// Convert curve25519-dalek v4 Scalar → curve25519-dalek-ng Scalar
+fn to_ng_scalar(s: &Scalar) -> NgScalar {
+    NgScalar::from_canonical_bytes(s.to_bytes())
+        .expect("Scalar::from_canonical_bytes always succeeds for valid Scalars")
+}
+
+/// Convert curve25519-dalek v4 RistrettoPoint → curve25519-dalek-ng RistrettoPoint
+fn to_ng_point(p: &RistrettoPoint) -> NgRistrettoPoint {
+    let bytes = p.compress().to_bytes();
+    // In curve25519-dalek-ng, CompressedRistretto::from_slice returns
+    // CompressedRistretto directly (not Option), unlike dalek v4.
+    NgCompressedRistretto::from_slice(&bytes)
+        .decompress()
+        .expect("decompressing a valid RistrettoPoint always succeeds")
+}
+
+/// Convert ng CompressedRistretto bytes to our CompressedRistretto-compatible bytes
+fn ng_compressed_bytes(c: &NgCompressedRistretto) -> [u8; 32] {
+    c.to_bytes()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Generators
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,10 +270,11 @@ static BP_GENS: once_cell::sync::Lazy<BulletproofGens> =
 /// Pedersen generators matching our RingCT commitment scheme:
 ///   B = standard Ristretto basepoint G
 ///   B_blinding = amount generator H (NUMS-derived)
+/// Returns ng-typed generators for bulletproofs v4 compatibility.
 fn ringct_pedersen_gens() -> PedersenGens {
     PedersenGens {
-        B:          G,
-        B_blinding: amount_generator(),
+        B:          to_ng_point(&G),
+        B_blinding: to_ng_point(&amount_generator()),
     }
 }
 
@@ -279,6 +308,7 @@ impl BulletproofRangeProof {
         let pc_gens = ringct_pedersen_gens();
         let bp_gens = &*BP_GENS;
         let mut transcript = Transcript::new(b"HSMC_BULLETPROOF_v2");
+        let ng_blinding = to_ng_scalar(&blinding);
 
         // prove_single returns (RangeProof, CompressedRistretto)
         let (proof, committed_point) = RangeProof::prove_single(
@@ -286,13 +316,14 @@ impl BulletproofRangeProof {
             &pc_gens,
             &mut transcript,
             amount,
-            &blinding,
+            &ng_blinding,
             64,
         )
-        .map_err(|e| CommitError::RangeProofFailed)?;
+        .map_err(|_| CommitError::RangeProofFailed)?;
 
         // Sanity: ensure the bulletproofs commitment matches our RingCT commitment
-        if committed_point != point.compress() {
+        // Compare bytes since committed_point is an ng CompressedRistretto
+        if ng_compressed_bytes(&committed_point) != point.compress().to_bytes() {
             return Err(CommitError::RangeProofFailed);
         }
 
@@ -328,9 +359,10 @@ impl BulletproofRangeProof {
         let pc_gens = ringct_pedersen_gens();
         let bp_gens = &*BP_GENS;
         let mut transcript = Transcript::new(b"HSMC_BULLETPROOF_v2");
+        let ng_compressed = NgCompressedRistretto::from_slice(&point.compress().to_bytes());
 
         proof
-            .verify_single(bp_gens, &pc_gens, &mut transcript, &point.compress(), 64)
+            .verify_single(bp_gens, &pc_gens, &mut transcript, &ng_compressed, 64)
             .is_ok()
     }
 
@@ -368,15 +400,18 @@ impl BulletproofRangeProof {
             return Err(CommitError::MissingBlindingFactor);
         }
 
+        // Convert blindings to ng Scalars for bulletproofs v4
+        let ng_blindings: Vec<NgScalar> = blindings.iter().map(to_ng_scalar).collect();
+
         let (agg_proof, _committed_points) = RangeProof::prove_multiple(
             bp_gens,
             &pc_gens,
             &mut transcript,
             &values,
-            &blindings,
+            &ng_blindings,
             64,
         )
-        .map_err(|e| CommitError::RangeProofFailed)?;
+        .map_err(|_| CommitError::RangeProofFailed)?;
 
         let proof_bytes = agg_proof.to_bytes();
         let proof_size = proof_bytes.len();

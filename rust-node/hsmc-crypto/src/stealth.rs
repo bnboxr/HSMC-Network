@@ -486,10 +486,10 @@ fn hash_to_point(data: &[u8]) -> RistrettoPoint {
 pub struct PqOneTimeOutput {
     /// Classic ECDH one-time output (backwards compatible)
     pub classic: OneTimeOutput,
-    /// Kyber-1024 ciphertext for the shared secret
-    pub kyber_ciphertext: Option<[u8; 1568]>,
+    /// Kyber-1024 ciphertext for the shared secret (Vec<u8> for serde compat)
+    pub kyber_ciphertext: Option<Vec<u8>>,
     /// Kyber-1024 public key used (allows receiver to check)
-    pub kyber_pubkey: Option<[u8; 1568]>,
+    pub kyber_pubkey: Option<Vec<u8>>,
 }
 
 /// Post-quantum capable stealth wallet.
