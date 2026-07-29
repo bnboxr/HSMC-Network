@@ -1011,10 +1011,9 @@ impl RollupManager {
     /// Get or create an L2 account.
     pub fn get_or_create_account(&mut self, address: &Address) -> &mut L2Account {
         let next_index = self.account_index.len() as u64;
-        let idx = self.account_index.entry(*address).or_insert(next_index);
-        let _idx = *idx;
-        self.accounts.entry(*address).or_insert_with(|| L2Account::new(*address));
-        self.accounts.get_mut(address).unwrap()
+        self.account_index.entry(*address).or_insert(next_index);
+        // Entry::or_insert_with returns &mut V directly — no unwrap needed.
+        self.accounts.entry(*address).or_insert_with(|| L2Account::new(*address))
     }
 
     /// Get the current state root.
@@ -1322,7 +1321,8 @@ impl RollupManager {
         };
 
         // Burn from L2
-        let account = self.accounts.get_mut(&l2_address).unwrap();
+        let account = self.accounts.get_mut(&l2_address)
+            .ok_or_else(|| RollupError::AccountNotFound(hex::encode(l2_address)))?;
         account.balance -= amount;
 
         let withdrawal = BridgeWithdrawal {

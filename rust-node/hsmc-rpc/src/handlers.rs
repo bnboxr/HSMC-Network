@@ -1923,7 +1923,12 @@ pub async fn rollup_submit_batch(
             match rollup.commit_batch(batch) {
                 Ok(id) => {
                     // Generate STARK proof for the batch
-                    let committed = rollup.batches.get(&id).unwrap();
+                    let committed = match rollup.batches.get(&id) {
+                        Some(c) => c,
+                        None => return Json(serde_json::json!({
+                            "error": format!("Batch {} not found after commit", id)
+                        })),
+                    };
                     match rollup.generate_proof(committed) {
                         Ok(proof_bytes) => {
                             let _ = rollup.attach_proof(id, proof_bytes);

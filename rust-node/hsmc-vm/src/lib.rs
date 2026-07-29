@@ -901,7 +901,9 @@ impl HsmcVm {
                     };
 
                     // Parse commitment point
-                    let commitment_bytes: [u8; 32] = data[0..32].try_into().unwrap();
+                    let Ok(commitment_bytes): Result<[u8; 32], _> = data[0..32].try_into() else {
+                        return -2; // data slice length mismatch (should be unreachable)
+                    };
                     let commitment_point = match CompressedRistretto::from_slice(&commitment_bytes)
                         .ok()
                         .and_then(|c| c.decompress())
@@ -911,11 +913,15 @@ impl HsmcVm {
                     };
 
                     // Parse amount (u64 LE)
-                    let amount_bytes: [u8; 8] = data[32..40].try_into().unwrap();
+                    let Ok(amount_bytes): Result<[u8; 8], _> = data[32..40].try_into() else {
+                        return -2; // data slice length mismatch (should be unreachable)
+                    };
                     let amount = u64::from_le_bytes(amount_bytes);
 
                     // Parse blinding scalar
-                    let blinding_bytes: [u8; 32] = data[40..72].try_into().unwrap();
+                    let Ok(blinding_bytes): Result<[u8; 32], _> = data[40..72].try_into() else {
+                        return -2; // data slice length mismatch (should be unreachable)
+                    };
                     let blinding = match Scalar::from_canonical_bytes(blinding_bytes) {
                         Some(s) => s,
                         None => return -2, // invalid scalar

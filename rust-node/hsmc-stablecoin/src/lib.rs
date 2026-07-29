@@ -587,7 +587,8 @@ impl CdpEngine {
         self.token_mut(st)?.burn(&owner, repay_amount)?;
 
         // Update CDP
-        let cdp = self.cdps.get_mut(&cdp_id).unwrap();
+        let cdp = self.cdps.get_mut(&cdp_id)
+            .ok_or(StablecoinError::CdpNotFound(cdp_id))?;
         cdp.debt_amount = cdp.debt_amount.saturating_sub(repay_amount);
         cdp.collateral_amount = cdp.collateral_amount.saturating_sub(collateral_to_release);
         cdp.last_fee_accrual = current_timestamp;
@@ -706,7 +707,8 @@ impl CdpEngine {
         let new_debt = (debt_amount as f64 * multiplier) as u64;
 
         // Apply new debt if it increased
-        let cdp = self.cdps.get_mut(&cdp_id).unwrap();
+        let cdp = self.cdps.get_mut(&cdp_id)
+            .ok_or(StablecoinError::CdpNotFound(cdp_id))?;
         if new_debt > cdp.debt_amount {
             let accrued = new_debt - cdp.debt_amount;
             debug!(
