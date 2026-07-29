@@ -57,7 +57,7 @@ impl RingPrivateKey {
     }
 
     pub fn from_bytes(bytes: &[u8; 32]) -> Option<Self> {
-        Scalar::from_canonical_bytes(*bytes).map(Self)
+        Scalar::from_canonical_bytes(*bytes).map(Self).into_option()
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
@@ -146,7 +146,7 @@ impl LsagSignature {
             None => return Err(RingError::KeyImageDecompressFailed),
         };
 
-        let rng = OsRng;
+        let mut rng = OsRng;
         let alpha = generate_scalar();
 
         // Compute initial L_s = alpha*G, R_s = alpha*H_p(P_s)
@@ -348,7 +348,7 @@ impl ClsagSignature {
             .collect::<Result<Vec<_>, _>>()?;
 
         let msg_hash = hash_message(message);
-        let rng = OsRng;
+        let mut rng = OsRng;
         let alpha = generate_scalar();
         let _beta  = generate_scalar(); // for D commitment
 
@@ -506,7 +506,7 @@ pub fn select_decoys(
 
     // Cryptographically secure random index selection (OsRng)
     use rand::Rng;
-    let rng = OsRng;
+    let mut rng = OsRng;
     let mut attempts = 0usize;
     while selected.len() < ring_size - 1 && attempts < ring_size * 100 {
         let idx = rng.gen_range(0..all_public_keys.len());
@@ -693,7 +693,7 @@ fn hash_to_scalar_domain(
 }
 
 fn scalar_from_bytes(bytes: &[u8; 32]) -> Result<Scalar, RingError> {
-    Scalar::from_canonical_bytes(*bytes).ok_or(RingError::ScalarDecompressFailed)
+    Scalar::from_canonical_bytes(*bytes).into_option().ok_or(RingError::ScalarDecompressFailed)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

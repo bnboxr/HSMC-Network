@@ -24,7 +24,7 @@ pub struct SchnorrSignature {
 impl SchnorrSignature {
     /// Sign a message with a secret key
     pub fn sign(secret_key: &Scalar, message: &[u8]) -> Self {
-        let rng = OsRng;
+        let mut rng = OsRng;
         let k = Scalar::random(&mut rng);
         let r_point = k * RISTRETTO_BASEPOINT_POINT;
         let r_bytes = r_point.compress().to_bytes();
@@ -44,7 +44,7 @@ impl SchnorrSignature {
             Some(p) => p,
             None => return false,
         };
-        let s = match Scalar::from_canonical_bytes(self.s).into() {
+        let s = match Scalar::from_canonical_bytes(self.s).into_option() {
             Some(s) => s,
             None => return false,
         };
@@ -146,7 +146,7 @@ impl MuSig2Session {
 
     /// Round 1: Each signer generates two nonces and commits
     pub fn generate_nonce_commitment(_idx: usize) -> (Scalar, Scalar, [u8; 32], [u8; 32]) {
-        let rng = OsRng;
+        let mut rng = OsRng;
         let k1 = Scalar::random(&mut rng);
         let k2 = Scalar::random(&mut rng);
         let r1 = (k1 * RISTRETTO_BASEPOINT_POINT).compress().to_bytes();
@@ -234,7 +234,7 @@ pub fn batch_verify_schnorr(
     }
     if signatures.is_empty() { return true; }
 
-    let rng = OsRng;
+    let mut rng = OsRng;
 
     // Σ(a_i * s_i) * G == Σ(a_i * R_i + a_i * e_i * P_i)
     let mut lhs_scalar = Scalar::ZERO;
@@ -247,7 +247,7 @@ pub fn batch_verify_schnorr(
             Scalar::random(&mut rng)
         };
 
-        let s = match Scalar::from_canonical_bytes(sig.s).into() {
+        let s = match Scalar::from_canonical_bytes(sig.s).into_option() {
             Some(s) => s,
             None => return false,
         };
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_schnorr_sign_verify() {
-        let rng = OsRng;
+        let mut rng = OsRng;
         let sk = Scalar::random(&mut rng);
         let pk = sk * RISTRETTO_BASEPOINT_POINT;
         let msg = b"HSMC Schnorr test message 2026";
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_schnorr_rejects_wrong_message() {
-        let rng = OsRng;
+        let mut rng = OsRng;
         let sk = Scalar::random(&mut rng);
         let pk = sk * RISTRETTO_BASEPOINT_POINT;
         let sig = SchnorrSignature::sign(&sk, b"correct");
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_batch_verify() {
-        let rng = OsRng;
+        let mut rng = OsRng;
         let mut sigs = Vec::new();
         let mut pks = Vec::new();
         let mut msgs = Vec::new();
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_musig2_session_2of2() -> anyhow::Result<()> {
-        let rng = OsRng;
+        let mut rng = OsRng;
         let sk1 = Scalar::random(&mut rng);
         let sk2 = Scalar::random(&mut rng);
         let pk1 = sk1 * RISTRETTO_BASEPOINT_POINT;

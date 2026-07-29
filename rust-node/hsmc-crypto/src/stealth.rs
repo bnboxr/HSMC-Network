@@ -28,7 +28,7 @@ pub struct DualKeyWallet {
 impl DualKeyWallet {
     /// Generate a fresh dual-key wallet
     pub fn generate() -> Self {
-        let rng = OsRng;
+        let mut rng = OsRng;
         let s = generate_scalar(&mut rng);
         let v = generate_scalar(&mut rng);
         Self {
@@ -51,7 +51,7 @@ impl DualKeyWallet {
     }
 
     pub fn from_spend_bytes(bytes: &[u8; 32]) -> Option<Self> {
-        let s = Scalar::from_canonical_bytes(*bytes)?;
+        let s = Scalar::from_canonical_bytes(*bytes).into_option()?;
         Some(Self::from_spend_key(s))
     }
 
@@ -196,7 +196,7 @@ impl StealthOutputSender {
         recipient: &StealthAddress,
         output_index: u32,
     ) -> Result<Self, StealthError> {
-        let rng = OsRng;
+        let mut rng = OsRng;
         let r = generate_scalar(&mut rng);
         let r_g = r * G;
 

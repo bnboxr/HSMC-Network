@@ -8,7 +8,6 @@ use rand::rngs::OsRng;
 use sha2::{Digest, Sha256, Sha512};
 use sha3::Keccak256;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use subtle::ConstantTimeEq;
 use anyhow::Context;
@@ -34,7 +33,7 @@ impl KeyPair {
 
     /// Reconstruct from 32-byte private key bytes (canonical form)
     pub fn from_bytes(bytes: &[u8; 32]) -> Option<Self> {
-        let sk = Scalar::from_canonical_bytes(*bytes).into()?;
+        let sk = Scalar::from_canonical_bytes(*bytes).into_option()?;
         if sk == Scalar::ZERO { return None; }
         let pk = sk * RISTRETTO_BASEPOINT_POINT;
         Some(Self { private_key: sk, public_key: pk })
@@ -152,7 +151,7 @@ impl KeyPair {
     }
 
     /// Batch-sign multiple messages
-    pub fn sign_batch(&self, messages: &[&[u8]]) -> Vec<EcdsaSignature> {
+    pub fn sign_batch(&self, messages: &[&[u8]]) -> anyhow::Result<Vec<EcdsaSignature>> {
         messages.iter().map(|msg| self.sign_deterministic(msg)).collect()
     }
 }
@@ -192,11 +191,11 @@ impl EcdsaSignature {
 
     /// Verify against an explicit public key (more efficient, no embedded key lookup)
     pub fn verify_with_key(&self, message: &[u8], pk: &RistrettoPoint) -> bool {
-        let r = match Scalar::from_canonical_bytes(self.r).into() {
+        let r = match Scalar::from_canonical_bytes(self.r).into_option() {
             Some(s) => s,
             None => return false,
         };
-        let s = match Scalar::from_canonical_bytes(self.s).into() {
+        let s = match Scalar::from_canonical_bytes(self.s).into_option() {
             Some(s) => s,
             None => return false,
         };
@@ -221,8 +220,8 @@ impl EcdsaSignature {
 
     /// Recover public key from signature + message (key recovery)
     pub fn recover_public_key(&self, message: &[u8]) -> Option<RistrettoPoint> {
-        let r = Scalar::from_canonical_bytes(self.r).into()?;
-        let s = Scalar::from_canonical_bytes(self.s).into()?;
+        let r = Scalar::from_canonical_bytes(self.r).into_option()?;
+        let s = Scalar::from_canonical_bytes(self.s).into_option()?;
 
         let r_point_attempt = r * RISTRETTO_BASEPOINT_POINT;
         let r_bytes = r_point_attempt.compress().to_bytes();
@@ -330,8 +329,8 @@ pub fn batch_verify_ecdsa(
     for (i, (sig, msg)) in signatures.iter().zip(messages.iter()).enumerate() {
         let a = if i == 0 { Scalar::ONE } else { Scalar::random(&mut rng) };
 
-        let r = match Scalar::from_canonical_bytes(sig.r).into() { Some(x) => x, None => return false };
-        let s = match Scalar::from_canonical_bytes(sig.s).into() { Some(x) => x, None => return false };
+        let r = match Scalar::from_canonical_bytes(sig.r).into_option() { Some(x) => x, None => return false };
+        let s = match Scalar::from_canonical_bytes(sig.s).into_option() { Some(x) => x, None => return false };
         let pk = match CompressedRistretto::from_slice(&sig.public_key).ok()
             .and_then(|c| c.decompress()) { Some(p) => p, None => return false };
 
@@ -453,13 +452,14 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_encoding() {
+    fn test_compact_encoding() -> anyhow::Result<()> {
         let kp = KeyPair::generate();
-        let sig = kp.sign_deterministic(b"compact");
+        let sig = kp.sign_deterministic(b"compact")?;
         let compact = sig.to_compact();
         let decoded = EcdsaSignature::from_compact(&compact, sig.public_key);
         assert_eq!(sig.r, decoded.r);
         assert_eq!(sig.s, decoded.s);
+        Ok(())
     }
 
     #[test]
@@ -471,13 +471,14 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_sign() {
+    fn test_batch_sign() -> anyhow::Result<()> {
         let kp = KeyPair::generate();
         let msgs: Vec<&[u8]> = vec![b"msg1", b"msg2", b"msg3"];
-        let sigs = kp.sign_batch(&msgs);
+        let sigs = kp.sign_batch(&msgs)?;
         assert_eq!(sigs.len(), 3);
         for (sig, msg) in sigs.iter().zip(msgs.iter()) {
             assert!(sig.verify(msg));
         }
+        Ok(())
     }
 }
