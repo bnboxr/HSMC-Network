@@ -31,5 +31,6 @@ rayon            = { workspace = true }
 num_cpus         = { workspace = true }
 fips204            = { workspace = true }
 fips203            = { workspace = true }
+curve25519-dalek-ng = "4"  # Bridge for bulletproofs v4 (uses dalek-ng internally)
 hsmc-core        = { path = "../hsmc-core" }
 

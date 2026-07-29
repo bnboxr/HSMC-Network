@@ -22,3 +22,6 @@ pub use ecdsa::*;
 pub use schnorr::*;
 pub use threshold::*;
 pub use hd_keys::*;
+pub use pq_dilithium::*;
+pub use pq_kyber::*;
+pub use hybrid::*;

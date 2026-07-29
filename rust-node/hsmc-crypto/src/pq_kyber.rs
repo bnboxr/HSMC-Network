@@ -49,16 +49,8 @@ pub struct PqKyberPublicKey {
 /// Kyber-1024 decapsulation key (secret, 3168 bytes)
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct PqKyberSecretKey {
-    #[zeroize(skip)]
+    /// Raw ML-KEM-1024 decapsulation key bytes (zeroized on drop via ZeroizeOnDrop)
     pub key_bytes: Vec<u8>,
-}
-
-impl Drop for PqKyberSecretKey {
-    fn drop(&mut self) {
-        for byte in self.key_bytes.iter_mut() {
-            *byte = 0;
-        }
-    }
 }
 
 /// Kyber-1024 key pair
@@ -77,14 +69,8 @@ pub struct PqKyberCiphertext {
 /// Kyber-1024 shared secret (32 bytes)
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct PqKyberSharedSecret {
-    #[zeroize(skip)]
+    /// 32-byte shared secret (zeroized on drop via ZeroizeOnDrop)
     pub secret_bytes: [u8; 32],
-}
-
-impl Drop for PqKyberSharedSecret {
-    fn drop(&mut self) {
-        self.secret_bytes.zeroize();
-    }
 }
 
 // ─────────────────────────────────────────────────────────────

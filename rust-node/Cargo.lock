@@ -1325,6 +1325,7 @@ dependencies = [
  "anyhow",
  "bulletproofs",
  "curve25519-dalek",
+ "curve25519-dalek-ng",
  "fips203",
  "fips204",
  "hex",
