@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use tracing::{info, warn, debug};
+use ed25519_dalek::{SigningKey, VerifyingKey, Signature as Ed25519Signature, Signer, Verifier};
+use rand::rngs::OsRng;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -719,45 +721,122 @@ pub fn pow_miner_reward(total_block_reward: u64) -> u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ValidatorKey
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Ed25519 keypair for validator block signing.
+/// Uses RFC 8032 Ed25519 — 32-byte secret key, 32-byte public key, 64-byte signatures.
+#[derive(Clone)]
+pub struct ValidatorKey {
+    pub signing_key: SigningKey,
+}
+
+impl ValidatorKey {
+    /// Generate a new random Ed25519 keypair using OS CSPRNG.
+    pub fn generate() -> Self {
+        let mut rng = OsRng;
+        Self {
+            signing_key: SigningKey::generate(&mut rng),
+        }
+    }
+
+    /// Reconstruct from 32-byte seed bytes.
+    pub fn from_bytes(bytes: &[u8; 32]) -> Option<Self> {
+        Some(Self {
+            signing_key: SigningKey::from_bytes(bytes),
+        })
+    }
+
+    /// Get the raw 32-byte secret key.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.signing_key.to_bytes()
+    }
+
+    /// Get the 32-byte public key (verifying key).
+    pub fn public_key_bytes(&self) -> [u8; 32] {
+        self.signing_key.verifying_key().to_bytes()
+    }
+}
+
+impl std::fmt::Debug for ValidatorKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValidatorKey")
+            .field("public_key", &hex::encode(self.public_key_bytes()))
+            .finish()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ValidatorSignature
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A validator's signature over a block header.
-/// Placeholder: uses SHA-256 HMAC-style. Replace with Ed25519/Dilithium in production.
+/// A validator's Ed25519 signature over a block header.
+/// Signs `(validator_address || block_hash || block_height)`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ValidatorSignature {
     pub validator_address: String,
-    pub signature: String,
+    /// 32-byte Ed25519 public key (verifying key).
+    pub public_key: [u8; 32],
+    /// 64-byte Ed25519 signature.
+    pub signature: [u8; 64],
     pub block_height: u64,
     pub block_hash: String,
 }
 
 impl ValidatorSignature {
-    /// Create a new validator signature (placeholder using SHA-256).
+    /// Create a new Ed25519 validator signature.
+    /// Signs the message `address || block_hash || height_le`.
     pub fn sign(
         validator_address: String,
-        _secret_key: &[u8],
+        key: &ValidatorKey,
         block_hash: String,
         block_height: u64,
     ) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(b"HSMC_POS_SIGN_V1:");
-        hasher.update(validator_address.as_bytes());
-        hasher.update(block_hash.as_bytes());
-        hasher.update(&block_height.to_le_bytes());
-        let sig = hex::encode(hasher.finalize());
-        Self { validator_address, signature: sig, block_height, block_hash }
+        let mut message = Vec::with_capacity(
+            validator_address.len() + block_hash.len() + 8,
+        );
+        message.extend_from_slice(validator_address.as_bytes());
+        message.extend_from_slice(block_hash.as_bytes());
+        message.extend_from_slice(&block_height.to_le_bytes());
+
+        let sig: Ed25519Signature = key.signing_key.sign(&message);
+        let public_key = key.public_key_bytes();
+
+        Self {
+            validator_address,
+            public_key,
+            signature: sig.to_bytes(),
+            block_height,
+            block_hash,
+        }
     }
 
-    /// Verify a validator signature.
+    /// Verify the Ed25519 signature against the embedded public key and message.
+    /// Returns true only if all of: address matches, public key is valid,
+    /// signature is valid for `(address || block_hash || height)`.
     pub fn verify(&self, expected_validator_address: &str) -> bool {
-        let mut hasher = Sha256::new();
-        hasher.update(b"HSMC_POS_SIGN_V1:");
-        hasher.update(expected_validator_address.as_bytes());
-        hasher.update(self.block_hash.as_bytes());
-        hasher.update(&self.block_height.to_le_bytes());
-        let expected = hex::encode(hasher.finalize());
-        expected == self.signature && expected_validator_address == self.validator_address
+        if expected_validator_address != self.validator_address {
+            return false;
+        }
+
+        let verifying_key = match VerifyingKey::from_bytes(&self.public_key) {
+            Ok(vk) => vk,
+            Err(_) => return false,
+        };
+
+        let sig = match Ed25519Signature::from_bytes(&self.signature) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        let mut message = Vec::with_capacity(
+            self.validator_address.len() + self.block_hash.len() + 8,
+        );
+        message.extend_from_slice(self.validator_address.as_bytes());
+        message.extend_from_slice(self.block_hash.as_bytes());
+        message.extend_from_slice(&self.block_height.to_le_bytes());
+
+        verifying_key.verify(&message, &sig).is_ok()
     }
 }
 
@@ -983,20 +1062,61 @@ mod tests {
 
     #[test]
     fn test_signature_sign_and_verify() {
+        let key = ValidatorKey::generate();
         let sig = ValidatorSignature::sign(
-            a("val1"), b"secret", "blockhash123".into(), 42,
+            a("val1"), &key, "blockhash123".into(), 42,
         );
         assert!(sig.verify(&a("val1")));
+    }
+
+    #[test]
+    fn test_signature_rejects_wrong_address() {
+        let key = ValidatorKey::generate();
+        let sig = ValidatorSignature::sign(
+            a("val1"), &key, "blockhash123".into(), 42,
+        );
         assert!(!sig.verify(&a("val2")));
     }
 
     #[test]
     fn test_signature_tamper_resistant() {
+        let key = ValidatorKey::generate();
         let mut sig = ValidatorSignature::sign(
-            a("val1"), b"secret", "blockhash123".into(), 42,
+            a("val1"), &key, "blockhash123".into(), 42,
         );
         sig.block_hash = "tampered".into();
         assert!(!sig.verify(&a("val1")));
+    }
+
+    #[test]
+    fn test_signature_rejects_wrong_key() {
+        let key1 = ValidatorKey::generate();
+        let key2 = ValidatorKey::generate();
+        let mut sig = ValidatorSignature::sign(
+            a("val1"), &key1, "blockhash123".into(), 42,
+        );
+        // Replace the public key with key2's — should fail
+        sig.public_key = key2.public_key_bytes();
+        assert!(!sig.verify(&a("val1")));
+    }
+
+    #[test]
+    fn test_signature_rejects_corrupted_signature() {
+        let key = ValidatorKey::generate();
+        let mut sig = ValidatorSignature::sign(
+            a("val1"), &key, "blockhash123".into(), 42,
+        );
+        // Flip a byte in the signature
+        sig.signature[0] ^= 0xFF;
+        assert!(!sig.verify(&a("val1")));
+    }
+
+    #[test]
+    fn test_validator_key_roundtrip() {
+        let key = ValidatorKey::generate();
+        let bytes = key.to_bytes();
+        let restored = ValidatorKey::from_bytes(&bytes).unwrap();
+        assert_eq!(key.public_key_bytes(), restored.public_key_bytes());
     }
 
     // ── Snapshot round-trip ───────────────────────────────────────────────

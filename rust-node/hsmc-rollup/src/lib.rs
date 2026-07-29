@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use tracing::info;
+use ed25519_dalek::{SigningKey, VerifyingKey, Signature as Ed25519Signature, Signer, Verifier};
 
 use winterfell::{
     math::{fields::f64::BaseElement, FieldElement, ToElements},
@@ -208,16 +209,45 @@ impl L2Transaction {
         self.signature = signature;
     }
 
-    /// Verify the transaction signature (placeholder — real impl uses ed25519).
-    /// Returns true if the signature is valid for the given public key.
-    pub fn verify_signature(&self, _public_key: &[u8; 32]) -> bool {
-        // In production, use ed25519-dalek: public_key.verify(&self.hash, &self.signature)
-        // For now, zero signatures always fail verification
-        if self.signature == [0u8; 64] {
-            return false;
-        }
-        // Accept any non-zero signature for testing
-        true
+    /// Sign the transaction with an Ed25519 signing key.
+    /// Signs `(nonce || to || amount || fee || data)` — the transaction
+    /// payload without the signature. Updates `self.signature` and
+    /// recomputes `self.hash`.
+    pub fn sign_with_key(&mut self, signing_key: &SigningKey) {
+        let message = self.build_signing_message();
+        let sig: Ed25519Signature = signing_key.sign(&message);
+        self.signature = sig.to_bytes();
+        self.hash = self.compute_hash();
+    }
+
+    /// Build the canonical message bytes that are signed.
+    /// Format: `nonce_le || to || amount_le || fee_le || data`.
+    fn build_signing_message(&self) -> Vec<u8> {
+        let mut msg = Vec::with_capacity(8 + 32 + 8 + 8 + self.data.len());
+        msg.extend_from_slice(&self.nonce.to_le_bytes());
+        msg.extend_from_slice(&self.to);
+        msg.extend_from_slice(&self.amount.to_le_bytes());
+        msg.extend_from_slice(&self.fee.to_le_bytes());
+        msg.extend_from_slice(&self.data);
+        msg
+    }
+
+    /// Verify the Ed25519 transaction signature.
+    /// Returns true only if the signature is valid for the sender's public key
+    /// over the canonical message `(nonce || to || amount || fee || data)`.
+    pub fn verify_signature(&self, public_key: &[u8; 32]) -> bool {
+        let verifying_key = match VerifyingKey::from_bytes(public_key) {
+            Ok(vk) => vk,
+            Err(_) => return false,
+        };
+
+        let sig = match Ed25519Signature::from_bytes(&self.signature) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        let message = self.build_signing_message();
+        verifying_key.verify(&message, &sig).is_ok()
     }
 
     /// Serialize for data availability (bincode).
@@ -1384,9 +1414,30 @@ mod tests {
         addr
     }
 
+    /// Generate a deterministic Ed25519 signing key for tests (seed-derived).
+    fn make_test_key(seed: u8) -> SigningKey {
+        let mut key_bytes = [0u8; 32];
+        key_bytes[0] = seed;
+        key_bytes[31] = seed;
+        SigningKey::from_bytes(&key_bytes)
+    }
+
     fn make_test_tx(from: Address, to: Address, amount: u64, nonce: u64) -> L2Transaction {
         let mut tx = L2Transaction::new(from, to, amount, 100, nonce, vec![]);
-        tx.signature = [1u8; 64]; // Non-zero signature passes verification
+        tx.signature = [1u8; 64]; // Placeholder — tests that call verify_signature should use make_signed_tx
+        tx
+    }
+
+    /// Create a test transaction with a real Ed25519 signature.
+    fn make_signed_tx(
+        from: Address,
+        to: Address,
+        amount: u64,
+        nonce: u64,
+        key: &SigningKey,
+    ) -> L2Transaction {
+        let mut tx = L2Transaction::new(from, to, amount, 100, nonce, vec![]);
+        tx.sign_with_key(key);
         tx
     }
 
@@ -1781,5 +1832,114 @@ mod tests {
         let delivered = registry.deliver_messages(dest_shard, 10 + CROSS_SHARD_TIMEOUT + 1);
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].status, "timed_out");
+    }
+
+    // ── Test 13: Ed25519 signature verification — valid sig accepted ────
+
+    #[test]
+    fn test_ed25519_verify_valid_signature() {
+        let key = make_test_key(200);
+        let from = make_test_address(201);
+        let to = make_test_address(202);
+        let tx = make_signed_tx(from, to, 100_000, 0, &key);
+
+        let pk = key.verifying_key().to_bytes();
+        assert!(tx.verify_signature(&pk));
+    }
+
+    // ── Test 14: Ed25519 — wrong public key rejected ────────────────────
+
+    #[test]
+    fn test_ed25519_verify_rejects_wrong_key() {
+        let key = make_test_key(210);
+        let wrong_key = make_test_key(211);
+        let from = make_test_address(212);
+        let to = make_test_address(213);
+        let tx = make_signed_tx(from, to, 100_000, 0, &key);
+
+        let wrong_pk = wrong_key.verifying_key().to_bytes();
+        assert!(!tx.verify_signature(&wrong_pk));
+    }
+
+    // ── Test 15: Ed25519 — tampered transaction rejected ────────────────
+
+    #[test]
+    fn test_ed25519_verify_rejects_tampered_tx() {
+        let key = make_test_key(220);
+        let from = make_test_address(221);
+        let to = make_test_address(222);
+        let mut tx = make_signed_tx(from, to, 100_000, 0, &key);
+
+        // Tamper with amount
+        tx.amount = 999_999;
+
+        let pk = key.verifying_key().to_bytes();
+        assert!(!tx.verify_signature(&pk));
+    }
+
+    // ── Test 16: Ed25519 — zero / empty signature rejected ──────────────
+
+    #[test]
+    fn test_ed25519_verify_rejects_empty_signature() {
+        let tx = L2Transaction::new(
+            make_test_address(230),
+            make_test_address(231),
+            100_000, 100, 0, vec![],
+        );
+        // signature is [0u8; 64] by default
+        let pk = make_test_key(232).verifying_key().to_bytes();
+        assert!(!tx.verify_signature(&pk));
+    }
+
+    // ── Test 17: Ed25519 — rejects malformed public key ─────────────────
+
+    #[test]
+    fn test_ed25519_verify_rejects_malformed_pk() {
+        let key = make_test_key(240);
+        let from = make_test_address(241);
+        let to = make_test_address(242);
+        let tx = make_signed_tx(from, to, 100_000, 0, &key);
+
+        // All-zeros public key is not a valid Ed25519 point
+        let bad_pk = [0u8; 32];
+        assert!(!tx.verify_signature(&bad_pk));
+    }
+
+    // ── Test 18: Ed25519 — malformed signature rejected ─────────────────
+
+    #[test]
+    fn test_ed25519_verify_rejects_malformed_sig() {
+        let key = make_test_key(250);
+        let from = make_test_address(251);
+        let to = make_test_address(252);
+        let mut tx = make_signed_tx(from, to, 100_000, 0, &key);
+
+        // Corrupt the signature
+        tx.signature[10] ^= 0xFF;
+        tx.signature[40] ^= 0xFF;
+
+        let pk = key.verifying_key().to_bytes();
+        assert!(!tx.verify_signature(&pk));
+    }
+
+    // ── Test 19: Ed25519 — sign_with_key produces verifiable signature ──
+
+    #[test]
+    fn test_ed25519_sign_with_key_roundtrip() {
+        let key = SigningKey::from_bytes(&{
+            let mut bytes = [0u8; 32];
+            bytes[0] = 99;
+            bytes
+        });
+        let from = make_test_address(99);
+        let to = make_test_address(100);
+        let mut tx = L2Transaction::new(from, to, 500_000, 0, 42, b"test_data".to_vec());
+        tx.sign_with_key(&key);
+
+        let pk = key.verifying_key().to_bytes();
+        assert!(tx.verify_signature(&pk));
+
+        // Hash should be recomputed after signing
+        assert_ne!(tx.hash, [0u8; 32]);
     }
 }

@@ -15,5 +15,6 @@ anyhow             = { workspace = true }
 tracing            = { workspace = true }
 chrono             = { workspace = true }
 parking_lot        = { workspace = true }
+ed25519-dalek      = { workspace = true }
 hsmc-core          = { path = "../hsmc-core" }
 hsmc-crypto        = { path = "../hsmc-crypto" }

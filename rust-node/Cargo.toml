@@ -68,4 +68,5 @@ crossbeam-channel  = "0.5"
 fips204            = "0.4"  # Dilithium-5 (ML-DSA-87) — Post-Quantum signatures
 fips203            = "0.4"  # Kyber-1024 (ML-KEM-1024) — Post-Quantum KEM
 winterfell         = "0.13" # zk-STARK prover/verifier (Polygon Miden)
+ed25519-dalek      = "2"     # Ed25519 signatures (RFC 8032)
 wasmtime           = "47"   # WASM smart contract runtime (Bytecode Alliance)
