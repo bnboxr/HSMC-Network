@@ -32,7 +32,7 @@ Key Features:
 • Dandelion++ pentru IP obfuscation
 • Proof-of-Stake cu validator rotation și slashing
 • Smart Contracts privacy-aware (WASM runtime)
-• Sub-second block finality (BFT)
+• ~60 second block time (PoW)
 • TPS: 850–2500 tranzacții/secundă`,
       },
       {

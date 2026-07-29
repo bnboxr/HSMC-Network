@@ -117,7 +117,7 @@ export const HeroSection = () => {
             transition={{ delay: 0.45, duration: 0.6 }}
             className="text-base sm:text-lg text-muted-foreground mb-10 max-w-2xl mx-auto leading-relaxed"
           >
-            Ring Signatures · Stealth Addresses · RingCT · 100+ Chain Multichain · HSMC Native Token
+            Ring Signatures · Stealth Addresses · RingCT · Multi-Chain Bridge · HSMC Native Token
           </motion.p>
 
           {/* Feature pills */}
@@ -129,10 +129,10 @@ export const HeroSection = () => {
           >
             {[
               { icon: Shield, text: 'RingCT Privacy' },
-              { icon: Zap, text: 'Sub-second Finality' },
-              { icon: Globe, text: '100+ Chains' },
+              { icon: Zap, text: '~60s Blocks' },
+              { icon: Globe, text: '10 Chains' },
               { icon: Lock, text: 'AES-256 Wallet' },
-              { icon: Cpu, text: 'PoS Consensus' },
+              { icon: Cpu, text: 'Hybrid PoW+PoS' },
             ].map((f) => (
               <div key={f.text} className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-muted/40 border border-border text-sm">
                 <f.icon className="w-3.5 h-3.5 text-primary" />

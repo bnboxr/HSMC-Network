@@ -479,7 +479,7 @@ export const TokenomicsSection = () => {
 
             {/* Multichain badge */}
             <div className="p-3 rounded-lg border border-primary/20 text-center" style={{ background: 'hsl(var(--primary) / 0.06)' }}>
-              <div className="font-bold text-primary text-xs font-mono uppercase tracking-widest">100+ Chain Multichain</div>
+              <div className="font-bold text-primary text-xs font-mono uppercase tracking-widest">Multi-Chain Bridge</div>
               <div className="text-[11px] text-muted-foreground mt-1">Default currency: HSMC — interoperable with all major EVM and non-EVM chains</div>
             </div>
           </motion.div>
