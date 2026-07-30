@@ -31,6 +31,7 @@ import type {
   RateLimiter,
   RetryOptions,
 } from "../types";
+import { randomInt } from "node:crypto";
 
 // ─── ABI fragments (only the parts we need) ──────────────────────────────
 
@@ -109,7 +110,7 @@ async function withRetry<T>(
       if (attempt === options.maxRetries) break;
 
       const delay = Math.min(
-        options.baseDelayMs * 2 ** attempt + Math.random() * 500,
+        options.baseDelayMs * 2 ** attempt + randomInt(0, 500),
         maxDelay,
       );
       options.onRetry?.(attempt + 1, lastError);
