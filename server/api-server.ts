@@ -259,8 +259,6 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   payment_intent_id TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
-`;
-
 -- Card Issuance tables (Feature #14: Stripe Issuing Integration)
 CREATE TABLE IF NOT EXISTS cardholders (
   id TEXT PRIMARY KEY,
@@ -319,6 +317,7 @@ CREATE TABLE IF NOT EXISTS card_funding_events (
   exchange_rate REAL NOT NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
+`;
 
 // ── Seed Data ────────────────────────────────────────────────────────────────
 // Production note: No fake data is seeded. All tables start empty.

@@ -1,9 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
-import { componentTagger } from "lovable-tagger";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
-import { mcpPlugin } from "@lovable.dev/mcp-js/stacks/supabase/vite";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -31,9 +29,13 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     nodePolyfills({ include: ["buffer", "crypto"] }),
     react(),
-    mode === "development" && componentTagger(),
-    mcpPlugin(),
-  ].filter(Boolean),
+  ],
+  optimizeDeps: {
+    disabled: false,
+    esbuildOptions: {
+      // Avoid segfault in sandbox — esbuild binary crashes
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
