@@ -78,7 +78,7 @@ export async function authenticateWithSeed(
   supabase.functions.invoke('wallet-signin', { body: { address, auth_password } })
     .then(async ({ error: fnErr }) => {
       if (fnErr) { console.warn('[seed-auth] wallet-signin skipped:', fnErr.message); return; }
-      const { error: signInErr } = await local auth({ email, password: auth_password });
+      const { error: signInErr } = await localAuth({ email, password: auth_password });
       if (signInErr) { console.warn('[seed-auth] local sign-in skipped:', signInErr.message); return; }
       const { data: u } = await supabase.auth.getUser();
       if (u?.user) {
