@@ -11,7 +11,9 @@ export default defineConfig(({ mode }) => ({
     allowedHosts: [
       "8af12238bf3efd5d279c4782f1645517.ctonew.app",
       ".beamlit.net",
+      ".aws.beamlit.net",
       ".ctonew.app",
+      "ip-10-110-111-6.us-west-2.prod.aws.beamlit.net",
     ],
     hmr: {
       overlay: false,
