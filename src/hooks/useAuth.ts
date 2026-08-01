@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/db/client';
-import { lovable } from '@/integrations/lovable';
-// Local auth types — no external dependency
+// lovable integration removed — using local auth only
 import { restoreSeedFromDb } from '@/utils/wallet-seed-db';
 
 /** Maximum time (ms) to wait for auth before showing app anyway */
@@ -102,10 +101,9 @@ export const useAuth = () => {
   };
 
   const signInWithGoogle = async () => {
-    const result = await lovable.auth.signInWithOAuth('google', {
-      redirect_uri: window.location.origin,
-    });
-    return { data: result, error: result.error ?? null };
+    // Google OAuth not available in local mode — use seed phrase wallet instead
+    console.info('[useAuth] Google OAuth not available (local mode). Use seed phrase wallet.');
+    return { data: null, error: 'Google OAuth not available in local mode' };
   };
 
   const signOut = async () => {
