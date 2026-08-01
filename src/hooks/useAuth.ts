@@ -25,50 +25,65 @@ export const useAuth = () => {
       }
     }, AUTH_TIMEOUT_MS);
 
-    // Get initial session
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        if (cancelled) return;
-        setSession(session);
-        setUser(session?.user ?? null);
-        setError(null);
-        // Auto-restore encrypted seed from DB if missing in localStorage
-        if (session?.user) {
-          restoreSeedFromDb(session.user.id).catch(console.warn);
-        }
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        console.error('[useAuth] getSession failed:', err);
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-          if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        }
-      });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (cancelled) return;
-        try {
+    // Get initial session — wrap in try/catch because supabase.auth may throw synchronously
+    try {
+      supabase.auth.getSession()
+        .then(({ data: { session } }) => {
+          if (cancelled) return;
           setSession(session);
           setUser(session?.user ?? null);
           setError(null);
-          // Restore seed on every fresh sign-in
-          if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
+          if (session?.user) {
             restoreSeedFromDb(session.user.id).catch(console.warn);
           }
-        } catch (err: unknown) {
-          console.error('[useAuth] onAuthStateChange error:', err);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          console.warn('[useAuth] getSession failed (API unreachable or auth not available):', err);
           const msg = err instanceof Error ? err.message : String(err);
           setError(msg);
-        }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setLoading(false);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+          }
+        });
+    } catch (syncErr: unknown) {
+      // supabase.auth getter throws synchronously (local mode — auth not available)
+      if (!cancelled) {
+        console.warn('[useAuth] Auth not available (local mode):', syncErr);
+        setError('Auth service not available — using local wallet only.');
+        setLoading(false);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
       }
-    );
+    }
+
+    // Listen for auth changes — also wrap in try/catch
+    let subscription: { unsubscribe: () => void } = { unsubscribe: () => {} };
+    try {
+      const authResult = supabase.auth.onAuthStateChange(
+        async (event, session) => {
+          if (cancelled) return;
+          try {
+            setSession(session);
+            setUser(session?.user ?? null);
+            setError(null);
+            if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
+              restoreSeedFromDb(session.user.id).catch(console.warn);
+            }
+          } catch (err: unknown) {
+            console.error('[useAuth] onAuthStateChange error:', err);
+            const msg = err instanceof Error ? err.message : String(err);
+            setError(msg);
+          }
+        }
+      );
+      subscription = authResult.data.subscription;
+    } catch (_syncErr) {
+      // local mode — no auth listener available
+      console.warn('[useAuth] onAuthStateChange not available (local mode).');
+    }
 
     return () => {
       cancelled = true;
@@ -78,26 +93,36 @@ export const useAuth = () => {
   }, []);
 
   const signUp = async (email: string, password: string, username?: string) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    const { data, error } = await supabase.auth.signUp({
-      email: normalizedEmail,
-      password,
-      options: {
-        emailRedirectTo: `${window.location.origin}/onboarding`,
-        data: {
-          username: username || normalizedEmail.split('@')[0],
+    try {
+      const normalizedEmail = email.trim().toLowerCase();
+      const { data, error } = await supabase.auth.signUp({
+        email: normalizedEmail,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/onboarding`,
+          data: {
+            username: username || normalizedEmail.split('@')[0],
+          },
         },
-      },
-    });
-    return { data, error };
+      });
+      return { data, error };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { data: null, error: msg };
+    }
   };
 
   const signIn = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    return { data, error };
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      return { data, error };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { data: null, error: msg };
+    }
   };
 
   const signInWithGoogle = async () => {
@@ -107,8 +132,13 @@ export const useAuth = () => {
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    return { error };
+    try {
+      const { error } = await supabase.auth.signOut();
+      return { error };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { error: msg };
+    }
   };
 
   return {
