@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Theme for the AndroidManifest (kept for backwards compatibility). -->
+    <style name="Theme.HSMCWallet" parent="@style/AppTheme" />
+
+</resources>

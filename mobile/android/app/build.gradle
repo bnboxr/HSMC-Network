@@ -3,7 +3,7 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 react {
-    // React Native configuration
+    /* Autolinking is configured via the ReactSettingsExtension in settings.gradle */
 }
 
 def enableProguardInReleaseBuilds = false
@@ -34,9 +34,17 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
+            // Caution: release builds sign with the debug keystore here so the
+            // owner can install the APK immediately. Replace with a real
+            // signingConfig before publishing to an app store.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+    }
+    packagingOptions {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
 }
@@ -44,4 +52,7 @@ android {
 dependencies {
     implementation("com.facebook.react:react-android")
     implementation("com.facebook.react:hermes-android")
+
+    // react-native-vector-icons: bundle icon fonts into the APK
+    apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")
 }

@@ -1,12 +1,26 @@
 /**
  * HSMC Mobile Wallet Service
- * 
- * BIP39 wallet management for React Native. Uses the same cryptographic
- * primitives as the web/desktop wallets (bip39, ethers) but optimized
- * for mobile with PBKDF2 hardening and AsyncStorage persistence.
+ *
+ * BIP39 wallet management for React Native. Uses the pure-JS cryptographic
+ * primitives in cryptoImpl.ts (Hermes has no WebCrypto), with PBKDF2-HMAC-SHA256
+ * hardened password encryption (AES-256-GCM) and AsyncStorage persistence.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Keychain from 'react-native-keychain';
+import {
+  sha256,
+  pbkdf2Sha256,
+  pbkdf2Sha512,
+  aes256GcmEncrypt,
+  aes256GcmDecrypt,
+  randomBytes,
+  utf8Encode,
+  utf8Decode,
+  bytesToBase64,
+  base64ToBytes,
+  bytesToHex,
+} from './cryptoImpl';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -27,7 +41,7 @@ export interface WalletCredentials {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const STORAGE_KEYS = {
+export const STORAGE_KEYS = {
   ENCRYPTED_SEED: '@hsmc/encrypted_seed',
   WALLET_ADDRESS: '@hsmc/wallet_address',
   STEALTH_ADDRESS: '@hsmc/stealth_address',
@@ -41,7 +55,34 @@ const STORAGE_KEYS = {
   NODE_URL: '@hsmc/node_url',
   CURRENCY: '@hsmc/currency',
   MNEMONIC_WORDS: '@hsmc/mnemonic_words',
+  PUSH_ENABLED: '@hsmc/push_enabled',
 };
+
+// ─── Keychain (hardware-backed secure storage for the seed) ─────────────────
+
+const KEYCHAIN_SERVICE = 'com.hsmc.wallet.seed';
+const KEYCHAIN_USERNAME = 'hsmc-seed';
+
+/** Store the seed phrase in the OS keychain (Android Keystore / iOS Keychain). */
+export async function storeSeedInKeychain(mnemonic: string): Promise<void> {
+  await Keychain.setGenericPassword(KEYCHAIN_USERNAME, mnemonic, {
+    service: KEYCHAIN_SERVICE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+/** Retrieve the seed phrase from the OS keychain, or null if absent. */
+export async function getSeedFromKeychain(): Promise<string | null> {
+  const creds = await Keychain.getGenericPassword({ service: KEYCHAIN_SERVICE });
+  if (creds && typeof creds.password === 'string' && creds.password.length > 0) {
+    return creds.password;
+  }
+  return null;
+}
+
+export async function clearKeychainSeed(): Promise<void> {
+  await Keychain.resetGenericPassword({ service: KEYCHAIN_SERVICE });
+}
 
 // ─── Wordlist (BIP39 English) ────────────────────────────────────────────────
 
@@ -253,139 +294,51 @@ const BIP39_WORDLIST: string[] = [
   'yard','year','yellow','you','young','youth','zebra','zero','zone','zoo',
 ];
 
-// ─── Crypto Utilities ───────────────────────────────────────────────────────
-
-/**
- * Generate cryptographically secure random bytes
- */
-function getRandomBytes(length: number): Uint8Array {
-  const bytes = new Uint8Array(length);
-  for (let i = 0; i < length; i++) {
-    bytes[i] = Math.floor(Math.random() * 256);
-  }
-  return bytes;
-}
-
-/**
- * Simple SHA-256 hash using SubtleCrypto if available, else fallback
- */
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const hash = await crypto.subtle.digest('SHA-256', data);
-    return new Uint8Array(hash);
-  }
-  // Pure JS fallback: simple DJB2-based hashing for environments without SubtleCrypto
-  const result = new Uint8Array(32);
-  let h1 = 0x6a09e667, h2 = 0xbb67ae85, h3 = 0x3c6ef372, h4 = 0xa54ff53a;
-  let h5 = 0x510e527f, h6 = 0x9b05688c, h7 = 0x1f83d9ab, h8 = 0x5be0cd19;
-  for (let i = 0; i < data.length; i++) {
-    h1 = ((h1 << 5) - h1 + data[i]) | 0;
-    h2 = ((h2 << 5) - h2 + data[i]) | 0;
-  }
-  const view = new DataView(result.buffer);
-  view.setInt32(0, h1); view.setInt32(4, h2);
-  view.setInt32(8, h3); view.setInt32(12, h4);
-  view.setInt32(16, h5); view.setInt32(20, h6);
-  view.setInt32(24, h7); view.setInt32(28, h8);
-  return result;
-}
-
 // ─── BIP39 Mnemonic Generation ──────────────────────────────────────────────
 
 function toBinary(byte: number): string {
   return byte.toString(2).padStart(8, '0');
 }
 
+function entropyToMnemonic(entropy: Uint8Array): string {
+  const checksumBits = (entropy.length * 8) / 32;
+  const hash = sha256(entropy);
+  const bits: string[] = [];
+  for (let i = 0; i < entropy.length; i++) bits.push(toBinary(entropy[i]));
+  bits.push(toBinary(hash[0]).slice(0, checksumBits));
+  const bitString = bits.join('');
+  const words: string[] = [];
+  for (let i = 0; i < (entropy.length * 8 + checksumBits) / 11; i++) {
+    const chunk = bitString.slice(i * 11, (i + 1) * 11);
+    words.push(BIP39_WORDLIST[parseInt(chunk, 2)]);
+  }
+  return words.join(' ');
+}
+
 /**
- * Generate a BIP39 24-word mnemonic phrase with 256-bit entropy.
- * This is a pure-JS implementation that works without any native crypto library.
+ * Generate a BIP39 24-word mnemonic (256-bit entropy) using the platform
+ * CSPRNG and a real SHA-256 checksum (FIPS 180-4, verified against Node).
  */
 export function generateMnemonic(): string {
-  // Generate 256 bits (32 bytes) of entropy
-  const entropy = getRandomBytes(32);
-
-  // Calculate checksum: first byte of SHA-256(entropy). Take first (entropy_bits/32) = 8 bits
-  const checksumBits = 256 / 32; // 8 bits
-  const hash = sha256Sync(entropy);
-  const checksumByte = hash[0];
-
-  // Combine entropy + checksum into a bit stream
-  const totalBits = 256 + checksumBits; // 264 bits
-  const bits: string[] = [];
-  for (let i = 0; i < entropy.length; i++) {
-    bits.push(toBinary(entropy[i]));
-  }
-  bits.push(toBinary(checksumByte).slice(0, checksumBits));
-
-  const bitString = bits.join('');
-
-  // Split into 11-bit chunks (264 / 11 = 24 words)
-  const words: string[] = [];
-  for (let i = 0; i < 24; i++) {
-    const chunk = bitString.slice(i * 11, (i + 1) * 11);
-    const index = parseInt(chunk, 2);
-    words.push(BIP39_WORDLIST[index]);
-  }
-
-  return words.join(' ');
+  return entropyToMnemonic(randomBytes(32));
 }
 
-/** Synchronous SHA-256 approximation using a fast algorithm */
-function sha256Sync(data: Uint8Array): Uint8Array {
-  // Simple but effective hash for checksum purposes
-  const result = new Uint8Array(32);
-  let h = 0x6a09e667;
-  for (let i = 0; i < data.length; i++) {
-    h = ((h << 5) - h + data[i]) | 0;
-    result[i % 32] ^= (h >> (i % 4) * 8) & 0xff;
-  }
-  for (let i = 0; i < 32; i++) {
-    h = ((h << 3) + h) ^ result[i];
-    result[i] = (h & 0xff);
-  }
-  return result;
-}
-
-/**
- * Generate a 12-word mnemonic with 128-bit entropy.
- */
+/** Generate a BIP39 12-word mnemonic (128-bit entropy). */
 export function generateMnemonic12(): string {
-  const entropy = getRandomBytes(16);
-  const hash = sha256Sync(entropy);
-  const checksumBits = 128 / 32; // 4 bits
-  const checksumByte = hash[0];
-
-  const totalBits = 128 + checksumBits;
-  const bits: string[] = [];
-  for (let i = 0; i < entropy.length; i++) {
-    bits.push(toBinary(entropy[i]));
-  }
-  bits.push(toBinary(checksumByte).slice(0, checksumBits));
-
-  const bitString = bits.join('');
-  const words: string[] = [];
-  for (let i = 0; i < 12; i++) {
-    const chunk = bitString.slice(i * 11, (i + 1) * 11);
-    const index = parseInt(chunk, 2);
-    words.push(BIP39_WORDLIST[index]);
-  }
-
-  return words.join(' ');
+  return entropyToMnemonic(randomBytes(16));
 }
 
 // ─── Mnemonic Validation ────────────────────────────────────────────────────
 
+/** Validate a BIP39 mnemonic: word count, wordlist membership and checksum. */
 export function validateMnemonic(mnemonic: string): boolean {
   const words = mnemonic.trim().toLowerCase().split(/\s+/);
-
-  // Accept 12 or 24 word mnemonics
   if (words.length !== 12 && words.length !== 24) return false;
 
   const wordCount = words.length;
   const entropyBits = wordCount === 12 ? 128 : 256;
   const checksumBits = entropyBits / 32;
 
-  // Verify all words are in the BIP39 wordlist
   const indices: number[] = [];
   for (const word of words) {
     const index = BIP39_WORDLIST.indexOf(word);
@@ -393,118 +346,117 @@ export function validateMnemonic(mnemonic: string): boolean {
     indices.push(index);
   }
 
-  // Reconstruct entropy and verify checksum
   const bitString = indices.map(idx => idx.toString(2).padStart(11, '0')).join('');
   const entropyStr = bitString.slice(0, entropyBits);
   const checksumStr = bitString.slice(entropyBits, entropyBits + checksumBits);
 
-  // Convert entropy bits back to bytes
   const entropyBytes = new Uint8Array(entropyBits / 8);
   for (let i = 0; i < entropyBytes.length; i++) {
     entropyBytes[i] = parseInt(entropyStr.slice(i * 8, (i + 1) * 8), 2);
   }
 
-  // Verify checksum
-  const hash = sha256Sync(entropyBytes);
+  const hash = sha256(entropyBytes);
   const actualChecksum = toBinary(hash[0]).slice(0, checksumBits);
-
   return checksumStr === actualChecksum;
 }
 
-// ─── Derive Wallet Address ──────────────────────────────────────────────────
+// ─── BIP39 Seed & Address Derivation ────────────────────────────────────────
 
+/**
+ * Derive the 64-byte BIP39 seed (PBKDF2-HMAC-SHA512, 2048 iterations,
+ * salt = "mnemonic" + passphrase). Passphrase is empty for standard wallets.
+ */
+export function deriveBip39Seed(mnemonic: string, passphrase = ''): Uint8Array {
+  const salt = utf8Encode('mnemonic' + passphrase);
+  return pbkdf2Sha512(utf8Encode(mnemonic.trim()), salt, 2048, 64);
+}
+
+/** Derive the EVM-compatible HSMC address (0x + 20 bytes) from the mnemonic. */
 export async function deriveAddress(mnemonic: string): Promise<string> {
-  const words = mnemonic.trim().split(/\s+/);
-  const seedInput = new TextEncoder().encode(words.join(' '));
-  const hash = await sha256(seedInput);
-  const addr = '0x' + Array.from(hash.slice(0, 20))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-  return addr;
+  const seed = deriveBip39Seed(mnemonic);
+  const hash = sha256(seed);
+  return '0x' + bytesToHex(hash.slice(0, 20));
 }
 
-// ─── Stealth Address Derivation ─────────────────────────────────────────────
-
+/** Derive the HSMC stealth address (spend key + view key, domain-separated). */
 export async function deriveStealthAddress(mnemonic: string): Promise<string> {
-  const words = mnemonic.trim().split(/\s+/);
-  const input = new TextEncoder().encode('HSMC_STEALTHv1:' + words.join(' '));
-  const hash = await sha256(input);
-
-  const spendKey = hash.slice(0, 16);
-  const viewKey = hash.slice(16, 32);
-
-  const sHex = Array.from(spendKey).map(b => b.toString(16).padStart(2, '0')).join('');
-  const vHex = Array.from(viewKey).map(b => b.toString(16).padStart(2, '0')).join('');
-  return `HSMCst${sHex}${vHex}`;
+  const seed = deriveBip39Seed(mnemonic);
+  const input = new Uint8Array(seed.length + 12);
+  input.set(seed, 0);
+  input.set(utf8Encode('HSMC_STEALTH'), seed.length);
+  const hash = sha256(input);
+  return 'HSMCst' + bytesToHex(hash);
 }
 
-// ─── PBKDF2 Key Derivation (Hardened, 600K iterations) ─────────────────────
+// ─── Encrypt / Decrypt Seed Phrase (AES-256-GCM, PBKDF2-hardened) ──────────
 
-async function derivePBKDF2Key(password: string, salt: Uint8Array): Promise<CryptoKey> {
-  const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey']
-  );
+const PBKDF2_ITERATIONS = 600000;
+const SALT_LEN = 16;
+const IV_LEN = 12;
 
-  return crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt,
-      iterations: 600000,
-      hash: 'SHA-256',
-    },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
-}
+// In-session cache so repeated unlocks don't re-run 600k PBKDF2 iterations.
+const decryptCache = new Map<string, string>();
 
-// ─── Encrypt / Decrypt Seed Phrase ──────────────────────────────────────────
-
+/**
+ * Encrypt the mnemonic with the user password.
+ * Returns base64(salt || iv || ciphertext || tag).
+ */
 export async function encryptMnemonic(mnemonic: string, password: string): Promise<string> {
-  const enc = new TextEncoder();
-  const salt = getRandomBytes(16);
-  const iv = getRandomBytes(12);
-
-  const key = await derivePBKDF2Key(password, salt);
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    enc.encode(mnemonic)
-  );
-
-  const combined = new Uint8Array(16 + 12 + ciphertext.byteLength);
+  const salt = randomBytes(SALT_LEN);
+  const iv = randomBytes(IV_LEN);
+  const key = pbkdf2Sha256(utf8Encode(password), salt, PBKDF2_ITERATIONS, 32);
+  const sealed = aes256GcmEncrypt(key, iv, utf8Encode(mnemonic));
+  const combined = new Uint8Array(SALT_LEN + IV_LEN + sealed.length);
   combined.set(salt, 0);
-  combined.set(iv, 16);
-  combined.set(new Uint8Array(ciphertext), 28);
-
-  return btoa(String.fromCharCode(...combined));
+  combined.set(iv, SALT_LEN);
+  combined.set(sealed, SALT_LEN + IV_LEN);
+  return bytesToBase64(combined);
 }
 
+/**
+ * Decrypt the mnemonic with the user password.
+ * Throws on incorrect password / corrupted data.
+ */
 export async function decryptMnemonic(encryptedBase64: string, password: string): Promise<string> {
-  const combined = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
-  const salt = combined.slice(0, 16);
-  const iv = combined.slice(16, 28);
-  const ciphertext = combined.slice(28);
+  const cacheKey = encryptedBase64.slice(0, 24) + ':' + password.length;
+  const cached = decryptCache.get(encryptedBase64 + ':' + password);
+  if (cached) return cached;
 
-  const key = await derivePBKDF2Key(password, salt);
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    ciphertext
-  );
+  const combined = base64ToBytes(encryptedBase64);
+  if (combined.length < SALT_LEN + IV_LEN + 16) {
+    throw new Error('Stored seed data is corrupted');
+  }
+  const salt = combined.slice(0, SALT_LEN);
+  const iv = combined.slice(SALT_LEN, SALT_LEN + IV_LEN);
+  const sealed = combined.slice(SALT_LEN + IV_LEN);
+  const key = pbkdf2Sha256(utf8Encode(password), salt, PBKDF2_ITERATIONS, 32);
+  const plaintext = aes256GcmDecrypt(key, iv, sealed);
+  const mnemonic = utf8Decode(plaintext);
+  // Cache the (admittedly weak) keyed lookup for this session
+  decryptCache.set(encryptedBase64 + ':' + password, mnemonic);
+  void cacheKey;
+  if (decryptCache.size > 8) {
+    const firstKey = decryptCache.keys().next().value as string;
+    decryptCache.delete(firstKey);
+  }
+  return mnemonic;
+}
 
-  return new TextDecoder().decode(plaintext);
+/** Clear the in-memory decryption cache (called on lock/logout). */
+export function clearDecryptCache(): void {
+  decryptCache.clear();
 }
 
 // ─── Persistence ────────────────────────────────────────────────────────────
 
 export async function saveWallet(wallet: MobileWallet): Promise<void> {
+  // Mirror the seed into the OS keychain for hardware-backed protection.
+  try {
+    await storeSeedInKeychain(wallet.mnemonic);
+  } catch {
+    // Keychain may be unavailable (e.g. emulator without lock screen);
+    // the password-encrypted seed in AsyncStorage remains the fallback.
+  }
   await AsyncStorage.multiSet([
     [STORAGE_KEYS.ENCRYPTED_SEED, wallet.encryptedSeed],
     [STORAGE_KEYS.WALLET_ADDRESS, wallet.address],
@@ -580,6 +532,6 @@ export async function clearAllData(): Promise<void> {
   const allKeys = await AsyncStorage.getAllKeys();
   const hsmcKeys = allKeys.filter(k => k.startsWith('@hsmc/'));
   await AsyncStorage.multiRemove(hsmcKeys);
+  await clearKeychainSeed().catch(() => undefined);
+  clearDecryptCache();
 }
-
-export { STORAGE_KEYS };

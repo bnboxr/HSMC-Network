@@ -1,13 +1,50 @@
 /**
  * HSMC Mobile Wallet — API Service
- * 
+ *
  * Communicates with the HSMC API server (port 3001) using Supabase-compatible
  * REST endpoints and privileged endpoints for auth, shielded, treasury, etc.
+ * The base URL is platform-aware: Android emulators reach the host machine via
+ * 10.0.2.2; physical devices should set a custom node URL in Settings.
  */
 
-const API_BASE_URL = __DEV__ 
-  ? 'http://localhost:3001'
-  : 'https://api.hsmc.network';
+import { Platform } from 'react-native';
+import { loadSetting, saveSetting } from './wallet';
+
+const DEFAULT_DEV_BASE_URL = Platform.OS === 'android'
+  ? 'http://10.0.2.2:3001'
+  : 'http://localhost:3001';
+
+const PROD_BASE_URL = 'https://api.hsmc.network';
+
+let apiBaseUrl: string | null = null;
+
+/** Get the current API base URL (falls back to platform default). */
+export function getApiBaseUrl(): string {
+  return apiBaseUrl || DEFAULT_DEV_BASE_URL;
+}
+
+/**
+ * Set a custom API base URL (persisted; used by Settings → Network).
+ * Pass null/empty to revert to the platform default.
+ */
+export async function setApiBaseUrl(url: string | null): Promise<void> {
+  if (url && url.trim().length > 0) {
+    const clean = url.trim().replace(/\/+$/, '');
+    apiBaseUrl = clean;
+    await saveSetting('@hsmc/node_url', clean);
+  } else {
+    apiBaseUrl = null;
+    await saveSetting('@hsmc/node_url', '');
+  }
+}
+
+/** Restore a previously persisted node URL override (call at app start). */
+export async function restoreApiBaseUrl(): Promise<void> {
+  const saved = await loadSetting('@hsmc/node_url');
+  if (saved && saved.trim().length > 0) {
+    apiBaseUrl = saved.trim().replace(/\/+$/, '');
+  }
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -134,7 +171,7 @@ async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE_URL}${path}`;
+  const url = `${getApiBaseUrl()}${path}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'User-Agent': 'HSMC-Mobile/1.0',
@@ -145,25 +182,37 @@ async function apiFetch<T>(
     headers['Authorization'] = `Bearer ${authToken}`;
   }
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-    signal: AbortSignal.timeout(30000),
-  });
+  // Manual timeout (AbortSignal.timeout is unavailable on Hermes).
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    let errorMessage: string;
-    try {
-      const parsed = JSON.parse(errorBody);
-      errorMessage = parsed.error || parsed.message || errorBody;
-    } catch {
-      errorMessage = errorBody || response.statusText;
+    if (!response.ok) {
+      const errorBody = await response.text();
+      let errorMessage: string;
+      try {
+        const parsed = JSON.parse(errorBody);
+        errorMessage = parsed.error || parsed.message || errorBody;
+      } catch {
+        errorMessage = errorBody || response.statusText;
+      }
+      throw new Error(`API Error ${response.status}: ${errorMessage}`);
     }
-    throw new Error(`API Error ${response.status}: ${errorMessage}`);
-  }
 
-  return response.json();
+    return response.json();
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('API request timed out after 30s. Check the node URL in Settings.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 // ─── REST API (Supabase-compatible) ─────────────────────────────────────────
@@ -479,6 +528,67 @@ export async function getTreasuryBalance(): Promise<{
   transactions_count: number;
 }> {
   return apiFetch('/treasury/balance');
+}
+
+export interface TreasuryTransactionRow {
+  id: string;
+  amount: number;
+  type: string;
+  description: string;
+  created_at: string;
+}
+
+export async function getTreasuryTransactions(limit = 25): Promise<TreasuryTransactionRow[]> {
+  return apiFetch(`/treasury/transactions?limit=${limit}`);
+}
+
+// ─── HSMCPay (Stripe) Endpoints ─────────────────────────────────────────────
+
+export interface HsmcPayCheckoutResponse {
+  session_id?: string;
+  payment_intent_id?: string;
+  client_secret?: string;
+  publishable_key?: string;
+  amount_usd: number;
+  amount_hsmc: number;
+  hsmc_price: number;
+  status: string;
+  url?: string;
+}
+
+/** Initiate a fiat → HSMC purchase via Stripe checkout. */
+export async function hsmcPayInitiateCheckout(amountUsd: number): Promise<HsmcPayCheckoutResponse> {
+  return apiFetch<HsmcPayCheckoutResponse>('/stripe/checkout', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'initiate', amount_usd: amountUsd }),
+  });
+}
+
+/** Check the status of an existing checkout / payment intent. */
+export async function hsmcPayCheckoutStatus(sessionId: string): Promise<HsmcPayCheckoutResponse> {
+  return apiFetch<HsmcPayCheckoutResponse>('/stripe/checkout', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'status', session_id: sessionId }),
+  });
+}
+
+export interface HsmcPayPayoutResponse {
+  payout_id?: string;
+  amount_usd: number;
+  amount_hsmc: number;
+  status: string;
+  estimated_arrival?: string;
+}
+
+/** Initiate an HSMC → fiat sell via Stripe payout. */
+export async function hsmcPayInitiatePayout(
+  amountHsmc: number,
+  destinationAddress: string
+): Promise<HsmcPayPayoutResponse> {
+  return apiFetch<HsmcPayPayoutResponse>('/stripe/payout', {
+    method: 'POST',
+    body: JSON.stringify({ amount_hsmc: amountHsmc, destination: destinationAddress }),
+  });
 }
 
 // ─── Token Metrics Endpoints ────────────────────────────────────────────────

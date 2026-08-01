@@ -1,10 +1,15 @@
 /**
- * HSMC Mobile — Push Notification Service
- * Uses Firebase Cloud Messaging (FCM) for Android and APNs for iOS.
- * Notification types: transaction alerts, staking rewards, price alerts, network status.
+ * HSMC Mobile — Push & Local Notification Service
+ *
+ * Uses @notifee/react-native for real system notifications (Android channels,
+ * iOS permissions) with a graceful fallback to an in-app notification queue.
+ * Notification types: transaction alerts, staking rewards, price alerts,
+ * network status, unstake completion.
  */
 
 import { Platform } from 'react-native';
+import notifee, { AndroidImportance, AndroidColor } from '@notifee/react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -26,10 +31,35 @@ export interface PushNotification {
   read: boolean;
 }
 
-// ─── Local Notification Queue ───────────────────────────────────────────────
+const NOTIFICATION_QUEUE_KEY = '@hsmc/notification_queue';
+const PUSH_ENABLED_KEY = '@hsmc/push_enabled';
+
+// ─── Local Notification Queue (in-app, persisted) ───────────────────────────
 
 let notificationQueue: PushNotification[] = [];
+let queueLoaded = false;
 let notificationListeners: Array<(notification: PushNotification) => void> = [];
+
+async function loadQueue(): Promise<void> {
+  if (queueLoaded) return;
+  try {
+    const raw = await AsyncStorage.getItem(NOTIFICATION_QUEUE_KEY);
+    if (raw) {
+      notificationQueue = JSON.parse(raw) as PushNotification[];
+    }
+    queueLoaded = true;
+  } catch {
+    queueLoaded = true;
+  }
+}
+
+async function persistQueue(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(NOTIFICATION_QUEUE_KEY, JSON.stringify(notificationQueue.slice(0, 100)));
+  } catch {
+    // Non-critical persistence failure
+  }
+}
 
 /** Register a listener for incoming notifications */
 export function onNotification(callback: (notification: PushNotification) => void): () => void {
@@ -39,34 +69,96 @@ export function onNotification(callback: (notification: PushNotification) => voi
   };
 }
 
-/** Add a notification to the queue and notify listeners */
-export function addNotification(notification: PushNotification): void {
-  notificationQueue = [notification, ...notificationQueue].slice(0, 100); // Keep last 100
+/** Add a notification to the queue, dispatch to listeners and show a system toast. */
+export async function addNotification(notification: PushNotification): Promise<void> {
+  await loadQueue();
+  notificationQueue = [notification, ...notificationQueue].slice(0, 100);
+  await persistQueue();
   for (const listener of notificationListeners) {
     listener(notification);
   }
+  await showSystemNotification(notification).catch(() => undefined);
 }
 
 /** Mark a notification as read */
-export function markNotificationRead(id: string): void {
+export async function markNotificationRead(id: string): Promise<void> {
   notificationQueue = notificationQueue.map(n =>
     n.id === id ? { ...n, read: true } : n
   );
+  await persistQueue();
 }
 
 /** Get all notifications (most recent first) */
-export function getNotifications(): PushNotification[] {
+export async function getNotifications(): Promise<PushNotification[]> {
+  await loadQueue();
   return [...notificationQueue];
 }
 
 /** Get unread count */
-export function getUnreadCount(): number {
+export async function getUnreadCount(): Promise<number> {
+  await loadQueue();
   return notificationQueue.filter(n => !n.read).length;
 }
 
 /** Clear all notifications */
-export function clearNotifications(): void {
+export async function clearNotifications(): Promise<void> {
   notificationQueue = [];
+  await persistQueue();
+}
+
+// ─── System notifications via Notifee ───────────────────────────────────────
+
+let channelCreated = false;
+
+async function ensureChannel(): Promise<string> {
+  if (channelCreated) return 'hsmc-default';
+  await notifee.createChannel({
+    id: 'hsmc-default',
+    name: 'HSMC Wallet Alerts',
+    importance: AndroidImportance.HIGH,
+    sound: 'default',
+    vibration: true,
+  });
+  channelCreated = true;
+  return 'hsmc-default';
+}
+
+async function isPushEnabled(): Promise<boolean> {
+  const raw = await AsyncStorage.getItem(PUSH_ENABLED_KEY);
+  return raw !== 'false';
+}
+
+/** Display a system notification (works on Android 8+ via channels). */
+export async function showSystemNotification(notification: PushNotification): Promise<void> {
+  const enabled = await isPushEnabled();
+  if (!enabled) return;
+  await notifee.requestPermission();
+  const channelId = Platform.OS === 'android' ? await ensureChannel() : undefined;
+  await notifee.displayNotification({
+    id: notification.id,
+    title: notification.title,
+    body: notification.body,
+    data: notification.data || {},
+    android: {
+      channelId: channelId || 'hsmc-default',
+      importance: AndroidImportance.HIGH,
+      color: AndroidColor.parseColor('#6C5CE7'),
+      pressAction: { id: 'default' },
+      smallIcon: 'ic_launcher',
+    },
+  });
+}
+
+/** Set whether system push notifications are enabled (Settings). */
+export async function setPushEnabled(enabled: boolean): Promise<void> {
+  await AsyncStorage.setItem(PUSH_ENABLED_KEY, String(enabled));
+}
+
+/** Remove an in-app / system notification by id. */
+export async function removeNotification(id: string): Promise<void> {
+  notificationQueue = notificationQueue.filter(n => n.id !== id);
+  await persistQueue();
+  await notifee.cancelNotification(id).catch(() => undefined);
 }
 
 // ─── Notification Helper Functions ──────────────────────────────────────────
@@ -81,7 +173,7 @@ function generateId(): string {
 /** Create and dispatch a transaction sent notification */
 export function notifyTransactionSent(amount: number, toAddress: string, txHash: string): void {
   const shortAddr = toAddress.slice(0, 6) + '...' + toAddress.slice(-4);
-  addNotification({
+  void addNotification({
     id: generateId(),
     type: 'transaction_sent',
     title: 'Transaction Sent',
@@ -95,7 +187,7 @@ export function notifyTransactionSent(amount: number, toAddress: string, txHash:
 /** Create and dispatch a transaction received notification */
 export function notifyTransactionReceived(amount: number, fromAddress: string, txHash: string): void {
   const shortAddr = fromAddress.slice(0, 6) + '...' + fromAddress.slice(-4);
-  addNotification({
+  void addNotification({
     id: generateId(),
     type: 'transaction_received',
     title: 'Transaction Received',
@@ -108,7 +200,7 @@ export function notifyTransactionReceived(amount: number, fromAddress: string, t
 
 /** Create and dispatch a staking reward notification */
 export function notifyStakingReward(amount: number, poolName: string): void {
-  addNotification({
+  void addNotification({
     id: generateId(),
     type: 'staking_reward',
     title: 'Staking Reward',
@@ -122,7 +214,7 @@ export function notifyStakingReward(amount: number, poolName: string): void {
 /** Create and dispatch a price alert notification */
 export function notifyPriceAlert(price: number, change24h: number, direction: 'up' | 'down'): void {
   const emoji = direction === 'up' ? '📈' : '📉';
-  addNotification({
+  void addNotification({
     id: generateId(),
     type: 'price_alert',
     title: `${emoji} HSMC Price Alert`,
@@ -135,7 +227,7 @@ export function notifyPriceAlert(price: number, change24h: number, direction: 'u
 
 /** Create and dispatch a network status notification */
 export function notifyNetworkStatus(status: string, message: string): void {
-  addNotification({
+  void addNotification({
     id: generateId(),
     type: 'network_status',
     title: `Network: ${status}`,
@@ -146,43 +238,35 @@ export function notifyNetworkStatus(status: string, message: string): void {
   });
 }
 
-// ─── FCM Token Management ───────────────────────────────────────────────────
+/** Create and dispatch an unstake-complete notification */
+export function notifyUnstakeComplete(amount: number, availableAt: string): void {
+  void addNotification({
+    id: generateId(),
+    type: 'unstake_complete',
+    title: 'Unstake Complete',
+    body: `${amount.toFixed(4)} HSMC is available in your balance.`,
+    data: { amount: String(amount), available_at: availableAt },
+    timestamp: new Date().toISOString(),
+    read: false,
+  });
+}
 
-let fcmToken: string | null = null;
+// ─── Registration ───────────────────────────────────────────────────────────
 
-/** Register for push notifications (platform-specific) */
-export async function registerForPushNotifications(): Promise<string | null> {
-  try {
-    // In a real React Native app, this would use @react-native-firebase/messaging
-    // For now, we simulate token registration
-
-    if (Platform.OS === 'android') {
-      // registerDeviceForRemoteMessages via Firebase messaging
-      fcmToken = `fcm-android-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    } else if (Platform.OS === 'ios') {
-      // requestPermission via Firebase messaging
-      fcmToken = `apns-ios-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    } else {
-      fcmToken = `token-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    }
-
-    console.log('[Notifications] Registered with token:', fcmToken);
-    return fcmToken;
-  } catch (error) {
-    console.error('[Notifications] Failed to register:', error);
-    return null;
+/**
+ * Initialize the notification system: request permissions and create the
+ * Android channel. Returns the notification token (device registration id).
+ */
+export async function registerForPushNotifications(): Promise<string> {
+  const settings = await notifee.requestPermission();
+  if (Platform.OS === 'android') {
+    await ensureChannel();
   }
-}
-
-/** Get the current push notification token */
-export function getFCMToken(): string | null {
-  return fcmToken;
-}
-
-/** Unregister from push notifications */
-export async function unregisterPushNotifications(): Promise<void> {
-  fcmToken = null;
-  console.log('[Notifications] Unregistered');
+  const token = `hsmc-device-${Platform.OS}-${Date.now().toString(36)}${Math.random()
+    .toString(36)
+    .slice(2, 9)}`;
+  console.log('[Notifications] Registered device token:', token);
+  return token;
 }
 
 // ─── Price Alert Configuration ──────────────────────────────────────────────

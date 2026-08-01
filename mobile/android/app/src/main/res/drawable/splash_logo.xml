@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Splash logo: white "H" monogram on transparent background (vector). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <path
+        android:fillColor="#6C5CE7"
+        android:pathData="M48,4 A44,44 0 1 0 48,92 A44,44 0 1 0 48,4 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,26 h10 v16 h16 v-16 h10 v44 h-10 v-18 h-16 v18 h-10 Z" />
+</vector>
