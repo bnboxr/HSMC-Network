@@ -2374,7 +2374,7 @@ const TREASURY_ALLOCATIONS = {
 /** GET /treasury/balance — total fees collected, breakdown and auto-buyback calculation */
 function handleTreasuryBalance(): Response {
   const totalRow = db.query(
-    "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE status = 'settled'"
+    "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE status = 'settled' AND type IN ('buy_fee', 'sell_fee')"
   ).get() as { total: number };
 
   const breakdownRows = db.query(
@@ -2430,7 +2430,7 @@ function handleTreasuryBuyback(req: Request): Response {
   }
 
   const totalRow = db.query(
-    "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE status = 'settled'"
+    "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE status = 'settled' AND type IN ('buy_fee', 'sell_fee')"
   ).get() as { total: number };
   const buybackExecutedRow = db.query(
     "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE type = 'buyback' AND status = 'settled'"
