@@ -24,7 +24,8 @@ import { persistSeedToDb } from "@/utils/wallet-seed-db";
 import { withRetry } from "@/utils/db-retry";
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/db/client';
-import * as bip39Lib from 'bip39';
+// Import ONLY validateMnemonic — prevents loading Czech/other wordlists
+import { validateMnemonic as bip39ValidateMnemonic } from 'bip39';
 
 interface WalletSetupModalProps {
   isOpen: boolean;
@@ -45,7 +46,7 @@ const validateAnyMnemonic = (phrase: string): boolean => {
   const words = phrase.trim().split(/\s+/);
   const count = words.length;
   if (count === 25) return validateMnemonic(phrase.trim());
-  if ([12, 15, 18, 21, 24].includes(count)) return bip39Lib.validateMnemonic(phrase.trim());
+  if ([12, 15, 18, 21, 24].includes(count)) return bip39ValidateMnemonic(phrase.trim());
   return false;
 };
 

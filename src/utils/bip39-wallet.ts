@@ -2,29 +2,32 @@
  * BIP39 Wallet Implementation
  * Real cryptographic wallet using BIP39 mnemonic standard + AES-256-GCM encryption
  */
-import * as bip39 from 'bip39';
+// Import ONLY English wordlist — prevents loading Czech ("alub") and other wordlists
+import { generateMnemonic as bip39Generate, validateMnemonic as bip39Validate, mnemonicToSeed as bip39MnemonicToSeed, wordlists } from 'bip39';
 import { HDNodeWallet, Mnemonic } from 'ethers';
+
+// English-only wordlist (explicit, prevents multi-language wordlist loading)
+const englishWordlist: string[] = wordlists.english;
 
 // Monero-style 25-word: 24 words + 1 checksum word
 // We use BIP39 which provides 24 words and add a checksum word derived from the entropy
 export const generateMnemonic = (): string => {
   // Generate 256-bit entropy → 24 BIP39 words
-  const mnemonic24 = bip39.generateMnemonic(256);
+  const mnemonic24 = bip39Generate(256);
   const words = mnemonic24.split(' ');
 
   // Derive checksum word: index = sum of word indices mod wordlist length
-  const wordlist = bip39.wordlists.english;
   const checksumIndex =
-    words.reduce((acc, word) => acc + wordlist.indexOf(word), 0) %
-    wordlist.length;
-  const checksumWord = wordlist[checksumIndex];
+    words.reduce((acc, word) => acc + englishWordlist.indexOf(word), 0) %
+    englishWordlist.length;
+  const checksumWord = englishWordlist[checksumIndex];
 
   return [...words, checksumWord].join(' ');
 };
 
 /** Generate a standard BIP39 12-word mnemonic (128-bit entropy) */
 export const generateMnemonic12 = (): string => {
-  return bip39.generateMnemonic(128);
+  return bip39Generate(128);
 };
 
 export const validateMnemonic = (mnemonic: string): boolean => {
@@ -33,14 +36,13 @@ export const validateMnemonic = (mnemonic: string): boolean => {
 
   // Validate first 24 words as BIP39
   const base24 = words.slice(0, 24).join(' ');
-  if (!bip39.validateMnemonic(base24)) return false;
+  if (!bip39Validate(base24)) return false;
 
   // Validate checksum word
-  const wordlist = bip39.wordlists.english;
   const checksumIndex =
-    words.slice(0, 24).reduce((acc, word) => acc + wordlist.indexOf(word), 0) %
-    wordlist.length;
-  const expectedChecksum = wordlist[checksumIndex];
+    words.slice(0, 24).reduce((acc, word) => acc + englishWordlist.indexOf(word), 0) %
+    englishWordlist.length;
+  const expectedChecksum = englishWordlist[checksumIndex];
   return words[24] === expectedChecksum;
 };
 
@@ -49,7 +51,7 @@ export const mnemonicToSeed = async (mnemonic: string): Promise<Uint8Array> => {
   // For 25-word (HSMC), use first 24 words as BIP39 base
   // For standard BIP39 (12/15/18/21/24), use as-is
   const base = words.length === 25 ? words.slice(0, 24).join(' ') : mnemonic.trim();
-  return bip39.mnemonicToSeed(base);
+  return bip39MnemonicToSeed(base);
 };
 
 /** Derive deterministic wallet address from seed */
