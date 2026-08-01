@@ -385,7 +385,7 @@ async function validateRandomXShare(
   blockTemplate: Buffer,
   nonce: bigint,
   targetHex: string,
-): Promise<boolean> {
+): Promise<{ valid: boolean; hash: string | null }> {
   try {
     // Try Rust node validation endpoint
     const response = await fetch("http://127.0.0.1:8080/pow/validate", {
@@ -401,7 +401,7 @@ async function validateRandomXShare(
     });
     if (response.ok) {
       const result = await response.json();
-      return result.valid === true;
+      return { valid: result.valid === true, hash: result.hash ?? null };
     }
     console.warn(`[RandomX] Node validation returned ${response.status}, falling back`);
   } catch (e: any) {
@@ -410,7 +410,7 @@ async function validateRandomXShare(
 
   // RandomX validity cannot be established without the Rust node.
   // Fail closed rather than accepting unverifiable work.
-  return false;
+  return { valid: false, hash: null };
 }
 
 function generateJob(): MiningJob {
@@ -650,15 +650,14 @@ async function handleV2SubmitShare(miner: MinerSession, payload: Buffer): Promis
   let hash: string;
 
   if (share.algo === V2Algo.RandomX || share.algo === 0x01) {
-    // RandomX share — validate via Rust node or structural check
-    valid = await validateRandomXShare(
+    // RandomX share — validate via Rust node (returns both validity and hash)
+    const result = await validateRandomXShare(
       currentJob.blockTemplate,
       share.nonce,
       currentJob.target,
     );
-    // For RandomX, the hash is computed by the Rust node; use a placeholder
-    // The actual hash would be returned by the validation endpoint
-    hash = `randomx-${nonceHex}-${currentJob.blockNumber}`;
+    valid = result.valid;
+    hash = result.hash ?? ""; // Only set if Rust node returned a real hash
   } else {
     // SHA-256d share — validate locally
     const header = currentJob.prevHash.startsWith("0x")
@@ -669,7 +668,7 @@ async function handleV2SubmitShare(miner: MinerSession, payload: Buffer): Promis
     hash = sha256d(header + nonceHex);
   }
 
-  if (valid) {
+  if (valid && hash) {
     miner.sharesAccepted++;
     totalSharesAccepted++;
     sendV2Frame(miner, V2MsgType.SubmitShareResponse,
