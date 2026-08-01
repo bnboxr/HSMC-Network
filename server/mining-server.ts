@@ -337,6 +337,22 @@ function closeWithReason(miner: MinerSession, reason: string): void {
 }
 
 // ── Crypto Helpers ────────────────────────────────────────────────────────────────
+function merkleRoot(hashes: Buffer[]): Buffer {
+  if (hashes.length === 0) return Buffer.alloc(32, 0);
+  let level = hashes.map((h) => Buffer.from(h));
+  while (level.length > 1) {
+    const next: Buffer[] = [];
+    for (let i = 0; i < level.length; i += 2) {
+      const right = level[i + 1] ?? level[i];
+      const hasher = new Bun.CryptoHasher("sha256");
+      hasher.update(Buffer.concat([level[i], right]));
+      next.push(Buffer.from(hasher.digest()));
+    }
+    level = next;
+  }
+  return level[0];
+}
+
 function sha256(data: string): string {
   const hasher = new Bun.CryptoHasher("sha256");
   hasher.update(data);
@@ -392,10 +408,9 @@ async function validateRandomXShare(
     console.warn(`[RandomX] Node validation failed: ${e.message}`);
   }
 
-  // Fallback: accept the share if it has the right structure
-  // (in production, this would be a hard reject)
-  console.log("[RandomX] ⚠️  Node unreachable — accepting share with structural check only");
-  return true;
+  // RandomX validity cannot be established without the Rust node.
+  // Fail closed rather than accepting unverifiable work.
+  return false;
 }
 
 function generateJob(): MiningJob {
@@ -420,9 +435,13 @@ function generateJob(): MiningJob {
   // prev_hash (32 bytes)
   const prevHashBuf = Buffer.from(prevHashHex, "hex");
   prevHashBuf.copy(blockTemplate, offset); offset += 32;
-  // merkle_root placeholder (32 bytes of zeros — real merkle computed when tx list is known)
-  const merklePlaceholder = Buffer.alloc(32, 0);
-  merklePlaceholder.copy(blockTemplate, offset); offset += 32;
+  // Build the Merkle root from the transactions currently in the mempool.
+  const pending = db.query("SELECT tx_hash FROM transactions WHERE status IN ('pending', 'pool', 'mempool') ORDER BY rowid").all() as Array<{ tx_hash?: string }>;
+  const txLeaves = pending.map((tx) => {
+    const hex = String(tx.tx_hash || "").replace(/^0x/, "");
+    return /^[0-9a-f]{64}$/i.test(hex) ? Buffer.from(hex, "hex") : Buffer.from(sha256(hex), "hex");
+  });
+  merkleRoot(txLeaves).copy(blockTemplate, offset); offset += 32;
   // block_number (u64 LE)
   blockTemplate.writeBigUInt64LE(BigInt(blockNumber), offset); offset += 8;
   // difficulty (u64 LE)
