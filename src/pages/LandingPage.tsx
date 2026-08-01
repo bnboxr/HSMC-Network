@@ -6,9 +6,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Shield, Zap, Globe, Database, Code, Lock, Cpu, Network,
+  Shield, Zap, Globe, Lock, Cpu, Network,
   ArrowRight, Activity, Users, Clock, Layers, ChevronDown,
-  FileCode, Server
+  Server, Coins, CreditCard
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/db/client';
@@ -19,18 +19,17 @@ import { SEO } from '@/components/SEO';
 
 // ─── Features ─────────────────────────────────────────────────────────────────
 const FEATURES = [
-  { icon: Shield, title: 'Ring Signature Privacy', desc: 'Monero-style ring signatures obfuscate transaction origins across ring sizes of 7–16 decoys.', color: 'hsl(var(--primary))' },
-  { icon: Zap, title: '~60 Second Block Time', desc: 'Privacy-preserving PoW mining with hybrid consensus mechanism targeting ~60 second block times.', color: 'hsl(var(--secondary))' },
-  { icon: Globe, title: 'Multi-Chain Bridge', desc: '10 cross-chain connectors via wHSMC wrapped tokens: BSC, ETH, Polygon, Arbitrum, Optimism, Base, Avalanche, Fantom, Gnosis, and Celo.', color: 'hsl(var(--accent))' },
-  { icon: Database, title: 'Sharding-Ready Architecture', desc: 'Sharding framework available in hsmc-rollup crate — ready for deployment when network demand requires horizontal scaling.', color: 'hsl(var(--primary))' },
-  { icon: Code, title: 'EVM Compatible', desc: 'Deploy Ethereum smart contracts seamlessly with full Solidity and Rust WASM support.', color: 'hsl(var(--secondary))' },
+  { icon: Shield, title: 'Ring Signature Privacy', desc: 'Monero-style ring signatures obfuscate transaction origins across ring sizes of 11–16.', color: 'hsl(var(--primary))' },
+  { icon: Zap, title: '~60 Second Block Time', desc: 'Privacy-preserving SHA-256d PoW mining targeting ~60 second block times.', color: 'hsl(var(--secondary))' },
+  { icon: Globe, title: 'Multi-Chain Bridge', desc: 'wHSMC wrapped tokens on BSC, Ethereum and Polygon — lock on HSMC, spend on-chain elsewhere.', color: 'hsl(var(--accent))' },
   { icon: Lock, title: 'AES-256 Wallet Security', desc: 'BIP39 25-word seed phrase with AES-256-GCM encryption. Industry-standard wallet security with no custodial risk.', color: 'hsl(var(--accent))' },
+  { icon: Coins, title: 'Staking Rewards', desc: 'Stake HSMC in on-chain pools with competitive APR (12%+). Rewards paid by the Treasury buyback engine.', color: 'hsl(var(--primary))' },
+  { icon: CreditCard, title: 'HSMCPay Merchant Payments', desc: 'Accept crypto payments with fixed fees (no percentages). Fiat on/off ramp via Stripe, all settlements on-chain.', color: 'hsl(var(--secondary))' },
 ];
 
 const TECH = [
-  { icon: Cpu, label: 'Hybrid PoW + PoS' },
+  { icon: Cpu, label: 'SHA-256d PoW' },
   { icon: Network, label: 'P2P libp2p' },
-  { icon: FileCode, label: 'WASM VM' },
   { icon: Server, label: 'Edge Nodes' },
 ];
 
@@ -71,7 +70,7 @@ export const LandingPage = () => {
     <div className="min-h-screen bg-background text-foreground">
       <SEO
         title="HSMC — Privacy-First Blockchain Network"
-        description="Privacy-first blockchain with Ring Signatures, RingCT and BIP39 wallets. Stake HSMC and bridge across 10+ networks."
+        description="Privacy-first blockchain with Ring Signatures, RingCT and BIP39 wallets. Stake HSMC and bridge across BSC, Ethereum and Polygon."
         path="/landing"
       />
 
@@ -153,9 +152,9 @@ export const LandingPage = () => {
               {[
                 { icon: Shield, text: 'RingCT Privacy' },
                 { icon: Zap, text: '~60s Blocks' },
-                { icon: Globe, text: '10 Chains' },
+                { icon: Globe, text: '3 Chains' },
                 { icon: Lock, text: 'AES-256 Wallet' },
-                { icon: Cpu, text: 'Hybrid PoW+PoS' },
+                { icon: Cpu, text: 'SHA-256d PoW' },
               ].map(f => (
                 <div key={f.text} className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-muted/40 border border-border text-sm">
                   <f.icon className="w-3.5 h-3.5 text-primary" />

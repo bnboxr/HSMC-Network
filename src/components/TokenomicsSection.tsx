@@ -62,12 +62,7 @@ const fmtDate = (ts: string, period: Period) => {
 
 const HSMC_TOKENS = [
   { symbol: 'HSMC', name: 'Native Token', color: 'hsl(var(--primary))' },
-  { symbol: 'wHSMC', name: 'Wrapped', color: 'hsl(var(--secondary))' },
-  { symbol: 'HSMC-LEU', name: 'Romanian Leu', color: 'hsl(var(--accent))' },
-  { symbol: 'HSMC-EUR', name: 'Euro', color: 'hsl(45 100% 58%)' },
-  { symbol: 'HSMC-USD', name: 'US Dollar', color: 'hsl(187 100% 54%)' },
-  { symbol: 'HSMC-XAU', name: 'Gold', color: 'hsl(38 100% 60%)' },
-  { symbol: 'HSMC-XAG', name: 'Silver', color: 'hsl(210 15% 70%)' },
+  { symbol: 'wHSMC', name: 'Wrapped (BSC/ETH/Polygon)', color: 'hsl(var(--secondary))' },
 ];
 
 // Custom tooltip
@@ -219,7 +214,7 @@ export const TokenomicsSection = () => {
             <span className="gradient-text">HSMC</span> Market Data
           </h2>
           <p className="text-muted-foreground text-sm max-w-xl mx-auto">
-            Real-time metrics from the HSMC ecosystem — 100+ chain multichain, HSMC as default currency
+            Real-time metrics from the HSMC ecosystem — 3-chain bridge (BSC, Ethereum, Polygon), HSMC as default currency
           </p>
         </motion.div>
 
@@ -480,7 +475,7 @@ export const TokenomicsSection = () => {
             {/* Multichain badge */}
             <div className="p-3 rounded-lg border border-primary/20 text-center" style={{ background: 'hsl(var(--primary) / 0.06)' }}>
               <div className="font-bold text-primary text-xs font-mono uppercase tracking-widest">Multi-Chain Bridge</div>
-              <div className="text-[11px] text-muted-foreground mt-1">Default currency: HSMC — interoperable with all major EVM and non-EVM chains</div>
+              <div className="text-[11px] text-muted-foreground mt-1">Default currency: HSMC — wHSMC wrapped token live on BSC, Ethereum and Polygon</div>
             </div>
           </motion.div>
         </div>

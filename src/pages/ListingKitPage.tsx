@@ -153,7 +153,7 @@ const LISTING_MATERIALS = [
   { label: 'Chain (primary)', value: 'HSMC Mainnet (custom)' },
   { label: 'Wrapped Token', value: 'wHSMC (BEP-20 on BSC)' },
   { label: 'Contract Standard', value: 'ERC-20 / BEP-20 compatible' },
-  { label: 'Consensus', value: 'SHA-256 PoW + PoS Hybrid' },
+  { label: 'Consensus', value: 'SHA-256d PoW' },
   { label: 'Privacy Protocol', value: 'RingCT v2 + Ring Signatures' },
   { label: 'Block Time', value: '~120 seconds' },
   { label: 'Whitepaper URL', value: 'your-domain.com/whitepaper' },

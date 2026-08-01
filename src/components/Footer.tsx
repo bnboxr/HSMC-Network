@@ -19,9 +19,8 @@ const footerLinks = {
   ],
   developers: [
     { name: 'API Reference', href: '/whitepaper#api', external: false },
-    { name: 'SDK (npm)', href: 'https://www.npmjs.com/', external: true },
     { name: 'CLI Tools', href: '/mainnet#node', external: false },
-    { name: 'Smart Contracts', href: '/app#contracts', external: false },
+    { name: 'Bridge Docs', href: '/whitepaper#bridge', external: false },
   ],
   community: [
     { name: 'GitHub', href: 'https://github.com/XMC-OXR', external: true },
@@ -235,7 +234,7 @@ export const Footer = () => {
                 </div>
               </a>
               <p className="text-xs text-muted-foreground mb-4 max-w-xs leading-relaxed">
-                Next-generation privacy blockchain. Ring Signatures · Stealth Addresses · RingCT · 100+ chains.
+                Next-generation privacy blockchain. Ring Signatures · Stealth Addresses · RingCT · wHSMC on BSC, Ethereum & Polygon.
               </p>
               <div className="flex items-center gap-2 mb-5">
                 {socialLinks.map((social) => (

@@ -247,7 +247,7 @@ export default function MainnetHub() {
     <div className="min-h-screen bg-background text-foreground">
       <SEO
         title="HSMC Mainnet Launch Hub — Genesis Configurator & Checklist"
-        description="HSMC Mainnet command center: genesis configurator, validator onboarding checklist and launch readiness for the privacy blockchain."
+        description="HSMC Mainnet command center: genesis configurator, node onboarding checklist and launch readiness for the privacy blockchain."
         path="/mainnet"
         jsonLd={{
           "@context": "https://schema.org",
@@ -256,7 +256,7 @@ export default function MainnetHub() {
           description: "Step-by-step guide to configure genesis and bring an HSMC mainnet node online.",
           step: [
             { "@type": "HowToStep", name: "Configure genesis block" },
-            { "@type": "HowToStep", name: "Onboard validators" },
+            { "@type": "HowToStep", name: "Onboard nodes" },
             { "@type": "HowToStep", name: "Verify launch readiness" }
           ]
         }}

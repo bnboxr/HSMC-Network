@@ -70,7 +70,7 @@ export const NetworkSection = () => {
             Network <span className="gradient-text">Peers</span>
           </h2>
           <p className="text-muted-foreground max-w-2xl mx-auto">
-            Real-time view of connected validator nodes across the HSMC network
+            Real-time view of connected peer nodes across the HSMC network
           </p>
         </motion.div>
 
@@ -242,7 +242,7 @@ export const NetworkSection = () => {
           )}
           <p className="text-sm text-muted-foreground mt-4">
             {peers.length > 0
-              ? `${peers.length} validator nodes across ${regions.size} regions`
+              ? `${peers.length} peer nodes across ${regions.size} regions`
               : 'No peers connected yet'}
           </p>
         </motion.div>

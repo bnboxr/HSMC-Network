@@ -3,7 +3,7 @@ import jsPDF from 'jspdf';
 import {
   Download, Shield, Cpu, Globe, Layers, Lock, Coins, Users,
   ChevronRight, FileText, Scale, TrendingUp, Network, Zap,
-  GitBranch, Database, Key, Activity
+  GitBranch, Key, Activity
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Navbar from '@/components/Navbar';
@@ -30,7 +30,7 @@ const ROADMAP = [
   },
   {
     phase: 'Q3 2025', label: 'Pre-Mainnet', done: false,
-    items: ['Security audit (Ring Sig + RingCT)', 'Validator onboarding (10+ nodes)', 'Wrapped HSMC BEP-20', 'Exchange outreach'],
+    items: ['Security audit (Ring Sig + RingCT)', 'Miner onboarding (10+ nodes)', 'Wrapped HSMC BEP-20', 'Exchange outreach'],
   },
   {
     phase: 'Q4 2025', label: 'Mainnet Launch', done: false,
@@ -38,18 +38,17 @@ const ROADMAP = [
   },
   {
     phase: '2026', label: 'Ecosystem Growth', done: false,
-    items: ['WASM contract runtime', 'Cross-chain bridge', 'DAO governance live', 'Tier 1 CEX listing'],
+    items: ['Staking pools live', 'Cross-chain bridge', 'DAO governance live', 'Tier 1 CEX listing'],
   },
 ];
 
 const SPECS = [
-  { label: 'Consensus', value: 'Proof-of-Work (SHA-256) + PoS hybrid', icon: Cpu },
+  { label: 'Consensus', value: 'SHA-256d Proof-of-Work', icon: Cpu },
   { label: 'Block Time', value: '~120 seconds', icon: Activity },
   { label: 'Total Supply', value: '1,000,000,000,000 HSMC', icon: Coins },
   { label: 'Block Reward', value: '50 HSMC (halving every 210,000 blocks)', icon: TrendingUp },
   { label: 'Privacy Protocol', value: 'RingCT v2 + Stealth Addresses + Bulletproofs', icon: Shield },
   { label: 'Ring Size', value: '11–16 (configurable)', icon: Key },
-  { label: 'Smart Contracts', value: 'Stack-based VM + WASM runtime', icon: Database },
   { label: 'P2P Network', value: 'Dandelion++ (IP masking)', icon: Globe },
   { label: 'Algorithm', value: 'SHA-256d PoW + ECDSA P-256 signatures', icon: GitBranch },
   { label: 'Address Format', value: '0x + 20-byte ECDSA-derived', icon: Lock },
@@ -140,15 +139,14 @@ export default function WhitepaperPage() {
 
     addSection('TECHNICAL SPECIFICATIONS');
     [
-      ['Consensus', 'Proof-of-Work (SHA-256) + PoS Hybrid'],
+      ['Consensus', 'SHA-256d Proof-of-Work'],
       ['Block Time', '~120 seconds'],
       ['Total Supply', '1,000,000,000,000 HSMC'],
       ['Block Reward', '50 HSMC (halving every 210,000 blocks)'],
       ['Privacy Protocol', 'RingCT v2 + Stealth Addresses + Bulletproofs'],
       ['Ring Size', '11–16 (configurable per transaction)'],
       ['P2P Network', 'Dandelion++ (IP masking)'],
-      ['Smart Contracts', 'Stack-based VM + WASM runtime (roadmap)'],
-      ['Algorithm', 'SHA-256 PoW + ECDSA P-256 signatures'],
+      ['Algorithm', 'SHA-256d PoW + ECDSA P-256 signatures'],
       ['Chain ID', '7777'],
     ].forEach(([k, v]) => {
       addLine(`  ${k}: ${v}`, 9, false, [180, 220, 180]);
@@ -196,9 +194,9 @@ export default function WhitepaperPage() {
     [
       ['Q1-Q2 2025 ✅', 'Whitepaper, Core Cryptography, Testnet Alpha, Web dApp'],
       ['Q3 2025 ✅', 'PoW Mining Testnet, HSMCPay Beta, BIP39 Wallets'],
-      ['Q3-Q4 2025 🔄', 'Security Audit, Validator Onboarding, Wrapped HSMC BEP-20'],
+      ['Q3-Q4 2025 🔄', 'Security Audit, Miner Onboarding, Wrapped HSMC BEP-20'],
       ['Q4 2025', 'Genesis Block (Mainnet), DEX Liquidity Pool, Tier-2 CEX Listing'],
-      ['Q1 2026', 'Mobile Wallet, WASM Contract Runtime, DAO Governance'],
+      ['Q1 2026', 'Mobile Wallet, Staking Pools, DAO Governance'],
       ['Q2-Q3 2026', 'Cross-chain Bridge Live, Tier-1 CEX Listing, Layer-2 Research'],
     ].forEach(([phase, items]) => {
       addLine(`  ${phase}`, 9, true, [255, 200, 100]);
@@ -662,7 +660,7 @@ export default function WhitepaperPage() {
                     </div>
                   ))}
                 </div>
-                <p className="text-sm text-muted-foreground">Validators stake HSMC to participate in block validation. Staking pools offer 6–18% APR depending on pool size and lock period. Commission rate: 2–10%.</p>
+                <p className="text-sm text-muted-foreground">Staking pools offer 6–18% APR depending on pool size and lock period. Commission rate: 2–10%.</p>
               </div>
             </div>
           </motion.div>

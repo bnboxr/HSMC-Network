@@ -25,7 +25,6 @@ const MORE_NAV = [
   { name: 'Privacy',     href: '#privacy' },
   { name: 'Network',     href: '#network' },
   { name: 'Mempool',     href: '#mempool' },
-  { name: 'Contracts',   href: '#contracts' },
   { name: 'Merchant',    href: '#merchant' },
   { name: 'RPC Mining',  href: '#mining-rpc' },
   { name: 'Terminal',    href: '#terminal' },

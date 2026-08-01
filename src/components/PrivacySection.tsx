@@ -340,8 +340,8 @@ export const PrivacySection = () => {
                 ['Hidden Amounts', '✅', '✅', '✅', '❌', '❌'],
                 ['IP Obfuscation', '✅', '✅', '❌', '❌', '❌'],
                 ['Default Private', '✅', '✅', '❌', '❌', '❌'],
-                ['Staking/PoS', '✅', '❌', '❌', '❌', '✅'],
-                ['Smart Contracts', '✅', '❌', '✅', '❌', '✅'],
+                ['Staking', '✅', '❌', '❌', '❌', '✅'],
+                ['Smart Contracts', '❌', '❌', '✅', '❌', '✅'],
               ].map(([feature, ...vals]) => (
                 <tr key={feature as string} className="border-b border-border/50 hover:bg-muted/10">
                   <td className="py-2 px-3 text-muted-foreground">{feature}</td>

@@ -127,8 +127,8 @@ ${transactions
       return {
         output: `Consensus State: ${stats.consensus_state}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Algorithm:     HSMC-POS
-  Validators:    ${formatNumber(stats.active_nodes)}
+  Algorithm:     SHA-256d PoW
+  Nodes:         ${formatNumber(stats.active_nodes)}
   Finality:      2 blocks (~24s)
   Current Epoch: ${Math.floor(stats.block_height / 32)}`,
         type: stats.consensus_state === 'STABLE' ? 'success' : 'info',

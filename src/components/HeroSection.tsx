@@ -130,9 +130,9 @@ export const HeroSection = () => {
             {[
               { icon: Shield, text: 'RingCT Privacy' },
               { icon: Zap, text: '~60s Blocks' },
-              { icon: Globe, text: '10 Chains' },
+              { icon: Globe, text: '3 Chains' },
               { icon: Lock, text: 'AES-256 Wallet' },
-              { icon: Cpu, text: 'Hybrid PoW+PoS' },
+              { icon: Cpu, text: 'SHA-256d PoW' },
             ].map((f) => (
               <div key={f.text} className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-muted/40 border border-border text-sm">
                 <f.icon className="w-3.5 h-3.5 text-primary" />

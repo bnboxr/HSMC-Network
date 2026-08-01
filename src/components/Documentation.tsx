@@ -23,28 +23,27 @@ const docSections = [
     content: [
       {
         title: 'Overview',
-        content: `HSMC Chain este un blockchain de generație nouă cu privacy nativ, inspirat de Monero (XMR) și extins cu Proof-of-Stake și Smart Contracts.
+        content: `HSMC Chain este un blockchain de generație nouă cu privacy nativ, inspirat de Monero (XMR) cu mining Proof-of-Work și staking.
 
 Key Features:
 • Ring Signatures (ring size 11–16) — identic cu Monero
 • Stealth Addresses — adrese de unică folosință per tranzacție
 • Confidential Transactions (RingCT + Bulletproofs)
 • Dandelion++ pentru IP obfuscation
-• Proof-of-Stake cu validator rotation și slashing
-• Smart Contracts privacy-aware (WASM runtime)
+• SHA-256d Proof-of-Work mining
+• Staking pools cu recompense din Treasury
 • ~60 second block time (PoW)
 • TPS: 850–2500 tranzacții/secundă`,
       },
       {
         title: 'Architecture',
-        content: `HSMC Chain are 4 straturi principale:
+        content: `HSMC Chain are 3 straturi principale:
 
 1. **Privacy Layer (Rust)**: Ring Signatures, Stealth Addresses, RingCT, Bulletproofs — cryptografie pură.
-2. **Consensus Layer (Go)**: PoS cu validator rotation, BFT finality, slashing pentru comportament rău.
-3. **Networking Layer (Go/libp2p)**: Gossip protocol, DHT peer discovery, Dandelion++ propagation.
-4. **Execution Layer**: WASM runtime pentru smart contracts cu privacy-preserving state.
+2. **Consensus Layer (Rust)**: SHA-256d Proof-of-Work cu dificultate dinamică și ajustare Bitcoin-style.
+3. **Networking Layer (Rust/libp2p)**: Gossip protocol, DHT peer discovery, Dandelion++ propagation.
 
-Toate comunicațiile inter-layer folosesc gRPC intern. API-ul extern expune REST + WebSocket.`,
+API-ul extern expune REST + WebSocket.`,
       },
       {
         title: 'Block Structure',
@@ -57,13 +56,13 @@ struct Block {
         parent_hash: Hash256,
         merkle_root: Hash256,
         timestamp: u64,
-        validator: PublicKey,
+        miner: PublicKey,
         difficulty: u64,
         nonce: u64,
         privacy_protocol: "RingCT-v2",
     },
     transactions: Vec<PrivacyTransaction>,
-    validator_signature: RingSignature,
+    miner_signature: RingSignature,
     epoch: u32,
 }
 \`\`\``,
@@ -90,10 +89,10 @@ struct RingSignature {
 \`\`\`
 
 Procesul:
-1. Se selectează 10–15 decoy outputs din blockchain
+1. Se selectează 10–15 decoy outputs din blockchain (ring size 11–16)
 2. Se creează key image din spend key: I = x * Hp(P)
 3. Se semnează cu Schnorr Ring Signature
-4. Validatorul verifică fără a ști care e real`,
+4. Nodul verifică fără a ști care e real`,
         hasCode: true,
       },
       {
@@ -148,7 +147,7 @@ Rezultat: Originea reală a tranzacției e imposibil de determinat chiar dacă u
   },
   {
     id: 'nodes',
-    title: 'Nodes & Validators',
+    title: 'Nodes & Miners',
     icon: Network,
     content: [
       {
@@ -161,7 +160,7 @@ Rezultat: Originea reală a tranzacției e imposibil de determinat chiar dacă u
 
 **Archive Nodes**: Store historical state data for analytics and debugging.
 
-**Validator Nodes**: Participate in consensus and block production.`,
+**Mining Nodes**: Run the SHA-256d PoW engine to mine blocks and earn rewards.`,
       },
       {
         title: 'Running a Node',
@@ -180,14 +179,14 @@ hsmc start --rpc --ws
         hasCode: true,
       },
       {
-        title: 'Becoming a Validator',
-        content: `Requirements for validators:
-• Minimum stake: 10,000 HSMC
-• 99.9% uptime commitment
+        title: 'Becoming a Miner',
+        content: `Requirements for mining:
+• SHA-256d PoW — CPU/GPU compatible
 • Hardware: 8+ CPU cores, 32GB RAM, 1TB SSD
 • Bandwidth: 100Mbps+ symmetric
+• Stratum V2 pool support or solo mining
 
-Validators earn rewards for producing blocks and participating in consensus.`,
+Miners earn block rewards for producing valid blocks.`,
       },
     ],
   },
@@ -200,17 +199,15 @@ Validators earn rewards for producing blocks and participating in consensus.`,
         title: 'Transaction Types',
         content: `HSMC supports multiple transaction types:
 
-• **Transfer**: Send HSMC between accounts
-• **Contract Call**: Interact with smart contracts
-• **Contract Deploy**: Deploy new smart contracts
-• **Stake**: Delegate tokens to validators
+• **Transfer**: Send HSMC between accounts (public or shielded)
+• **Stake**: Delegate tokens to staking pools
 • **Governance**: Vote on protocol proposals`,
       },
       {
         title: 'Transaction Lifecycle',
         content: `1. **Creation**: User creates and signs transaction
 2. **Propagation**: Transaction broadcast to network
-3. **Mempool**: Validators collect pending transactions
+3. **Mempool**: Miners collect pending transactions
 4. **Inclusion**: Transaction included in a block
 5. **Finality**: Block receives sufficient confirmations`,
       },
@@ -322,9 +319,6 @@ hsmc balance <address>
 
 # Send transaction
 hsmc send --to <address> --amount 10
-
-# Deploy contract
-hsmc deploy --contract ./MyContract.sol
 
 # Start local node
 hsmc node start --dev

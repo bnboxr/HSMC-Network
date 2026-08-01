@@ -59,12 +59,12 @@ const StakingDashboard = ({ onOpenAuth }: StakingDashboardProps) => {
           viewport={{ once: true }}
           className="text-center mb-12"
         >
-          <p className="section-eyebrow mb-4">Proof of Stake</p>
+          <p className="section-eyebrow mb-4">Staking</p>
           <h2 className="text-3xl sm:text-4xl font-black mb-4" style={{ fontFamily: 'var(--font-serif)' }}>
             Staking <span className="gradient-text">Dashboard</span>
           </h2>
           <p className="text-muted-foreground max-w-2xl mx-auto">
-            Delegate your HSMC to validators and earn real staking rewards. Secure the HSMC network while growing your holdings.
+            Delegate your HSMC to staking pools and earn real staking rewards funded by the Treasury buyback engine. Grow your holdings while the network runs on SHA-256d PoW mining.
           </p>
         </motion.div>
 
@@ -144,7 +144,7 @@ const StakingDashboard = ({ onOpenAuth }: StakingDashboardProps) => {
             >
               <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                 <Award className="w-5 h-5 text-primary" />
-                Validator Pools
+                Validator Pools (SHA-256d PoW network)
               </h3>
 
               {loading ? (

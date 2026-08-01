@@ -34,7 +34,7 @@ const STEPS: Step[] = [
     cost: "≥ $5k testnet / ≥ $50k mainnet liquidity",
     notes: "Rulează `make seed-pool-testnet` după deploy." },
   { id: "relayer-daemon", title: "Bridge relayer (5 instanțe)", artifact: "contracts/relayer/relayer.ts",
-    notes: "Pornește `npx tsx relayer/relayer.ts` pe 5 VPS-uri (1 per validator)." },
+    notes: "Pornește `npx tsx relayer/relayer.ts` pe 5 VPS-uri (1 per nod)." },
   { id: "seed-nodes", title: "5 seed VPS noduri publice", artifact: "rust-node/seed-bootstrap.sh",
     cost: "~$140/lună", notes: "One-line bootstrap Ubuntu 22.04." },
   { id: "whitepaper-ipfs", title: "Whitepaper → IPFS + GitHub Pages", artifact: "ipfs-publish/publish.sh",
