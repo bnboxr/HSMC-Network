@@ -12,6 +12,8 @@ import type { RootStackParamList } from '../navigation/types';
 import { loadWallet, decryptMnemonic, loadAuthData } from '../services/wallet';
 import { useAppStore } from '../store/appStore';
 import { apiLogin } from '../services/api';
+import { useBiometric } from '../hooks/useBiometric';
+import { clearAllWalletData } from '../services/wallet';
 
 type Props = { navigation: StackNavigationProp<RootStackParamList, 'Login'> };
 
@@ -19,15 +21,14 @@ export default function LoginScreen({ navigation }: Props): React.JSX.Element {
   const login = useAppStore((s) => s.login);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const { isAvailable: biometricAvailable, isEnabled: biometricEnabled, authenticate } = useBiometric();
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
 
   useEffect(() => {
     loadWallet().then(w => {
       if (w) setWalletAddress(w.address);
     });
-    // Check if biometric is available
-    setBiometricAvailable(false); // Would use react-native-biometrics isSensorAvailable()
+    // Sensor availability and saved preference are provided by useBiometric.
   }, []);
 
   const handleUnlock = async () => {
@@ -67,8 +68,12 @@ export default function LoginScreen({ navigation }: Props): React.JSX.Element {
   };
 
   const handleBiometricUnlock = async () => {
-    // Would use react-native-biometrics simplePrompt()
-    Alert.alert('Biometric', 'Biometric unlock would be triggered here.');
+    const ok = await authenticate('Unlock your HSMC wallet');
+    if (!ok) return;
+    const wallet = await loadWallet();
+    if (!wallet) return;
+    const auth = await loadAuthData();
+    login(auth?.token || 'local-token', auth?.userId || wallet.address);
   };
 
   return (
@@ -105,7 +110,7 @@ export default function LoginScreen({ navigation }: Props): React.JSX.Element {
             <Text style={styles.unlockButtonText}>Unlock</Text>}
         </TouchableOpacity>
 
-        {biometricAvailable && (
+        {biometricAvailable && biometricEnabled && (
           <TouchableOpacity style={styles.biometricButton} onPress={handleBiometricUnlock}>
             <Text style={styles.biometricButtonText}>🔐 Unlock with Biometrics</Text>
           </TouchableOpacity>
@@ -119,8 +124,8 @@ export default function LoginScreen({ navigation }: Props): React.JSX.Element {
             [
               { text: 'Cancel', style: 'cancel' },
               { text: 'Reset', style: 'destructive', onPress: () => {
-                // clearAllData() would be called
-                navigation.navigate('Welcome');
+                clearAllWalletData().then(() => navigation.navigate('Welcome')).catch(() =>
+                  Alert.alert('Reset failed', 'Wallet data could not be removed.'));
               }},
             ]
           )}

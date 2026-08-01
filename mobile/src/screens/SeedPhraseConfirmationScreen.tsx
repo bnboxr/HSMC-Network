@@ -52,7 +52,7 @@ export default function SeedPhraseConfirmationScreen({ navigation, route }: Prop
     const allCorrect = checkIndices.every((wordIdx, qi) => answers[qi + 1] === words[wordIdx]);
     if (allCorrect) {
       Alert.alert('Success', 'Your seed phrase has been verified. Welcome to HSMC!', [
-        { text: 'Continue', onPress: () => navigation.navigate('MainTabs' as any) },
+        { text: 'Continue', onPress: () => navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] }) },
       ]);
     } else {
       Alert.alert('Incorrect', 'Some words are incorrect. Please review and try again.', [

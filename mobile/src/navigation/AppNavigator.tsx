@@ -36,9 +36,9 @@ const HSMCTheme = {
   ...DarkTheme,
   colors: {
     ...DarkTheme.colors,
-    primary: '#6C5CE7',
-    background: '#0A0A0F',
-    card: '#151520',
+    primary: '#18D6B5',
+    background: '#0D0D0D',
+    card: '#151A1A',
     text: '#FFFFFF',
     border: '#2A2A35',
     notification: '#FF6B6B',
@@ -122,7 +122,7 @@ export default function AppNavigator(): React.JSX.Element {
       <RootStack.Navigator
         screenOptions={{
           headerShown: false,
-          cardStyle: { backgroundColor: '#0A0A0F' },
+          cardStyle: { backgroundColor: '#0D0D0D' },
           gestureEnabled: false,
         }}
       >
