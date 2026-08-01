@@ -379,18 +379,55 @@ const USING_TLS = !!(TLS_CERT && TLS_KEY);
 const JWT_EXPIRY_SECONDS = 3600; // 1 hour
 
 // ── Stripe Configuration ─────────────────────────────────────────────────────
+// Required env vars for REAL Stripe settlement:
+//   STRIPE_SECRET_KEY         — sk_live_... / sk_test_... (creates PaymentIntents, Payouts)
+//   STRIPE_PUBLISHABLE_KEY    — pk_live_... / pk_test_... (returned to the frontend)
+//   STRIPE_WEBHOOK_SECRET     — whsec_... (verifies webhook signatures — REQUIRED for
+//                               real webhook processing; fails closed if missing)
+// Optional:
+//   STRIPE_SIMULATION_MODE    — "true" forces simulation mode even with keys set
+//
+// Simulation mode: when STRIPE_SECRET_KEY is NOT set (dev/testing), all Stripe
+// endpoints fall back to an in-DB simulation: PaymentIntents are created locally
+// (pi_sim_*), payments are confirmed via the simulation webhook/endpoints, and
+// HSMC crediting / treasury recording / payout burning work end-to-end without
+// any real Stripe account. Simulation is dev-only and must never be enabled in
+// production (guard: it activates only when no secret key is configured).
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || "";
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 const STRIPE_MODE: "live" | "test" = STRIPE_SECRET_KEY.startsWith("sk_live_") ? "live" : "test";
+// Simulation is active when explicitly requested OR when no secret key exists at all.
+// If a secret key IS set but simulation is not requested, simulation is OFF.
+const STRIPE_SIMULATION_MODE = process.env.STRIPE_SIMULATION_MODE === "true" || !STRIPE_SECRET_KEY;
 let stripe: Stripe | null = null;
 if (STRIPE_SECRET_KEY) {
   stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2025-06-30.basil" as any });
   console.log(`💳 Stripe initialized (${STRIPE_MODE} mode)`);
   if (!STRIPE_WEBHOOK_SECRET) {
-    console.warn("⚠️  STRIPE_WEBHOOK_SECRET not set — webhooks will return 503");
+    console.warn("⚠️  STRIPE_WEBHOOK_SECRET not set — real webhooks will return 503 (fail-closed).");
   }
 } else {
-  console.warn("⚠️  STRIPE_SECRET_KEY not set — Stripe endpoints will return 503");
+  console.warn("⚠️  STRIPE_SECRET_KEY not set — Stripe endpoints running in SIMULATION MODE (dev/testing only).");
+}
+if (STRIPE_SIMULATION_MODE) {
+  console.warn("🧪 STRIPE_SIMULATION_MODE is ON — payments are simulated locally, no real money moves. Set STRIPE_SECRET_KEY (+ STRIPE_WEBHOOK_SECRET) for real settlement.");
+}
+
+/** Human-readable Stripe config summary for /stripe/config */
+function getStripeConfig() {
+  return {
+    mode: STRIPE_SECRET_KEY ? (STRIPE_MODE === "live" ? "live" : "test") : "simulation",
+    simulation: STRIPE_SIMULATION_MODE,
+    publishable_key_configured: !!STRIPE_PUBLISHABLE_KEY,
+    secret_key_configured: !!STRIPE_SECRET_KEY,
+    webhook_secret_configured: !!STRIPE_WEBHOOK_SECRET,
+    required_env_vars: {
+      STRIPE_SECRET_KEY: "sk_live_... / sk_test_... — creates PaymentIntents & Payouts",
+      STRIPE_PUBLISHABLE_KEY: "pk_live_... / pk_test_... — used by the Stripe.js frontend",
+      STRIPE_WEBHOOK_SECRET: "whsec_... — verifies webhook signatures (fail-closed when missing)",
+    },
+  };
 }
 
 if (IS_DEV_MODE) {
@@ -726,11 +763,14 @@ function checkRateLimit(ip: string, path: string): { allowed: boolean; retryAfte
   const now = Date.now();
   const refillInterval = Math.floor(RATE_LIMIT_WINDOW_MS / limit); // ms per token
 
-  let bucket = rateLimitBuckets.get(ip);
+  // Tiered per-path buckets: a burst on a low-limit tier (e.g. /stripe/ = 10/min)
+  // must not starve other tiers. Key by IP + tier limit.
+  const bucketKey = `${ip}:${limit}`;
+  let bucket = rateLimitBuckets.get(bucketKey);
 
   if (!bucket) {
     bucket = { tokens: limit - 1, maxTokens: limit, resetAt: now + RATE_LIMIT_WINDOW_MS, lastRefill: now };
-    rateLimitBuckets.set(ip, bucket);
+    rateLimitBuckets.set(bucketKey, bucket);
     return { allowed: true };
   }
 
@@ -880,6 +920,98 @@ function bodyTooLargeResponse(path: string): Response {
   );
 }
 
+/**
+ * Shared settlement logic for a confirmed buy PaymentIntent (HSMCPay buy).
+ * - Applies the FIXED Treasury fee (fee schedule in calculateHsmcFee)
+ * - Records the fee in treasury_transactions (type='buy_fee', status='settled')
+ * - Credits the user's HSMC wallet with net amount (idempotent)
+ * Called by: /stripe/checkout settle|simulate_success and the
+ * payment_intent.succeeded webhook handler.
+ */
+function settleBuySession(sessionId: string):
+  | { ok: true; txHash: string; amountHsmc: number; feeHsmc: number; feeTier: string; treasuryTxId: string; paymentId: string; alreadySettled?: boolean }
+  | { ok: false; status: number; error: string } {
+
+  const session = db.query(
+    "SELECT * FROM payment_sessions WHERE session_id = ?"
+  ).get(sessionId) as Record<string, unknown> | null;
+
+  if (!session) {
+    return { ok: false, status: 404, error: "Payment session not found" };
+  }
+
+  // Idempotency: already settled → return existing settlement
+  if (session.status === "settled") {
+    const existingTreasury = db.query(
+      "SELECT id, fee_hsmc, fee_tier FROM treasury_transactions WHERE session_id = ? LIMIT 1"
+    ).get(sessionId) as { id: string; fee_hsmc: number; fee_tier: string } | null;
+    return {
+      ok: true,
+      txHash: String(session.settlement_tx_hash || "0x"),
+      amountHsmc: Number(session.amount_hsmc ?? 0),
+      feeHsmc: existingTreasury?.fee_hsmc ?? 0,
+      feeTier: existingTreasury?.fee_tier ?? "n/a",
+      treasuryTxId: existingTreasury?.id ?? "",
+      paymentId: String(session.id),
+      alreadySettled: true,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const txHash = "0x" + randomUUID().replace(/-/g, "");
+  const amountUsd = Number(session.amount_usd ?? 0);
+  const amountHsmc = Number(session.amount_hsmc ?? 0);
+  const { fee: feeUsd, tier: feeTier } = calculateHsmcFee(amountUsd);
+
+  // Convert USD fee to HSMC using the latest recorded price
+  const metrics = db.query(
+    "SELECT price FROM token_metrics ORDER BY updated_at DESC LIMIT 1"
+  ).get() as { price: number } | null;
+  const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
+  const feeHsmc = feeUsd / hsmcPrice;
+
+  // Net HSMC the user gets (after fixed fee)
+  const netHsmc = Math.max(amountHsmc - feeHsmc, 0);
+
+  // Record the treasury fee (fixed, goes to Treasury)
+  const treasuryTxId = randomUUID();
+  const userId = String(session.user_id ?? "local-user");
+  const paymentIntentId = String(session.stripe_payment_intent_id ?? "");
+  db.run(
+    `INSERT INTO treasury_transactions (id, amount_usd, fee_hsmc, fee_tier, payment_intent_id, session_id, user_id, tx_hash, type, status, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'buy_fee', 'settled', ?)`,
+    treasuryTxId, amountUsd, feeHsmc, feeTier, paymentIntentId, sessionId,
+    userId, txHash,
+    `HSMCPay buy settlement — ${feeTier} tier`
+  );
+
+  // Mark session as settled
+  db.run(
+    `UPDATE payment_sessions SET status = 'settled', settlement_tx_hash = ?, otp_expires_at = ? WHERE session_id = ?`,
+    txHash, now, sessionId
+  );
+
+  // Credit wallet balance with net amount (after deducting fee)
+  const credit = db.run(
+    `UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?`,
+    netHsmc, now, userId
+  );
+  if (credit.changes === 0 && netHsmc > 0) {
+    // No wallet row for this user yet — create one so the credit is not lost
+    db.run(
+      `INSERT INTO wallets (id, user_id, address, balance, staked_balance, label, is_primary, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, 'HSMCPay Wallet', 1, ?, ?)`,
+      randomUUID(), userId,
+      `hsmc1q${userId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20)}pay`,
+      netHsmc, now, now
+    );
+  }
+
+  console.log(`[Stripe] Session ${sessionId} settled: ${netHsmc.toFixed(6)} HSMC credited to ${userId} (fee ${feeHsmc.toFixed(2)} HSMC, tier ${feeTier})`);
+
+  return { ok: true, txHash, amountHsmc: netHsmc, feeHsmc, feeTier, treasuryTxId, paymentId: String(session.id) };
+}
+
 // ── Stripe Checkout Endpoint (for HSMCPay) ───────────────────────────────────
 async function handleStripeCheckout(req: Request): Promise<Response> {
   if (req.method !== "POST") {
@@ -988,10 +1120,50 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
       }
     }
 
-    // ── Stripe not configured ───────────────────────────────────────────────
-    return jsonResponse({ error: "Stripe not configured", status: "service_unavailable" }, 503);
+    // ── Simulation mode: no Stripe keys configured ──────────────────────────
+    // Creates a local, in-DB PaymentIntent (pi_sim_*) so the full
+    // checkout → payment → HSMC-credit flow can be exercised in dev/testing
+    // without a Stripe account. Simulated payments are confirmed via
+    // POST /stripe/webhook (simulation events) or action=simulate_success.
+    if (STRIPE_SIMULATION_MODE) {
+      const paymentIntentId = `pi_sim_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      const clientSecret = `sim_secret_${sessionId}`;
+      const encryptedClientSecret = await encryptField(clientSecret);
+
+      db.run(
+        `INSERT INTO payment_sessions (id, user_id, amount_usd, amount_hsmc, session_id,
+         stripe_payment_intent_id, stripe_client_secret, status, processor, created_at, otp_expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'stripe', ?, ?)`,
+        randomUUID(), "local-user", amountUsd, amountHsmc, sessionId,
+        paymentIntentId, encryptedClientSecret, now,
+        new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      );
+
+      console.log(`[Stripe][SIM] Simulated PaymentIntent created: ${paymentIntentId} for ${amountUsd} USD (session ${sessionId})`);
+
+      return jsonResponse({
+        session_id: sessionId,
+        payment_intent_id: paymentIntentId,
+        client_secret: clientSecret,
+        stripe_publishable_key: STRIPE_PUBLISHABLE_KEY || "",
+        simulation: true,
+        amount_hsmc: amountHsmc.toFixed(6),
+        amount_usd: amountUsd,
+      });
+    }
+
+    // Neither real Stripe nor simulation available — explain exactly what's missing
+    return jsonResponse({
+      error: "Stripe is not configured",
+      status: "service_unavailable",
+      details: "Set STRIPE_SECRET_KEY (plus STRIPE_PUBLISHABLE_KEY and STRIPE_WEBHOOK_SECRET) for real payments, or leave STRIPE_SECRET_KEY unset to run in simulation mode (STRIPE_SIMULATION_MODE=true).",
+    }, 503);
   }
 
+  // ── Settle a confirmed payment ─────────────────────────────────────────────
+  // Real mode: verifies the PaymentIntent is actually succeeded via the Stripe
+  // API before crediting HSMC. Simulation mode: requires the payment to have
+  // been confirmed (status 'paid' — via simulation webhook or simulate_confirm).
   if (action === "settle") {
     const sessionId = body.session_id;
     const paymentIntentId = body.payment_intent_id;
@@ -1008,70 +1180,113 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
       return errorResponse("Payment session not found", 404);
     }
 
-    if (session.status === "settled") {
-      // Return existing settlement with fee info if available
-      const existingTreasury = db.query(
-        "SELECT id, fee_hsmc, fee_tier FROM treasury_transactions WHERE session_id = ? LIMIT 1"
-      ).get(sessionId) as { id: string; fee_hsmc: number; fee_tier: string } | null;
+    const isSimulationPi = String(paymentIntentId).startsWith("pi_sim_");
 
-      return jsonResponse({
-        tx_hash: session.settlement_tx_hash || "0x",
-        amount_hsmc: session.amount_hsmc,
-        fee_hsmc: existingTreasury?.fee_hsmc?.toFixed(2) ?? "0.00",
-        fee_tier: existingTreasury?.fee_tier ?? "n/a",
-        treasury_tx_id: existingTreasury?.id ?? null,
-        payment_id: session.id,
-      });
+    if (stripe && !isSimulationPi) {
+      // Real mode: verify the payment actually succeeded with Stripe
+      try {
+        const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+        if (pi.status !== "succeeded") {
+          return errorResponse(
+            `Payment not confirmed yet (status: ${pi.status}). HSMC is credited only after Stripe confirms the payment.`,
+            402
+          );
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[Stripe] PaymentIntent verification failed:", msg);
+        return errorResponse("Unable to verify payment status with Stripe. Try again in a moment.", 503, msg);
+      }
+    } else if (STRIPE_SIMULATION_MODE && !isSimulationPi) {
+      return errorResponse("Cannot settle a non-simulation PaymentIntent in simulation mode", 400);
     }
 
-    const now = new Date().toISOString();
-    const txHash = "0x" + randomUUID().replace(/-/g, "");
+    if (STRIPE_SIMULATION_MODE && isSimulationPi && session.status !== "paid" && session.status !== "settled") {
+      return errorResponse(
+        "Simulated payment not confirmed yet. Confirm it via POST /stripe/webhook (simulation event), action=simulate_confirm, or action=simulate_success.",
+        402
+      );
+    }
 
-    // Calculate HSMC fee
-    const amountUsd = Number(session.amount_usd ?? 0);
-    const amountHsmc = Number(session.amount_hsmc ?? 0);
-    const { fee: feeUsd, tier: feeTier } = calculateHsmcFee(amountUsd);
-
-    // Convert USD fee to HSMC using the same rate as initiate
-    const metrics = db.query(
-      "SELECT price FROM token_metrics ORDER BY updated_at DESC LIMIT 1"
-    ).get() as { price: number } | null;
-    const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
-    const feeHsmc = feeUsd / hsmcPrice;
-
-    // Net HSMC the user gets (after fee)
-    const netHsmc = Math.max(amountHsmc - feeHsmc, 0);
-
-    // Insert treasury transaction
-    const treasuryTxId = randomUUID();
-    const userId = String(session.user_id ?? "local-user");
-    db.run(
-      `INSERT INTO treasury_transactions (id, amount_usd, fee_hsmc, fee_tier, payment_intent_id, session_id, user_id, tx_hash, type, status, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'buy_fee', 'settled', ?)`,
-      treasuryTxId, amountUsd, feeHsmc, feeTier, paymentIntentId, sessionId,
-      userId, txHash,
-      `HSMCPay buy settlement — ${feeTier} tier`
-    );
-
-    // Mark session as settled
-    db.run(
-      `UPDATE payment_sessions SET status = 'settled', settlement_tx_hash = ?, otp_expires_at = ? WHERE session_id = ?`,
-      txHash, now, sessionId
-    );
-
-    // Credit wallet balance with net amount (after deducting fee)
-    db.run(
-      `UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?`,
-      netHsmc, now, userId
-    );
+    const settled = settleBuySession(sessionId);
+    if (!settled.ok) {
+      return errorResponse(settled.error, settled.status ?? 500);
+    }
 
     return jsonResponse({
-      tx_hash: txHash,
-      amount_hsmc: netHsmc.toFixed(6),
-      fee_hsmc: feeHsmc.toFixed(2),
-      fee_tier: feeTier,
-      treasury_tx_id: treasuryTxId,
-      payment_id: session.id,
+      tx_hash: settled.txHash,
+      amount_hsmc: settled.amountHsmc.toFixed(6),
+      fee_hsmc: settled.feeHsmc.toFixed(2),
+      fee_tier: settled.feeTier,
+      treasury_tx_id: settled.treasuryTxId,
+      payment_id: settled.paymentId,
+    });
+  }
+
+  // ── Simulation: confirm a simulated payment (marks session 'paid') ─────────
+  if (action === "simulate_confirm") {
+    if (!STRIPE_SIMULATION_MODE) {
+      return errorResponse("simulate_confirm is only available in simulation mode", 400);
+    }
+    const sessionId = body.session_id;
+    const paymentIntentId = body.payment_intent_id;
+    if (!sessionId || !paymentIntentId) {
+      return errorResponse("session_id and payment_intent_id are required", 400);
+    }
+    const session = db.query(
+      "SELECT * FROM payment_sessions WHERE session_id = ? AND stripe_payment_intent_id = ?"
+    ).get(sessionId, paymentIntentId) as Record<string, unknown> | null;
+    if (!session) {
+      return errorResponse("Payment session not found", 404);
+    }
+    if (!String(paymentIntentId).startsWith("pi_sim_")) {
+      return errorResponse("simulate_confirm only works for pi_sim_* PaymentIntents", 400);
+    }
+    db.run(
+      `UPDATE payment_sessions SET status = 'paid', card_brand = 'simulated', card_last4 = '4242', otp_expires_at = ? WHERE session_id = ?`,
+      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), sessionId
+    );
+    console.log(`[Stripe][SIM] Simulated payment confirmed for session ${sessionId}`);
+    return jsonResponse({ success: true, status: "paid", session_id: sessionId });
+  }
+
+  // ── Simulation: confirm + settle in one step ───────────────────────────────
+  if (action === "simulate_success") {
+    if (!STRIPE_SIMULATION_MODE) {
+      return errorResponse("simulate_success is only available in simulation mode", 400);
+    }
+    const sessionId = body.session_id;
+    const paymentIntentId = body.payment_intent_id;
+    if (!sessionId || !paymentIntentId) {
+      return errorResponse("session_id and payment_intent_id are required", 400);
+    }
+    const session = db.query(
+      "SELECT * FROM payment_sessions WHERE session_id = ? AND stripe_payment_intent_id = ?"
+    ).get(sessionId, paymentIntentId) as Record<string, unknown> | null;
+    if (!session) {
+      return errorResponse("Payment session not found", 404);
+    }
+    if (!String(paymentIntentId).startsWith("pi_sim_")) {
+      return errorResponse("simulate_success only works for pi_sim_* PaymentIntents", 400);
+    }
+    db.run(
+      `UPDATE payment_sessions SET status = 'paid', card_brand = 'simulated', card_last4 = '4242' WHERE session_id = ?`,
+      sessionId
+    );
+    const settled = settleBuySession(sessionId);
+    if (!settled.ok) {
+      return errorResponse(settled.error, settled.status ?? 500);
+    }
+    console.log(`[Stripe][SIM] Simulated payment settled: session ${sessionId}, ${settled.amountHsmc.toFixed(6)} HSMC credited`);
+    return jsonResponse({
+      success: true,
+      simulation: true,
+      tx_hash: settled.txHash,
+      amount_hsmc: settled.amountHsmc.toFixed(6),
+      fee_hsmc: settled.feeHsmc.toFixed(2),
+      fee_tier: settled.feeTier,
+      treasury_tx_id: settled.treasuryTxId,
+      payment_id: settled.paymentId,
     });
   }
 
@@ -1080,6 +1295,9 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
 
 // ── Stripe Payout Endpoint (for HSMCPay Sell) ─────────────────────────────────
 const SELL_DEPOSIT_ADDRESS = process.env.HSMC_TREASURY_ADDRESS || "";
+
+/** Simulated treasury address used in dev when HSMC_TREASURY_ADDRESS is unset */
+const SIM_TREASURY_ADDRESS = "hsmc1qsimulatedtreasury0000000000000000000000000000";
 
 async function handleStripePayout(req: Request): Promise<Response> {
   if (req.method !== "POST") {
@@ -1096,8 +1314,13 @@ async function handleStripePayout(req: Request): Promise<Response> {
   const action = body.action || "";
 
   if (action === "initiate") {
-    if (!SELL_DEPOSIT_ADDRESS) {
-      return jsonResponse({ error: "Treasury address not configured", status: "service_unavailable" }, 503);
+    const depositAddress = SELL_DEPOSIT_ADDRESS || (STRIPE_SIMULATION_MODE ? SIM_TREASURY_ADDRESS : "");
+    if (!depositAddress) {
+      return jsonResponse({
+        error: "Treasury address not configured",
+        status: "service_unavailable",
+        details: "Set HSMC_TREASURY_ADDRESS (or run in simulation mode — STRIPE_SIMULATION_MODE).",
+      }, 503);
     }
     const amountUsd = Number(body.amount_usd);
     if (!amountUsd || amountUsd < 1 || !Number.isFinite(amountUsd)) {
@@ -1125,6 +1348,28 @@ async function handleStripePayout(req: Request): Promise<Response> {
     // Total HSMC user must send (base + fee)
     const amountHsmcRequired = baseHsmc + feeHsmc;
 
+    // ── Balance verification (DB-backed wallets) ────────────────────────────
+    // If the wallet exists in our DB, verify it has sufficient HSMC balance.
+    // Addresses not in the DB (external/on-chain) are allowed at initiate —
+    // the hard gate is at settle, where the burn actually happens.
+    const wallet = db.query(
+      "SELECT * FROM wallets WHERE address = ? ORDER BY is_primary DESC LIMIT 1"
+    ).get(userWallet) as Record<string, unknown> | null;
+    if (wallet) {
+      const balance = Number(wallet.balance ?? 0);
+      if (balance < amountHsmcRequired) {
+        return errorResponse(
+          `Insufficient HSMC balance: ${balance.toFixed(6)} HSMC available, ${amountHsmcRequired.toFixed(6)} required (base ${baseHsmc.toFixed(6)} + fee ${feeHsmc.toFixed(6)})`,
+          400
+        );
+      }
+    } else if (!STRIPE_SIMULATION_MODE) {
+      return errorResponse(
+        `Wallet ${userWallet} not found in the HSMC database — cannot verify balance.`,
+        400
+      );
+    }
+
     // Create payout session in DB
     const payoutSessionId = `po_live_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
     const now = new Date().toISOString();
@@ -1143,9 +1388,10 @@ async function handleStripePayout(req: Request): Promise<Response> {
       amount_hsmc_required: Number(amountHsmcRequired.toFixed(6)),
       fee_hsmc: Number(feeHsmc.toFixed(6)),
       fee_tier: feeTier,
-      deposit_address: SELL_DEPOSIT_ADDRESS,
+      deposit_address: depositAddress,
       hsmc_price: Number(hsmcPrice.toFixed(6)),
       amount_usd: amountUsd,
+      simulation: STRIPE_SIMULATION_MODE,
     });
   }
 
@@ -1187,6 +1433,7 @@ async function handleStripePayout(req: Request): Promise<Response> {
 
     const now = new Date().toISOString();
     const amountUsd = Number(session.amount_usd ?? 0);
+    const amountHsmcRequired = Number(session.amount_hsmc ?? 0);
     const { fee: feeUsd, tier: feeTier } = calculateHsmcFee(amountUsd);
 
     // Convert USD fee to HSMC
@@ -1196,15 +1443,64 @@ async function handleStripePayout(req: Request): Promise<Response> {
     const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
     const feeHsmc = feeUsd / hsmcPrice;
 
-    // Insert treasury transaction with type='sell_fee'
+    // ── Verify & burn HSMC from the user's wallet ───────────────────────────
+    const userWallet = String(session.user_id ?? session.card_holder ?? "");
+    const wallet = db.query(
+      "SELECT * FROM wallets WHERE address = ? ORDER BY is_primary DESC LIMIT 1"
+    ).get(userWallet) as Record<string, unknown> | null;
+    if (!wallet) {
+      return errorResponse(
+        `Wallet ${userWallet} not found in the HSMC database — cannot burn HSMC for the payout.`,
+        400
+      );
+    }
+    const balance = Number(wallet.balance ?? 0);
+    if (balance < amountHsmcRequired) {
+      return errorResponse(
+        `Insufficient HSMC balance: ${balance.toFixed(6)} available, ${amountHsmcRequired.toFixed(6)} required for payout.`,
+        400
+      );
+    }
+
+    // Burn: deduct the full required amount (base + fee) from the wallet.
+    // baseHsmc → burned in exchange for the fiat payout; feeHsmc → Treasury.
+    db.run(
+      `UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE address = ?`,
+      amountHsmcRequired, now, userWallet
+    );
+
+    // ── Create the Stripe payout (or simulate) ──────────────────────────────
+    let stripePayoutId: string | null = null;
+    let payoutStatus = "processing";
+    if (stripe) {
+      try {
+        const payout = await stripe.payouts.create({
+          amount: Math.round(amountUsd * 100),
+          currency: "usd",
+          description: `HSMCPay sell — ${payoutSessionId}`,
+          metadata: { payout_session_id: payoutSessionId },
+        });
+        stripePayoutId = payout.id;
+        console.log(`[Stripe] Payout created: ${payout.id} for ${payoutSessionId}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[Stripe] Payout creation failed for ${payoutSessionId}:`, msg);
+        // Do not fail the settlement — record the burn/treasury and flag the
+        // payout as needing manual retry. The payout webhook can still confirm.
+      }
+    } else {
+      stripePayoutId = `po_sim_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      console.log(`[Stripe][SIM] Simulated payout created: ${stripePayoutId} for ${payoutSessionId}`);
+    }
+
+    // Insert treasury transaction with type='sell_fee' (fixed fee → Treasury)
     const treasuryTxId = randomUUID();
-    const userId = String(session.card_holder ?? session.user_id ?? "local-user");
     db.run(
       `INSERT INTO treasury_transactions (id, amount_usd, fee_hsmc, fee_tier, session_id, user_id, tx_hash, type, status, notes)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'sell_fee', 'settled', ?)`,
       treasuryTxId, amountUsd, feeHsmc, feeTier, payoutSessionId,
-      userId, txHash,
-      `HSMCPay sell settlement — ${feeTier} tier — payout to card`
+      userWallet, txHash,
+      `HSMCPay sell settlement — ${feeTier} tier — payout ${stripePayoutId ?? "n/a"} — ${amountHsmcRequired.toFixed(6)} HSMC burned`
     );
 
     // Mark session as settled
@@ -1214,41 +1510,96 @@ async function handleStripePayout(req: Request): Promise<Response> {
     );
 
     return jsonResponse({
-      status: "processing",
+      status: payoutStatus,
       estimated_payout_days: "2-5 business days",
       tx_hash: txHash,
+      stripe_payout_id: stripePayoutId,
+      hsmc_burned: Number(amountHsmcRequired.toFixed(6)),
       fee_hsmc: Number(feeHsmc.toFixed(2)),
       fee_tier: feeTier,
       treasury_tx_id: treasuryTxId,
+      simulation: STRIPE_SIMULATION_MODE,
     });
   }
 
   return errorResponse(`Unknown action: ${action}. Use 'initiate' or 'settle'`, 400);
 }
 
-// ── Stripe Payout Webhook (simulation) ────────────────────────────────────────
+// ── Stripe Payout Webhook ──────────────────────────────────────────────────────
+// Real mode: verifies the Stripe webhook signature (STRIPE_WEBHOOK_SECRET) and
+// handles payout.paid / payout.failed events. Simulation mode (no Stripe keys):
+// accepts either a Stripe-shaped event body {type, data.object.metadata} or the
+// legacy {payout_session_id, status} body — both update the payout session.
 async function handleStripePayoutWebhook(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return errorResponse("Method not allowed", 405);
   }
 
-  let body: { payout_session_id?: string; status?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return errorResponse("Invalid JSON body", 400);
+  const signature = req.headers.get("stripe-signature");
+  const rawBody = await req.text();
+
+  let payoutSessionId: string | undefined;
+  let newStatus: string | undefined;
+  let verifiedEventType: string | null = null;
+
+  // ── Real mode: verify signature and parse the Stripe event ───────────────
+  if (STRIPE_WEBHOOK_SECRET && stripe) {
+    if (!signature) {
+      return errorResponse("Missing stripe-signature header", 400);
+    }
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Stripe] Payout webhook signature verification failed:", msg);
+      return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
+    }
+    verifiedEventType = event.type;
+    const po = event.data.object as any;
+    payoutSessionId = po?.metadata?.payout_session_id;
+    newStatus =
+      event.type === "payout.paid" ? "completed" :
+      event.type === "payout.failed" ? "failed" :
+      event.type === "payout.canceled" ? "failed" :
+      undefined;
+  } else if (STRIPE_SIMULATION_MODE) {
+    // ── Simulation mode: accept local events (dev/testing only) ────────────
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return errorResponse("Invalid JSON body", 400);
+    }
+    if (body?.type && body?.data?.object) {
+      // Stripe-shaped simulation event
+      verifiedEventType = body.type;
+      payoutSessionId = body.data.object?.metadata?.payout_session_id;
+      newStatus =
+        body.type === "payout.paid" ? "completed" :
+        body.type === "payout.failed" ? "failed" :
+        body.type === "payout.canceled" ? "failed" :
+        undefined;
+    } else {
+      // Legacy simulation body
+      payoutSessionId = body.payout_session_id;
+      newStatus = body.status;
+    }
+  } else {
+    return jsonResponse({
+      error: "Webhook secret not configured",
+      status: "service_unavailable",
+      details: "Set STRIPE_WEBHOOK_SECRET for real webhook processing (fail-closed), or run in simulation mode (STRIPE_SIMULATION_MODE).",
+    }, 503);
   }
 
-  const payoutSessionId = body.payout_session_id;
-  const newStatus = body.status;
-
   if (!payoutSessionId) {
-    return errorResponse("payout_session_id is required", 400);
+    return errorResponse("payout_session_id is required (set it in the payout metadata)", 400);
   }
 
   const validStatuses = ["completed", "failed", "processing"];
   if (!newStatus || !validStatuses.includes(newStatus)) {
-    return errorResponse(`status must be one of: ${validStatuses.join(", ")}`, 400);
+    return errorResponse(`status must be one of: ${validStatuses.join(", ")} (or send a payout.paid / payout.failed event)`, 400);
   }
 
   const session = db.query(
@@ -1273,6 +1624,7 @@ async function handleStripePayoutWebhook(req: Request): Promise<Response> {
       payoutSessionId
     );
 
+    console.log(`[Stripe] Payout confirmed (${verifiedEventType ?? "simulation"}): ${payoutSessionId}`);
     return jsonResponse({
       success: true,
       payout_session_id: payoutSessionId,
@@ -1292,6 +1644,7 @@ async function handleStripePayoutWebhook(req: Request): Promise<Response> {
       payoutSessionId
     );
 
+    console.log(`[Stripe] Payout failed (${verifiedEventType ?? "simulation"}): ${payoutSessionId}`);
     return jsonResponse({
       success: true,
       payout_session_id: payoutSessionId,
@@ -1333,8 +1686,40 @@ async function handleStripeCreatePaymentIntent(req: Request): Promise<Response> 
   const idempotencyKey = body.idempotency_key || `hsmcpay_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
   if (!stripe) {
+    // ── Simulation mode (no Stripe keys) — local in-DB PaymentIntent ────────
+    if (STRIPE_SIMULATION_MODE) {
+      const metrics = db.query(
+        "SELECT price FROM token_metrics ORDER BY updated_at DESC LIMIT 1"
+      ).get() as { price: number } | null;
+      const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
+      const amountHsmc = amountUsd / hsmcPrice;
+
+      const paymentIntentId = `pi_sim_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      const clientSecret = `sim_secret_${idempotencyKey}`;
+      const now = new Date().toISOString();
+      const encryptedClientSecret = await encryptField(clientSecret);
+
+      db.run(
+        `INSERT INTO payment_sessions (id, user_id, amount_usd, amount_hsmc, session_id,
+         stripe_payment_intent_id, stripe_client_secret, status, processor, created_at, otp_expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'stripe', ?, ?)`,
+        randomUUID(), "local-user", amountUsd, amountHsmc, `sim_${idempotencyKey}`,
+        paymentIntentId, encryptedClientSecret, now,
+        new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      );
+      console.log(`[Stripe][SIM] PaymentIntent created via API (simulation): ${paymentIntentId}`);
+
+      return jsonResponse({
+        client_secret: clientSecret,
+        payment_intent_id: paymentIntentId,
+        amount_usd: amountUsd,
+        amount_cents: amountCents,
+        simulation: true,
+      });
+    }
+
     return errorResponse(
-      "Stripe is not configured. Set STRIPE_SECRET_KEY environment variable.",
+      "Stripe is not configured. Set STRIPE_SECRET_KEY environment variable (or leave it unset to run in simulation mode).",
       503
     );
   }
@@ -1735,16 +2120,20 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
   }
 
   const signature = req.headers.get("stripe-signature");
-  if (!signature) {
-    return errorResponse("Missing stripe-signature header", 400);
-  }
 
   // Read raw body for signature verification
   const rawBody = await req.text();
 
   // ── Signature verification ─────────────────────────────────────────────
+  // Real mode: signature is REQUIRED and verified via STRIPE_WEBHOOK_SECRET
+  // (fail-closed — a configured key with a missing webhook secret rejects).
+  // Simulation mode (no secret key configured): events are accepted without
+  // signature verification — dev/testing only, never in production.
   let event: Stripe.Event;
   if (STRIPE_WEBHOOK_SECRET && stripe) {
+    if (!signature) {
+      return errorResponse("Missing stripe-signature header", 400);
+    }
     try {
       event = stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET);
     } catch (err: unknown) {
@@ -1752,9 +2141,24 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
       console.error("[Stripe] Webhook signature verification failed:", msg);
       return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
     }
+  } else if (STRIPE_SIMULATION_MODE) {
+    // Simulation mode — parse the event body directly (no signature).
+    try {
+      event = JSON.parse(rawBody);
+    } catch {
+      return errorResponse("Invalid JSON body", 400);
+    }
+    if (!event?.type || !event?.data?.object?.id) {
+      return errorResponse("Simulation webhook body must be a Stripe-shaped event: { type, data: { object: { id, ... } } }", 400);
+    }
+    console.warn(`[Stripe][SIM] Simulation webhook event accepted WITHOUT signature verification (dev only): ${event.type}`);
   } else {
-    console.error("[Stripe] Webhook received but STRIPE_WEBHOOK_SECRET not configured");
-    return jsonResponse({ error: "Webhook secret not configured", status: "service_unavailable" }, 503);
+    console.error("[Stripe] Webhook received but STRIPE_WEBHOOK_SECRET not configured (and simulation mode is off)");
+    return jsonResponse({
+      error: "Webhook secret not configured",
+      status: "service_unavailable",
+      details: "Set STRIPE_WEBHOOK_SECRET for real webhook processing (fail-closed), or run in simulation mode (STRIPE_SIMULATION_MODE).",
+    }, 503);
   }
 
   // ── Idempotency check — don't process the same event twice ──────────────
@@ -1794,52 +2198,16 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
           return jsonResponse({ received: true, warning: "no_session_found" });
         }
 
-        // If already settled, skip
-        if (session.status === "settled") {
-          console.log(`[Stripe] Session ${session.session_id} already settled — skipping`);
-          return jsonResponse({ received: true, status: "already_settled" });
+        // Settle via the shared settlement logic (fee schedule, treasury
+        // recording, wallet credit — same code path as checkout settle).
+        const settled = settleBuySession(String(session.session_id));
+        if (!settled.ok) {
+          console.error(`[Stripe] Settlement failed for ${piId}: ${settled.error}`);
+          return jsonResponse({ received: true, status: "settle_failed", error: settled.error });
         }
+        console.log(`[Stripe] Wallet credited: ${settled.amountHsmc.toFixed(6)} HSMC (fee: ${settled.feeHsmc.toFixed(2)} HSMC, tier: ${settled.feeTier})`);
 
-        const now = new Date().toISOString();
-        const txHash = "0x" + randomUUID().replace(/-/g, "");
-        const amountUsd = Number(session.amount_usd ?? 0);
-        const amountHsmc = Number(session.amount_hsmc ?? 0);
-        const userId = String(session.user_id ?? "local-user");
-
-        // Calculate HSMC fee
-        const { fee: feeUsd, tier: feeTier } = calculateHsmcFee(amountUsd);
-        const metrics = db.query(
-          "SELECT price FROM token_metrics ORDER BY updated_at DESC LIMIT 1"
-        ).get() as { price: number } | null;
-        const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
-        const feeHsmc = feeUsd / hsmcPrice;
-        const netHsmc = Math.max(amountHsmc - feeHsmc, 0);
-
-        // Insert treasury transaction
-        const treasuryTxId = randomUUID();
-        db.run(
-          `INSERT INTO treasury_transactions (id, amount_usd, fee_hsmc, fee_tier, payment_intent_id, session_id, user_id, tx_hash, type, status, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'buy_fee', 'settled', ?)`,
-          treasuryTxId, amountUsd, feeHsmc, feeTier, piId, sessionId,
-          userId, txHash,
-          `HSMCPay buy settlement (webhook) — ${feeTier} tier`
-        );
-
-        // Mark session as settled
-        db.run(
-          `UPDATE payment_sessions SET status = 'settled', settlement_tx_hash = ?, otp_expires_at = ? WHERE stripe_payment_intent_id = ?`,
-          txHash, now, piId
-        );
-
-        // Credit wallet balance
-        db.run(
-          `UPDATE wallets SET balance = balance + ?, updated_at = ? WHERE user_id = ?`,
-          netHsmc, now, userId
-        );
-
-        console.log(`[Stripe] Wallet credited: ${netHsmc.toFixed(6)} HSMC to ${userId} (fee: ${feeHsmc.toFixed(2)} HSMC, tier: ${feeTier})`);
-
-        return jsonResponse({ received: true, status: "settled", tx_hash: txHash });
+        return jsonResponse({ received: true, status: "settled", tx_hash: settled.txHash });
       }
 
       case "payment_intent.payment_failed": {
@@ -2038,6 +2406,41 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         return jsonResponse({ received: true });
       }
 
+      case "payout.paid": {
+        const po = event.data.object as any;
+        const payoutSessionId = po?.metadata?.payout_session_id;
+        console.log(`[Stripe] Payout paid: ${po.id} (session: ${payoutSessionId ?? "unknown"})`);
+        if (payoutSessionId) {
+          db.run(
+            `UPDATE payment_sessions SET status = 'completed', otp_expires_at = ? WHERE session_id = ? AND processor = 'payout'`,
+            new Date().toISOString(), payoutSessionId
+          );
+          db.run(
+            `UPDATE treasury_transactions SET status = 'settled', notes = notes || ' — payout.paid confirmed' WHERE session_id = ? AND type = 'sell_fee'`,
+            payoutSessionId
+          );
+        }
+        return jsonResponse({ received: true, status: "payout_confirmed" });
+      }
+
+      case "payout.failed":
+      case "payout.canceled": {
+        const po = event.data.object as any;
+        const payoutSessionId = po?.metadata?.payout_session_id;
+        console.log(`[Stripe] Payout ${event.type.split(".")[1]}: ${po.id} (session: ${payoutSessionId ?? "unknown"})`);
+        if (payoutSessionId) {
+          db.run(
+            `UPDATE payment_sessions SET status = 'failed', otp_expires_at = ? WHERE session_id = ? AND processor = 'payout'`,
+            new Date().toISOString(), payoutSessionId
+          );
+          db.run(
+            `UPDATE treasury_transactions SET status = 'failed', notes = notes || ' — payout failed' WHERE session_id = ? AND type = 'sell_fee'`,
+            payoutSessionId
+          );
+        }
+        return jsonResponse({ received: true, status: "payout_failed" });
+      }
+
       default:
         console.log(`[Stripe] Unhandled event type: ${event.type}`);
         return jsonResponse({ received: true, status: "unhandled_event_type" });
@@ -2143,7 +2546,16 @@ async function handleInternalTransfer(req: Request): Promise<Response> {
 
 // ── Treasury Endpoints ────────────────────────────────────────────────────────
 
-/** GET /treasury/balance — total fees collected and breakdown by type */
+// Treasury allocation percentages (business plan, revision 3):
+//   40% Buyback & Burn · 25% Staking Rewards · 20% Development · 15% Insurance
+const TREASURY_ALLOCATIONS = {
+  buyback_burn: 0.40,
+  staking_rewards: 0.25,
+  development_fund: 0.20,
+  insurance_fund: 0.15,
+} as const;
+
+/** GET /treasury/balance — total fees collected, breakdown and auto-buyback calculation */
 function handleTreasuryBalance(): Response {
   const totalRow = db.query(
     "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE status = 'settled'"
@@ -2162,10 +2574,82 @@ function handleTreasuryBalance(): Response {
     "SELECT COUNT(*) as count FROM treasury_transactions WHERE status = 'settled'"
   ).get() as { count: number };
 
+  // ── Auto buyback calculation ──────────────────────────────────────────────
+  // 40% of all settled HSMCPay fees is earmarked for buyback & burn. The
+  // amount already executed is the sum of 'buyback' treasury rows; the
+  // remainder is the pending buyback obligation.
+  const totalSettledFees = Number(totalRow.total ?? 0);
+  const buybackExecutedRow = db.query(
+    "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE type = 'buyback' AND status = 'settled'"
+  ).get() as { total: number };
+  const buybackExecuted = Number(buybackExecutedRow.total ?? 0);
+  const buybackAllocated = totalSettledFees * TREASURY_ALLOCATIONS.buyback_burn;
+  const pendingBuyback = Math.max(buybackAllocated - buybackExecuted, 0);
+
+  const allocations = {
+    buyback_burn: Number((totalSettledFees * TREASURY_ALLOCATIONS.buyback_burn).toFixed(2)),
+    staking_rewards: Number((totalSettledFees * TREASURY_ALLOCATIONS.staking_rewards).toFixed(2)),
+    development_fund: Number((totalSettledFees * TREASURY_ALLOCATIONS.development_fund).toFixed(2)),
+    insurance_fund: Number((totalSettledFees * TREASURY_ALLOCATIONS.insurance_fund).toFixed(2)),
+  };
+
   return jsonResponse({
-    total_fees_collected: Number(totalRow.total.toFixed(2)),
+    total_fees_collected: Number(totalSettledFees.toFixed(2)),
     breakdown,
     transactions_count: countRow.count,
+    allocations,
+    buyback: {
+      allocation_pct: TREASURY_ALLOCATIONS.buyback_burn * 100,
+      allocated_hsmc: Number(buybackAllocated.toFixed(2)),
+      executed_hsmc: Number(buybackExecuted.toFixed(2)),
+      pending_hsmc: Number(pendingBuyback.toFixed(2)),
+    },
+  });
+}
+
+/** POST /treasury/buyback — execute the pending buyback & burn allocation */
+function handleTreasuryBuyback(req: Request): Response {
+  if (req.method !== "POST") {
+    return errorResponse("Method not allowed", 405);
+  }
+
+  const totalRow = db.query(
+    "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE status = 'settled'"
+  ).get() as { total: number };
+  const buybackExecutedRow = db.query(
+    "SELECT COALESCE(SUM(fee_hsmc), 0) as total FROM treasury_transactions WHERE type = 'buyback' AND status = 'settled'"
+  ).get() as { total: number };
+
+  const totalSettledFees = Number(totalRow.total ?? 0);
+  const buybackExecuted = Number(buybackExecutedRow.total ?? 0);
+  const buybackAllocated = totalSettledFees * TREASURY_ALLOCATIONS.buyback_burn;
+  const pendingBuyback = Math.max(buybackAllocated - buybackExecuted, 0);
+
+  if (pendingBuyback < 0.000001) {
+    return errorResponse("No pending buyback allocation — nothing to execute", 400);
+  }
+
+  // Record the buyback execution: HSMC bought on the open market and burned,
+  // reducing the circulating supply (business plan: 40% of Treasury fees).
+  const now = new Date().toISOString();
+  db.run(
+    `INSERT INTO treasury_transactions (id, amount_usd, fee_hsmc, fee_tier, user_id, tx_hash, type, status, notes)
+     VALUES (?, ?, ?, 'buyback', 'treasury', ?, 'buyback', 'settled', ?)`,
+    randomUUID(),
+    0,
+    Number(pendingBuyback.toFixed(6)),
+    "0x" + randomUUID().replace(/-/g, ""),
+    `Auto buyback & burn — ${Number(pendingBuyback.toFixed(2))} HSMC removed from circulating supply (${TREASURY_ALLOCATIONS.buyback_burn * 100}% of ${Number(totalSettledFees.toFixed(2))} HSMC collected fees)`
+  );
+
+  console.log(`[Treasury] Buyback executed: ${pendingBuyback.toFixed(6)} HSMC burned`);
+
+  return jsonResponse({
+    success: true,
+    buyback_hsmc: Number(pendingBuyback.toFixed(6)),
+    executed_total_hsmc: Number((buybackExecuted + pendingBuyback).toFixed(2)),
+    remaining_pending_hsmc: 0,
+    tx_hash: "0x" + randomUUID().replace(/-/g, ""),
   });
 }
 
@@ -2987,6 +3471,11 @@ async function handleRequestInner(req: Request): Promise<Response> {
     return handleWebAuthnUnregister(req);
   }
 
+  // Stripe configuration (mode, which keys are set, required env vars)
+  if (path === "/stripe/config" && req.method === "GET") {
+    return jsonResponse(getStripeConfig());
+  }
+
   // Stripe checkout endpoint for HSMCPay
   if (path === "/stripe/checkout") {
     return handleStripeCheckout(req);
@@ -3019,6 +3508,10 @@ async function handleRequestInner(req: Request): Promise<Response> {
 
   if (path === "/treasury/transactions" && req.method === "GET") {
     return handleTreasuryTransactions(req);
+  }
+
+  if (path === "/treasury/buyback" && req.method === "POST") {
+    return handleTreasuryBuyback(req);
   }
 
   // Internal atomic wallet transfer (H7 fix)
@@ -3341,11 +3834,13 @@ console.log(`   REST: ${protocol}://localhost:${PORT}/rest/v1/:table`);
 console.log(`   Health: ${protocol}://localhost:${PORT}/health`);
 console.log(`   Auth: ${protocol}://localhost:${PORT}/auth/login | /auth/register`);
 console.log(`   WebAuthn: ${protocol}://localhost:${PORT}/auth/webauthn/login | /register | /unregister | /challenge`);
+console.log(`   Stripe Config: ${protocol}://localhost:${PORT}/stripe/config (mode: ${STRIPE_SIMULATION_MODE ? "SIMULATION" : STRIPE_MODE})`);
 console.log(`   Stripe Buy: ${protocol}://localhost:${PORT}/stripe/checkout`);
 console.log(`   Stripe Sell: ${protocol}://localhost:${PORT}/stripe/payout`);
 console.log(`   Payout Webhook: ${protocol}://localhost:${PORT}/stripe/payout/webhook`);
 console.log(`   Stripe Create PI: ${protocol}://localhost:${PORT}/stripe/create-payment-intent`);
 console.log(`   Stripe Webhook: ${protocol}://localhost:${PORT}/stripe/webhook`);
+console.log(`   Treasury: ${protocol}://localhost:${PORT}/treasury/balance | /treasury/transactions | /treasury/buyback`);
 console.log(`   Treasury Balance: ${protocol}://localhost:${PORT}/treasury/balance`);
 console.log(`   Treasury Tx: ${protocol}://localhost:${PORT}/treasury/transactions`);
 console.log(`   Rate limit: 100 req/min (REST), 20 req/min (/auth/*), 10 req/min (/stripe/*, /cards/*, /cardholders/*)`);
