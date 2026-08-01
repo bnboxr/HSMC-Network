@@ -32,10 +32,18 @@ import {
   isEncryptedColumn,
 } from "./db-crypto";
 import { runStartupSecurityChecks } from "./db-security";
+import type { StartupSecurityResult } from "./db-security";
+import { config, authSummary } from "./config";
 import Stripe from "stripe";
 
-const DB_PATH = process.env.HSMC_DB_PATH || "/home/team/shared/hsmc.db";
-const PORT = parseInt(process.env.HSMC_PORT || "3001", 10);
+const DB_PATH = config.dbPath;
+const PORT = config.port;
+const START_TIME = Date.now();
+
+// HSMC Rust node RPC endpoint (shielded pool proxy). Module-scope so the
+// proxy handler can always see it (was previously declared after the final
+// `return` inside handleRequestInner — TDZ ReferenceError on every request).
+const NODE_RPC_URL = process.env.HSMC_NODE_RPC || "http://127.0.0.1:8080";
 
 // ── Schema (from schema.sqlite.sql) ──────────────────────────────────────────
 const SCHEMA_SQL = `
@@ -116,7 +124,8 @@ CREATE TABLE IF NOT EXISTS payment_sessions (
 );
 
 CREATE TABLE IF NOT EXISTS platform_config (
-  hsmcpay_intermediary_enabled INTEGER, id REAL PRIMARY KEY, updated_at TEXT, updated_by TEXT
+  hsmcpay_intermediary_enabled INTEGER, kill_switch_active INTEGER DEFAULT 0,
+  id REAL PRIMARY KEY, updated_at TEXT, updated_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS platform_stats (
@@ -213,6 +222,16 @@ CREATE TABLE IF NOT EXISTS wallet_seeds (
 CREATE TABLE IF NOT EXISTS wallets (
   address TEXT, balance REAL, created_at TEXT, id TEXT PRIMARY KEY, is_primary INTEGER,
   label TEXT, staked_balance REAL, updated_at TEXT, user_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  admin_user TEXT,
+  action TEXT,
+  details TEXT,
+  ip_address TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS payment_sessions_safe (
@@ -336,14 +355,16 @@ db.exec("PRAGMA foreign_keys=OFF;");
 
 // Create tables
 db.exec(SCHEMA_SQL);
-console.log("✅ Created 35 tables");
+const SCHEMA_TABLE_COUNT = db.query(
+  "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+).get() as { cnt: number };
+console.log(`✅ Created ${SCHEMA_TABLE_COUNT.cnt} tables`);
 
 // Seed data
 db.exec(SEED_SQL);
 console.log("✅ Genesis block seeded (no fake data)");
 
 // ── Security: encryption + schema integrity + file permissions ────────────
-const DB_SECURITY_STRICT = process.env.DB_SECURITY_STRICT === "true"; // non-strict by default (warn-only)
 
 // Initialize column-level encryption
 await initEncryptionKey();
@@ -354,28 +375,29 @@ if (isEncryptionAvailable()) {
 }
 
 // Run startup security checks (schema integrity, file permissions, ownership)
+let secResult: StartupSecurityResult | null = null;
 try {
-  const secResult = await runStartupSecurityChecks(db, DB_PATH, SCHEMA_SQL, DB_SECURITY_STRICT);
+  secResult = await runStartupSecurityChecks(db, DB_PATH, SCHEMA_SQL, config.dbSecurityStrict);
   if (!secResult.allOk) {
     console.warn("[SECURITY] ⚠️  Some security checks failed — see warnings above");
   }
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err);
   console.error(`[SECURITY] ❌ FATAL: ${msg}`);
-  if (DB_SECURITY_STRICT) {
+  if (config.dbSecurityStrict) {
     process.exit(1);
   }
   console.warn("[SECURITY] ⚠️  Continuing despite schema mismatch (DB_SECURITY_STRICT=false)");
 }
 
-// ── Auth Configuration ───────────────────────────────────────────────────────
-const HSMC_API_KEY = process.env.HSMC_API_KEY || "";
-const JWT_SECRET = process.env.JWT_SECRET || "";
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
-const TLS_CERT = process.env.TLS_CERT || "";
-const TLS_KEY = process.env.TLS_KEY || "";
-const IS_DEV_MODE = !HSMC_API_KEY;
-const USING_TLS = !!(TLS_CERT && TLS_KEY);
+// ── Auth Configuration (centralized in config.ts) ────────────────────────────
+const HSMC_API_KEY = config.apiKey;
+const JWT_SECRET = config.jwtSecret;
+const CORS_ORIGIN = config.corsOrigin;
+const TLS_CERT = config.tlsCert;
+const TLS_KEY = config.tlsKey;
+const IS_DEV_MODE = config.isDevMode;
+const USING_TLS = config.usingTls;
 const JWT_EXPIRY_SECONDS = 3600; // 1 hour
 
 // ── Stripe Configuration ─────────────────────────────────────────────────────
@@ -393,13 +415,13 @@ const JWT_EXPIRY_SECONDS = 3600; // 1 hour
 // HSMC crediting / treasury recording / payout burning work end-to-end without
 // any real Stripe account. Simulation is dev-only and must never be enabled in
 // production (guard: it activates only when no secret key is configured).
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
-const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || "";
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
-const STRIPE_MODE: "live" | "test" = STRIPE_SECRET_KEY.startsWith("sk_live_") ? "live" : "test";
+const STRIPE_SECRET_KEY = config.stripeSecretKey;
+const STRIPE_PUBLISHABLE_KEY = config.stripePublishableKey;
+const STRIPE_WEBHOOK_SECRET = config.stripeWebhookSecret;
+const STRIPE_MODE: "live" | "test" = config.stripeMode;
 // Simulation is active when explicitly requested OR when no secret key exists at all.
 // If a secret key IS set but simulation is not requested, simulation is OFF.
-const STRIPE_SIMULATION_MODE = process.env.STRIPE_SIMULATION_MODE === "true" || !STRIPE_SECRET_KEY;
+const STRIPE_SIMULATION_MODE = config.stripeSimulationMode;
 let stripe: Stripe | null = null;
 if (STRIPE_SECRET_KEY) {
   stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2025-06-30.basil" as any });
@@ -431,12 +453,11 @@ function getStripeConfig() {
 }
 
 if (IS_DEV_MODE) {
-  console.warn("⚠️  WARNING: HSMC_API_KEY not set — API server running in DEV MODE (no auth required).");
+  console.warn("⚠️  DEV MODE: no operator-provided HSMC_API_KEY — API server runs WITHOUT authentication. Set HSMC_API_KEY (or NODE_ENV=production) to enforce API key auth.");
+} else {
+  console.log(`🔐 API key auth ACTIVE (${config.apiKeyAutogenerated ? "auto-generated key — set a strong custom HSMC_API_KEY for production" : "operator-provided key"})`);
 }
-
-if (!JWT_SECRET) {
-  console.warn("⚠️  WARNING: JWT_SECRET not set — JWT auth will fail. Set JWT_SECRET env var.");
-}
+console.log(`🔑 JWT auth ${config.jwtAutogenerated ? "enabled with auto-generated secret (persisted to .env)" : "enabled with configured secret"}`);
 
 // ── Constant-time string comparison ──────────────────────────────────────────
 function constantTimeEqual(a: string, b: string): boolean {
@@ -1045,7 +1066,7 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
     const sessionId = `pi_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
     // Stripe publishable key
-    const stripePublishableKey = process.env.STRIPE_PUBLISHABLE_KEY || "";
+    const stripePublishableKey = config.stripePublishableKey;
 
     const now = new Date().toISOString();
 
@@ -1294,7 +1315,7 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
 }
 
 // ── Stripe Payout Endpoint (for HSMCPay Sell) ─────────────────────────────────
-const SELL_DEPOSIT_ADDRESS = process.env.HSMC_TREASURY_ADDRESS || "";
+const SELL_DEPOSIT_ADDRESS = config.treasuryAddress;
 
 /** Simulated treasury address used in dev when HSMC_TREASURY_ADDRESS is unset */
 const SIM_TREASURY_ADDRESS = "hsmc1qsimulatedtreasury0000000000000000000000000000";
@@ -3440,9 +3461,35 @@ async function handleRequestInner(req: Request): Promise<Response> {
     }
   }
 
-  // Health check (public, no auth)
+  // Health check (public, no auth) — reports honest service status
   if (path === "/health" || path === "/") {
-    return jsonResponse({ status: "ok", tables: ALLOWED_TABLES.size, auth_mode: IS_DEV_MODE ? "dev" : "api_key" });
+    let dbOk = true;
+    let dbError = "";
+    try {
+      db.query("SELECT 1").get();
+    } catch (err: unknown) {
+      dbOk = false;
+      dbError = err instanceof Error ? err.message : String(err);
+    }
+    const health = {
+      status: dbOk ? "ok" : "error",
+      uptime_seconds: Math.floor((Date.now() - START_TIME) / 1000),
+      timestamp: new Date().toISOString(),
+      tables: ALLOWED_TABLES.size,
+      auth_mode: IS_DEV_MODE ? "dev" : "api_key",
+      db: { ok: dbOk, tables: ALLOWED_TABLES.size, error: dbError || undefined },
+      schema_integrity: secResult?.schema
+        ? { ok: secResult.schema.passed, expected_hash: secResult.schema.expectedHash, actual_hash: secResult.schema.actualHash, table_count: secResult.schema.tableCount }
+        : { ok: null, note: "not checked at startup" },
+      encryption: { enabled: isEncryptionAvailable() },
+      stripe: {
+        mode: STRIPE_SECRET_KEY ? (STRIPE_MODE === "live" ? "live" : "test") : "simulation",
+        simulation: STRIPE_SIMULATION_MODE,
+      },
+      rate_limiter: { active_buckets: rateLimitBuckets.size },
+      process: { pid: process.pid },
+    };
+    return jsonResponse(health, dbOk ? 200 : 503);
   }
 
   // ── Auth Endpoints ────────────────────────────────────────────────────────
@@ -3766,8 +3813,6 @@ async function handleRequestInner(req: Request): Promise<Response> {
 // Shielded Pool proxy — forwards to HSMC Rust node (port 8080)
 // ══════════════════════════════════════════════════════════════════════════════
 
-const NODE_RPC_URL = process.env.HSMC_NODE_RPC || "http://127.0.0.1:8080";
-
 async function handleShieldedProxy(req: Request, endpoint: string, method: string): Promise<Response> {
   try {
     const url = `${NODE_RPC_URL}/${endpoint}`;
@@ -3829,6 +3874,31 @@ if (!USING_TLS) {
   console.warn("   Generate a self-signed cert for dev:");
   console.warn("   openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes");
 }
+
+// ── Graceful Shutdown ─────────────────────────────────────────────────────────
+// On SIGINT/SIGTERM: stop accepting connections, close the DB cleanly, then exit.
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[SHUTDOWN] Received ${signal} — closing server gracefully...`);
+  try {
+    server.stop(true);
+    console.log("[SHUTDOWN] HTTP server stopped.");
+  } catch (err: unknown) {
+    console.error("[SHUTDOWN] Error stopping HTTP server:", err instanceof Error ? err.message : String(err));
+  }
+  try {
+    db.close();
+    console.log("[SHUTDOWN] Database closed.");
+  } catch (err: unknown) {
+    console.error("[SHUTDOWN] Error closing database:", err instanceof Error ? err.message : String(err));
+  }
+  process.exit(0);
+}
+process.on("SIGINT", () => { void shutdown("SIGINT"); });
+process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
+
 console.log(`🚀 HSMC Local API server running on ${protocol}://localhost:${PORT}`);
 console.log(`   REST: ${protocol}://localhost:${PORT}/rest/v1/:table`);
 console.log(`   Health: ${protocol}://localhost:${PORT}/health`);

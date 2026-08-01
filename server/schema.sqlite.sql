@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS payment_sessions (
 
 CREATE TABLE IF NOT EXISTS platform_config (
   hsmcpay_intermediary_enabled INTEGER,
+  kill_switch_active INTEGER DEFAULT 0,
   id REAL,
   updated_at TEXT,
   updated_by TEXT
@@ -411,6 +412,16 @@ CREATE TABLE IF NOT EXISTS wallets (
   staked_balance REAL,
   updated_at TEXT,
   user_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  admin_user TEXT,
+  action TEXT,
+  details TEXT,
+  ip_address TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS payment_sessions_safe (

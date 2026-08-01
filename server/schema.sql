@@ -148,7 +148,8 @@ CREATE TABLE IF NOT EXISTS newsletter_subscribers (
 );
 
 CREATE TABLE IF NOT EXISTS platform_config (
-  hsmcpay_intermediary_enabled INTEGER, id REAL PRIMARY KEY, updated_at TEXT, updated_by TEXT
+  hsmcpay_intermediary_enabled INTEGER, kill_switch_active INTEGER DEFAULT 0,
+  id REAL PRIMARY KEY, updated_at TEXT, updated_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS platform_stats (
@@ -205,6 +206,11 @@ CREATE TABLE IF NOT EXISTS user_settings (
 CREATE TABLE IF NOT EXISTS settings_schema (
   category TEXT, description TEXT, display_order REAL, example_value TEXT, is_secret INTEGER,
   key TEXT, label TEXT, required_for TEXT, validation_regex TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY, event_type TEXT NOT NULL, admin_user TEXT, action TEXT,
+  details TEXT, ip_address TEXT, created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS payment_sessions_safe (

@@ -39,6 +39,8 @@ export async function startServer(): Promise<string> {
       HSMC_PORT: String(TEST_PORT),
       HSMC_DB_PATH: TEST_DB_PATH,
       JWT_SECRET: "test-jwt-secret-for-integration-tests",
+      // Do not persist auto-generated secrets into the repo .env during tests
+      HSMC_DISABLE_AUTOGEN: "true",
       // Leave HSMC_API_KEY empty so IS_DEV_MODE = true
     };
 

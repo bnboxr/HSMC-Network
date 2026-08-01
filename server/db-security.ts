@@ -23,6 +23,64 @@ export async function computeSchemaHash(schemaSql: string): Promise<string> {
 }
 
 /**
+ * Normalize a schema definition string into the same canonical form that
+ * sqlite_master produces (see computeActualSchemaHash), so the expected and
+ * actual hashes are comparable:
+ *   - strip `--` line comments
+ *   - drop PRAGMA / transaction statements (not stored in sqlite_master)
+ *   - drop `IF NOT EXISTS` (SQLite removes it from stored CREATE statements)
+ *   - collapse all whitespace to single spaces
+ *   - sort statements and join with "\n"
+ *
+ * The old implementation hashed the raw schema text (comments, PRAGMA, IF NOT
+ * EXISTS, line breaks intact) and compared it against the normalized
+ * sqlite_master text — the two could never match, so the integrity check always
+ * warned even on untouched databases. This is the fix.
+ */
+export function normalizeSchemaSql(schemaSql: string): string {
+  // 1. Strip line comments (also handles trailing `-- ...` on CREATE lines)
+  const noComments = schemaSql
+    .split("\n")
+    .map((line) => line.replace(/--.*$/, ""))
+    .join("\n");
+
+  // 2. Split into statements on ";" — merge chunks that don't start a new
+  //    statement (handles stray semicolons inside string literals).
+  const rawStatements = noComments.split(";");
+  const statements: string[] = [];
+  for (const chunk of rawStatements) {
+    const trimmed = chunk.trim();
+    if (!trimmed) continue;
+    if (/^(CREATE|PRAGMA|BEGIN|COMMIT|INSERT|UPDATE|DELETE|ALTER|DROP)/i.test(trimmed)) {
+      statements.push(trimmed);
+    } else if (statements.length > 0) {
+      // Continuation of the previous statement
+      statements[statements.length - 1] += " " + trimmed;
+    }
+  }
+
+  // 3. Canonicalize each statement the way sqlite_master + computeActualSchemaHash do
+  const canonical = statements
+    .filter((s) => !/^PRAGMA/i.test(s)) // PRAGMA is not persisted in sqlite_master
+    .map((s) => s.replace(/\bIF NOT EXISTS\b/gi, ""))
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter((s) => s.length > 0)
+    .sort();
+
+  return canonical.join("\n");
+}
+
+/**
+ * Compute the expected schema hash from a schema definition string, in the same
+ * canonical form used for the actual DB hash. Use this for integrity checks.
+ */
+export async function computeExpectedSchemaHash(schemaSql: string): Promise<string> {
+  const enc = new TextEncoder();
+  const hash = await crypto.subtle.digest("SHA-256", enc.encode(normalizeSchemaSql(schemaSql)));
+  return Buffer.from(new Uint8Array(hash)).toString("hex");
+}
+
+/**
  * Compute SHA-256 hash of the actual database schema.
  * Queries sqlite_master for all CREATE TABLE / CREATE INDEX statements,
  * concats them, and hashes.
@@ -61,7 +119,9 @@ export async function verifySchemaIntegrity(
   expectedSchemaSql: string
 ): Promise<SchemaCheckResult> {
   try {
-    const expectedHash = await computeSchemaHash(expectedSchemaSql);
+    // Hash the expected schema in the SAME canonical form sqlite_master uses,
+    // so the comparison is apples-to-apples (see normalizeSchemaSql).
+    const expectedHash = await computeExpectedSchemaHash(expectedSchemaSql);
     const actualHash = computeActualSchemaHash(db);
 
     const tableCount = (db.query(
