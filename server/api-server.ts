@@ -406,22 +406,13 @@ const JWT_EXPIRY_SECONDS = 3600; // 1 hour
 //   STRIPE_PUBLISHABLE_KEY    — pk_live_... / pk_test_... (returned to the frontend)
 //   STRIPE_WEBHOOK_SECRET     — whsec_... (verifies webhook signatures — REQUIRED for
 //                               real webhook processing; fails closed if missing)
-// Optional:
-//   STRIPE_SIMULATION_MODE    — "true" forces simulation mode even with keys set
 //
-// Simulation mode: when STRIPE_SECRET_KEY is NOT set (dev/testing), all Stripe
-// endpoints fall back to an in-DB simulation: PaymentIntents are created locally
-// (pi_sim_*), payments are confirmed via the simulation webhook/endpoints, and
-// HSMC crediting / treasury recording / payout burning work end-to-end without
-// any real Stripe account. Simulation is dev-only and must never be enabled in
-// production (guard: it activates only when no secret key is configured).
+// Live-only: there is NO simulation fallback. When STRIPE_SECRET_KEY is missing,
+// every Stripe endpoint returns 503 "Stripe not configured — set STRIPE_SECRET_KEY".
 const STRIPE_SECRET_KEY = config.stripeSecretKey;
 const STRIPE_PUBLISHABLE_KEY = config.stripePublishableKey;
 const STRIPE_WEBHOOK_SECRET = config.stripeWebhookSecret;
 const STRIPE_MODE: "live" | "test" = config.stripeMode;
-// Simulation is active when explicitly requested OR when no secret key exists at all.
-// If a secret key IS set but simulation is not requested, simulation is OFF.
-const STRIPE_SIMULATION_MODE = config.stripeSimulationMode;
 let stripe: Stripe | null = null;
 if (STRIPE_SECRET_KEY) {
   stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2025-06-30.basil" as any });
@@ -430,17 +421,13 @@ if (STRIPE_SECRET_KEY) {
     console.warn("⚠️  STRIPE_WEBHOOK_SECRET not set — real webhooks will return 503 (fail-closed).");
   }
 } else {
-  console.warn("⚠️  STRIPE_SECRET_KEY not set — Stripe endpoints running in SIMULATION MODE (dev/testing only).");
-}
-if (STRIPE_SIMULATION_MODE) {
-  console.warn("🧪 STRIPE_SIMULATION_MODE is ON — payments are simulated locally, no real money moves. Set STRIPE_SECRET_KEY (+ STRIPE_WEBHOOK_SECRET) for real settlement.");
+  console.warn("⚠️  STRIPE_SECRET_KEY not set — Stripe endpoints will return 503 (Stripe not configured).");
 }
 
 /** Human-readable Stripe config summary for /stripe/config */
 function getStripeConfig() {
   return {
-    mode: STRIPE_SECRET_KEY ? (STRIPE_MODE === "live" ? "live" : "test") : "simulation",
-    simulation: STRIPE_SIMULATION_MODE,
+    mode: STRIPE_SECRET_KEY ? (STRIPE_MODE === "live" ? "live" : "test") : "unavailable",
     publishable_key_configured: !!STRIPE_PUBLISHABLE_KEY,
     secret_key_configured: !!STRIPE_SECRET_KEY,
     webhook_secret_configured: !!STRIPE_WEBHOOK_SECRET,
@@ -946,7 +933,7 @@ function bodyTooLargeResponse(path: string): Response {
  * - Applies the FIXED Treasury fee (fee schedule in calculateHsmcFee)
  * - Records the fee in treasury_transactions (type='buy_fee', status='settled')
  * - Credits the user's HSMC wallet with net amount (idempotent)
- * Called by: /stripe/checkout settle|simulate_success and the
+ * Called by: /stripe/checkout settle and the
  * payment_intent.succeeded webhook handler.
  */
 function settleBuySession(sessionId: string):
@@ -1141,50 +1128,14 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
       }
     }
 
-    // ── Simulation mode: no Stripe keys configured ──────────────────────────
-    // Creates a local, in-DB PaymentIntent (pi_sim_*) so the full
-    // checkout → payment → HSMC-credit flow can be exercised in dev/testing
-    // without a Stripe account. Simulated payments are confirmed via
-    // POST /stripe/webhook (simulation events) or action=simulate_success.
-    if (STRIPE_SIMULATION_MODE) {
-      const paymentIntentId = `pi_sim_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-      const clientSecret = `sim_secret_${sessionId}`;
-      const encryptedClientSecret = await encryptField(clientSecret);
-
-      db.run(
-        `INSERT INTO payment_sessions (id, user_id, amount_usd, amount_hsmc, session_id,
-         stripe_payment_intent_id, stripe_client_secret, status, processor, created_at, otp_expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'stripe', ?, ?)`,
-        randomUUID(), "local-user", amountUsd, amountHsmc, sessionId,
-        paymentIntentId, encryptedClientSecret, now,
-        new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-      );
-
-      console.log(`[Stripe][SIM] Simulated PaymentIntent created: ${paymentIntentId} for ${amountUsd} USD (session ${sessionId})`);
-
-      return jsonResponse({
-        session_id: sessionId,
-        payment_intent_id: paymentIntentId,
-        client_secret: clientSecret,
-        stripe_publishable_key: STRIPE_PUBLISHABLE_KEY || "",
-        simulation: true,
-        amount_hsmc: amountHsmc.toFixed(6),
-        amount_usd: amountUsd,
-      });
-    }
-
-    // Neither real Stripe nor simulation available — explain exactly what's missing
-    return jsonResponse({
-      error: "Stripe is not configured",
-      status: "service_unavailable",
-      details: "Set STRIPE_SECRET_KEY (plus STRIPE_PUBLISHABLE_KEY and STRIPE_WEBHOOK_SECRET) for real payments, or leave STRIPE_SECRET_KEY unset to run in simulation mode (STRIPE_SIMULATION_MODE=true).",
-    }, 503);
+    // No Stripe key configured — fail closed with a clear 503. There is no
+    // simulation fallback: live-only.
+    return errorResponse("Stripe not configured — set STRIPE_SECRET_KEY", 503);
   }
 
   // ── Settle a confirmed payment ─────────────────────────────────────────────
-  // Real mode: verifies the PaymentIntent is actually succeeded via the Stripe
-  // API before crediting HSMC. Simulation mode: requires the payment to have
-  // been confirmed (status 'paid' — via simulation webhook or simulate_confirm).
+  // Verifies the PaymentIntent actually succeeded via the Stripe API before
+  // crediting HSMC (fail-closed: no key → 503, payment not succeeded → 402).
   if (action === "settle") {
     const sessionId = body.session_id;
     const paymentIntentId = body.payment_intent_id;
@@ -1201,32 +1152,22 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
       return errorResponse("Payment session not found", 404);
     }
 
-    const isSimulationPi = String(paymentIntentId).startsWith("pi_sim_");
+    if (!stripe) {
+      return errorResponse("Stripe not configured — set STRIPE_SECRET_KEY", 503);
+    }
 
-    if (stripe && !isSimulationPi) {
-      // Real mode: verify the payment actually succeeded with Stripe
-      try {
-        const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-        if (pi.status !== "succeeded") {
-          return errorResponse(
-            `Payment not confirmed yet (status: ${pi.status}). HSMC is credited only after Stripe confirms the payment.`,
-            402
-          );
-        }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error("[Stripe] PaymentIntent verification failed:", msg);
-        return errorResponse("Unable to verify payment status with Stripe. Try again in a moment.", 503, msg);
+    try {
+      const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+      if (pi.status !== "succeeded") {
+        return errorResponse(
+          `Payment not confirmed yet (status: ${pi.status}). HSMC is credited only after Stripe confirms the payment.`,
+          402
+        );
       }
-    } else if (STRIPE_SIMULATION_MODE && !isSimulationPi) {
-      return errorResponse("Cannot settle a non-simulation PaymentIntent in simulation mode", 400);
-    }
-
-    if (STRIPE_SIMULATION_MODE && isSimulationPi && session.status !== "paid" && session.status !== "settled") {
-      return errorResponse(
-        "Simulated payment not confirmed yet. Confirm it via POST /stripe/webhook (simulation event), action=simulate_confirm, or action=simulate_success.",
-        402
-      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[Stripe] PaymentIntent verification failed:", msg);
+      return errorResponse("Unable to verify payment status with Stripe. Try again in a moment.", 503, msg);
     }
 
     const settled = settleBuySession(sessionId);
@@ -1235,73 +1176,6 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
     }
 
     return jsonResponse({
-      tx_hash: settled.txHash,
-      amount_hsmc: settled.amountHsmc.toFixed(6),
-      fee_hsmc: settled.feeHsmc.toFixed(2),
-      fee_tier: settled.feeTier,
-      treasury_tx_id: settled.treasuryTxId,
-      payment_id: settled.paymentId,
-    });
-  }
-
-  // ── Simulation: confirm a simulated payment (marks session 'paid') ─────────
-  if (action === "simulate_confirm") {
-    if (!STRIPE_SIMULATION_MODE) {
-      return errorResponse("simulate_confirm is only available in simulation mode", 400);
-    }
-    const sessionId = body.session_id;
-    const paymentIntentId = body.payment_intent_id;
-    if (!sessionId || !paymentIntentId) {
-      return errorResponse("session_id and payment_intent_id are required", 400);
-    }
-    const session = db.query(
-      "SELECT * FROM payment_sessions WHERE session_id = ? AND stripe_payment_intent_id = ?"
-    ).get(sessionId, paymentIntentId) as Record<string, unknown> | null;
-    if (!session) {
-      return errorResponse("Payment session not found", 404);
-    }
-    if (!String(paymentIntentId).startsWith("pi_sim_")) {
-      return errorResponse("simulate_confirm only works for pi_sim_* PaymentIntents", 400);
-    }
-    db.run(
-      `UPDATE payment_sessions SET status = 'paid', card_brand = 'simulated', card_last4 = '4242', otp_expires_at = ? WHERE session_id = ?`,
-      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), sessionId
-    );
-    console.log(`[Stripe][SIM] Simulated payment confirmed for session ${sessionId}`);
-    return jsonResponse({ success: true, status: "paid", session_id: sessionId });
-  }
-
-  // ── Simulation: confirm + settle in one step ───────────────────────────────
-  if (action === "simulate_success") {
-    if (!STRIPE_SIMULATION_MODE) {
-      return errorResponse("simulate_success is only available in simulation mode", 400);
-    }
-    const sessionId = body.session_id;
-    const paymentIntentId = body.payment_intent_id;
-    if (!sessionId || !paymentIntentId) {
-      return errorResponse("session_id and payment_intent_id are required", 400);
-    }
-    const session = db.query(
-      "SELECT * FROM payment_sessions WHERE session_id = ? AND stripe_payment_intent_id = ?"
-    ).get(sessionId, paymentIntentId) as Record<string, unknown> | null;
-    if (!session) {
-      return errorResponse("Payment session not found", 404);
-    }
-    if (!String(paymentIntentId).startsWith("pi_sim_")) {
-      return errorResponse("simulate_success only works for pi_sim_* PaymentIntents", 400);
-    }
-    db.run(
-      `UPDATE payment_sessions SET status = 'paid', card_brand = 'simulated', card_last4 = '4242' WHERE session_id = ?`,
-      sessionId
-    );
-    const settled = settleBuySession(sessionId);
-    if (!settled.ok) {
-      return errorResponse(settled.error, settled.status ?? 500);
-    }
-    console.log(`[Stripe][SIM] Simulated payment settled: session ${sessionId}, ${settled.amountHsmc.toFixed(6)} HSMC credited`);
-    return jsonResponse({
-      success: true,
-      simulation: true,
       tx_hash: settled.txHash,
       amount_hsmc: settled.amountHsmc.toFixed(6),
       fee_hsmc: settled.feeHsmc.toFixed(2),
@@ -1316,9 +1190,6 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
 
 // ── Stripe Payout Endpoint (for HSMCPay Sell) ─────────────────────────────────
 const SELL_DEPOSIT_ADDRESS = config.treasuryAddress;
-
-/** Simulated treasury address used in dev when HSMC_TREASURY_ADDRESS is unset */
-const SIM_TREASURY_ADDRESS = "hsmc1qsimulatedtreasury0000000000000000000000000000";
 
 async function handleStripePayout(req: Request): Promise<Response> {
   if (req.method !== "POST") {
@@ -1335,12 +1206,15 @@ async function handleStripePayout(req: Request): Promise<Response> {
   const action = body.action || "";
 
   if (action === "initiate") {
-    const depositAddress = SELL_DEPOSIT_ADDRESS || (STRIPE_SIMULATION_MODE ? SIM_TREASURY_ADDRESS : "");
+    if (!stripe) {
+      return errorResponse("Stripe not configured — set STRIPE_SECRET_KEY", 503);
+    }
+    const depositAddress = SELL_DEPOSIT_ADDRESS;
     if (!depositAddress) {
       return jsonResponse({
         error: "Treasury address not configured",
         status: "service_unavailable",
-        details: "Set HSMC_TREASURY_ADDRESS (or run in simulation mode — STRIPE_SIMULATION_MODE).",
+        details: "Set HSMC_TREASURY_ADDRESS.",
       }, 503);
     }
     const amountUsd = Number(body.amount_usd);
@@ -1384,7 +1258,7 @@ async function handleStripePayout(req: Request): Promise<Response> {
           400
         );
       }
-    } else if (!STRIPE_SIMULATION_MODE) {
+    } else {
       return errorResponse(
         `Wallet ${userWallet} not found in the HSMC database — cannot verify balance.`,
         400
@@ -1412,7 +1286,6 @@ async function handleStripePayout(req: Request): Promise<Response> {
       deposit_address: depositAddress,
       hsmc_price: Number(hsmcPrice.toFixed(6)),
       amount_usd: amountUsd,
-      simulation: STRIPE_SIMULATION_MODE,
     });
   }
 
@@ -1464,7 +1337,7 @@ async function handleStripePayout(req: Request): Promise<Response> {
     const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
     const feeHsmc = feeUsd / hsmcPrice;
 
-    // ── Verify & burn HSMC from the user's wallet ───────────────────────────
+    // ── Verify the user's wallet has sufficient HSMC ────────────────────────
     const userWallet = String(session.user_id ?? session.card_holder ?? "");
     const wallet = db.query(
       "SELECT * FROM wallets WHERE address = ? ORDER BY is_primary DESC LIMIT 1"
@@ -1483,36 +1356,35 @@ async function handleStripePayout(req: Request): Promise<Response> {
       );
     }
 
+    // ── Create the Stripe payout FIRST (fail-closed) ───────────────────────
+    // The HSMC burn only happens after Stripe accepts the payout. If the
+    // Stripe API call fails, propagate the real error — no fabricated success.
+    if (!stripe) {
+      return errorResponse("Stripe not configured — set STRIPE_SECRET_KEY", 503);
+    }
+    let stripePayoutId: string;
+    let payoutStatus = "processing";
+    try {
+      const payout = await stripe.payouts.create({
+        amount: Math.round(amountUsd * 100),
+        currency: "usd",
+        description: `HSMCPay sell — ${payoutSessionId}`,
+        metadata: { payout_session_id: payoutSessionId },
+      });
+      stripePayoutId = payout.id;
+      console.log(`[Stripe] Payout created: ${payout.id} for ${payoutSessionId}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[Stripe] Payout creation failed for ${payoutSessionId}:`, msg);
+      return errorResponse(`Stripe payout creation failed: ${msg}`, 503, msg);
+    }
+
     // Burn: deduct the full required amount (base + fee) from the wallet.
     // baseHsmc → burned in exchange for the fiat payout; feeHsmc → Treasury.
     db.run(
       `UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE address = ?`,
       amountHsmcRequired, now, userWallet
     );
-
-    // ── Create the Stripe payout (or simulate) ──────────────────────────────
-    let stripePayoutId: string | null = null;
-    let payoutStatus = "processing";
-    if (stripe) {
-      try {
-        const payout = await stripe.payouts.create({
-          amount: Math.round(amountUsd * 100),
-          currency: "usd",
-          description: `HSMCPay sell — ${payoutSessionId}`,
-          metadata: { payout_session_id: payoutSessionId },
-        });
-        stripePayoutId = payout.id;
-        console.log(`[Stripe] Payout created: ${payout.id} for ${payoutSessionId}`);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[Stripe] Payout creation failed for ${payoutSessionId}:`, msg);
-        // Do not fail the settlement — record the burn/treasury and flag the
-        // payout as needing manual retry. The payout webhook can still confirm.
-      }
-    } else {
-      stripePayoutId = `po_sim_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-      console.log(`[Stripe][SIM] Simulated payout created: ${stripePayoutId} for ${payoutSessionId}`);
-    }
 
     // Insert treasury transaction with type='sell_fee' (fixed fee → Treasury)
     const treasuryTxId = randomUUID();
@@ -1539,7 +1411,6 @@ async function handleStripePayout(req: Request): Promise<Response> {
       fee_hsmc: Number(feeHsmc.toFixed(2)),
       fee_tier: feeTier,
       treasury_tx_id: treasuryTxId,
-      simulation: STRIPE_SIMULATION_MODE,
     });
   }
 
@@ -1547,10 +1418,9 @@ async function handleStripePayout(req: Request): Promise<Response> {
 }
 
 // ── Stripe Payout Webhook ──────────────────────────────────────────────────────
-// Real mode: verifies the Stripe webhook signature (STRIPE_WEBHOOK_SECRET) and
-// handles payout.paid / payout.failed events. Simulation mode (no Stripe keys):
-// accepts either a Stripe-shaped event body {type, data.object.metadata} or the
-// legacy {payout_session_id, status} body — both update the payout session.
+// Verifies the Stripe webhook signature (STRIPE_WEBHOOK_SECRET, fail-closed) and
+// handles payout.paid / payout.failed / payout.canceled events. No simulation
+// fallback — without a secret key this endpoint returns 503.
 async function handleStripePayoutWebhook(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return errorResponse("Method not allowed", 405);
@@ -1563,56 +1433,32 @@ async function handleStripePayoutWebhook(req: Request): Promise<Response> {
   let newStatus: string | undefined;
   let verifiedEventType: string | null = null;
 
-  // ── Real mode: verify signature and parse the Stripe event ───────────────
-  if (STRIPE_WEBHOOK_SECRET && stripe) {
-    if (!signature) {
-      return errorResponse("Missing stripe-signature header", 400);
-    }
-    let event: Stripe.Event;
-    try {
-      event = stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[Stripe] Payout webhook signature verification failed:", msg);
-      return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
-    }
-    verifiedEventType = event.type;
-    const po = event.data.object as any;
-    payoutSessionId = po?.metadata?.payout_session_id;
-    newStatus =
-      event.type === "payout.paid" ? "completed" :
-      event.type === "payout.failed" ? "failed" :
-      event.type === "payout.canceled" ? "failed" :
-      undefined;
-  } else if (STRIPE_SIMULATION_MODE) {
-    // ── Simulation mode: accept local events (dev/testing only) ────────────
-    let body: any;
-    try {
-      body = JSON.parse(rawBody);
-    } catch {
-      return errorResponse("Invalid JSON body", 400);
-    }
-    if (body?.type && body?.data?.object) {
-      // Stripe-shaped simulation event
-      verifiedEventType = body.type;
-      payoutSessionId = body.data.object?.metadata?.payout_session_id;
-      newStatus =
-        body.type === "payout.paid" ? "completed" :
-        body.type === "payout.failed" ? "failed" :
-        body.type === "payout.canceled" ? "failed" :
-        undefined;
-    } else {
-      // Legacy simulation body
-      payoutSessionId = body.payout_session_id;
-      newStatus = body.status;
-    }
-  } else {
-    return jsonResponse({
-      error: "Webhook secret not configured",
-      status: "service_unavailable",
-      details: "Set STRIPE_WEBHOOK_SECRET for real webhook processing (fail-closed), or run in simulation mode (STRIPE_SIMULATION_MODE).",
-    }, 503);
+  // ── Verify signature and parse the Stripe event (fail-closed) ────────────
+  if (!stripe) {
+    return errorResponse("Stripe not configured — set STRIPE_SECRET_KEY", 503);
   }
+  if (!STRIPE_WEBHOOK_SECRET) {
+    return errorResponse("Stripe webhook secret not configured — set STRIPE_WEBHOOK_SECRET", 503);
+  }
+  if (!signature) {
+    return errorResponse("Missing stripe-signature header", 400);
+  }
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[Stripe] Payout webhook signature verification failed:", msg);
+    return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
+  }
+  verifiedEventType = event.type;
+  const po = event.data.object as any;
+  payoutSessionId = po?.metadata?.payout_session_id;
+  newStatus =
+    event.type === "payout.paid" ? "completed" :
+    event.type === "payout.failed" ? "failed" :
+    event.type === "payout.canceled" ? "failed" :
+    undefined;
 
   if (!payoutSessionId) {
     return errorResponse("payout_session_id is required (set it in the payout metadata)", 400);
@@ -1645,7 +1491,7 @@ async function handleStripePayoutWebhook(req: Request): Promise<Response> {
       payoutSessionId
     );
 
-    console.log(`[Stripe] Payout confirmed (${verifiedEventType ?? "simulation"}): ${payoutSessionId}`);
+    console.log(`[Stripe] Payout confirmed (${verifiedEventType}): ${payoutSessionId}`);
     return jsonResponse({
       success: true,
       payout_session_id: payoutSessionId,
@@ -1665,7 +1511,7 @@ async function handleStripePayoutWebhook(req: Request): Promise<Response> {
       payoutSessionId
     );
 
-    console.log(`[Stripe] Payout failed (${verifiedEventType ?? "simulation"}): ${payoutSessionId}`);
+    console.log(`[Stripe] Payout failed (${verifiedEventType}): ${payoutSessionId}`);
     return jsonResponse({
       success: true,
       payout_session_id: payoutSessionId,
@@ -1707,42 +1553,7 @@ async function handleStripeCreatePaymentIntent(req: Request): Promise<Response> 
   const idempotencyKey = body.idempotency_key || `hsmcpay_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
   if (!stripe) {
-    // ── Simulation mode (no Stripe keys) — local in-DB PaymentIntent ────────
-    if (STRIPE_SIMULATION_MODE) {
-      const metrics = db.query(
-        "SELECT price FROM token_metrics ORDER BY updated_at DESC LIMIT 1"
-      ).get() as { price: number } | null;
-      const hsmcPrice = Math.max(Number(metrics?.price ?? 1), 1);
-      const amountHsmc = amountUsd / hsmcPrice;
-
-      const paymentIntentId = `pi_sim_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-      const clientSecret = `sim_secret_${idempotencyKey}`;
-      const now = new Date().toISOString();
-      const encryptedClientSecret = await encryptField(clientSecret);
-
-      db.run(
-        `INSERT INTO payment_sessions (id, user_id, amount_usd, amount_hsmc, session_id,
-         stripe_payment_intent_id, stripe_client_secret, status, processor, created_at, otp_expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'stripe', ?, ?)`,
-        randomUUID(), "local-user", amountUsd, amountHsmc, `sim_${idempotencyKey}`,
-        paymentIntentId, encryptedClientSecret, now,
-        new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-      );
-      console.log(`[Stripe][SIM] PaymentIntent created via API (simulation): ${paymentIntentId}`);
-
-      return jsonResponse({
-        client_secret: clientSecret,
-        payment_intent_id: paymentIntentId,
-        amount_usd: amountUsd,
-        amount_cents: amountCents,
-        simulation: true,
-      });
-    }
-
-    return errorResponse(
-      "Stripe is not configured. Set STRIPE_SECRET_KEY environment variable (or leave it unset to run in simulation mode).",
-      503
-    );
+    return errorResponse("Stripe not configured — set STRIPE_SECRET_KEY", 503);
   }
 
   try {
@@ -2145,41 +1956,25 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
   // Read raw body for signature verification
   const rawBody = await req.text();
 
-  // ── Signature verification ─────────────────────────────────────────────
-  // Real mode: signature is REQUIRED and verified via STRIPE_WEBHOOK_SECRET
-  // (fail-closed — a configured key with a missing webhook secret rejects).
-  // Simulation mode (no secret key configured): events are accepted without
-  // signature verification — dev/testing only, never in production.
+  // ── Signature verification (fail-closed) ────────────────────────────────
+  // Signature is REQUIRED and verified via STRIPE_WEBHOOK_SECRET. A missing
+  // secret key or webhook secret rejects the webhook with 503 — no simulation.
   let event: Stripe.Event;
-  if (STRIPE_WEBHOOK_SECRET && stripe) {
-    if (!signature) {
-      return errorResponse("Missing stripe-signature header", 400);
-    }
-    try {
-      event = stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[Stripe] Webhook signature verification failed:", msg);
-      return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
-    }
-  } else if (STRIPE_SIMULATION_MODE) {
-    // Simulation mode — parse the event body directly (no signature).
-    try {
-      event = JSON.parse(rawBody);
-    } catch {
-      return errorResponse("Invalid JSON body", 400);
-    }
-    if (!event?.type || !event?.data?.object?.id) {
-      return errorResponse("Simulation webhook body must be a Stripe-shaped event: { type, data: { object: { id, ... } } }", 400);
-    }
-    console.warn(`[Stripe][SIM] Simulation webhook event accepted WITHOUT signature verification (dev only): ${event.type}`);
-  } else {
-    console.error("[Stripe] Webhook received but STRIPE_WEBHOOK_SECRET not configured (and simulation mode is off)");
-    return jsonResponse({
-      error: "Webhook secret not configured",
-      status: "service_unavailable",
-      details: "Set STRIPE_WEBHOOK_SECRET for real webhook processing (fail-closed), or run in simulation mode (STRIPE_SIMULATION_MODE).",
-    }, 503);
+  if (!stripe) {
+    return errorResponse("Stripe not configured — set STRIPE_SECRET_KEY", 503);
+  }
+  if (!STRIPE_WEBHOOK_SECRET) {
+    return errorResponse("Stripe webhook secret not configured — set STRIPE_WEBHOOK_SECRET", 503);
+  }
+  if (!signature) {
+    return errorResponse("Missing stripe-signature header", 400);
+  }
+  try {
+    event = stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[Stripe] Webhook signature verification failed:", msg);
+    return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
   }
 
   // ── Idempotency check — don't process the same event twice ──────────────
@@ -3483,8 +3278,7 @@ async function handleRequestInner(req: Request): Promise<Response> {
         : { ok: null, note: "not checked at startup" },
       encryption: { enabled: isEncryptionAvailable() },
       stripe: {
-        mode: STRIPE_SECRET_KEY ? (STRIPE_MODE === "live" ? "live" : "test") : "simulation",
-        simulation: STRIPE_SIMULATION_MODE,
+        mode: STRIPE_SECRET_KEY ? (STRIPE_MODE === "live" ? "live" : "test") : "unavailable",
       },
       rate_limiter: { active_buckets: rateLimitBuckets.size },
       process: { pid: process.pid },
@@ -3533,7 +3327,7 @@ async function handleRequestInner(req: Request): Promise<Response> {
     return handleStripePayout(req);
   }
 
-  // Stripe payout webhook (simulation)
+  // Stripe payout webhook (real Stripe events with signature verification)
   if (path === "/stripe/payout/webhook") {
     return handleStripePayoutWebhook(req);
   }
@@ -3904,7 +3698,7 @@ console.log(`   REST: ${protocol}://localhost:${PORT}/rest/v1/:table`);
 console.log(`   Health: ${protocol}://localhost:${PORT}/health`);
 console.log(`   Auth: ${protocol}://localhost:${PORT}/auth/login | /auth/register`);
 console.log(`   WebAuthn: ${protocol}://localhost:${PORT}/auth/webauthn/login | /register | /unregister | /challenge`);
-console.log(`   Stripe Config: ${protocol}://localhost:${PORT}/stripe/config (mode: ${STRIPE_SIMULATION_MODE ? "SIMULATION" : STRIPE_MODE})`);
+console.log(`   Stripe Config: ${protocol}://localhost:${PORT}/stripe/config (mode: ${STRIPE_SECRET_KEY ? STRIPE_MODE : "unavailable"})`);
 console.log(`   Stripe Buy: ${protocol}://localhost:${PORT}/stripe/checkout`);
 console.log(`   Stripe Sell: ${protocol}://localhost:${PORT}/stripe/payout`);
 console.log(`   Payout Webhook: ${protocol}://localhost:${PORT}/stripe/payout/webhook`);
