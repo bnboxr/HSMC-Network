@@ -598,7 +598,7 @@ function checkApiKey(req: Request): boolean {
 const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge", "/stripe/webhook"]);
 
 function isPublicPath(path: string): boolean {
-  return PUBLIC_PATHS.has(path);
+  return PUBLIC_PATHS.has(path) || path === "/explorer/stats" || path === "/explorer/blocks" || path === "/explorer/transactions" || path === "/explorer/search" || path.startsWith("/explorer/block/") || path.startsWith("/explorer/transaction/");
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -3340,6 +3340,48 @@ async function handleRequestInner(req: Request): Promise<Response> {
   // Stripe webhook (real Stripe events with signature verification)
   if (path === "/stripe/webhook" && req.method === "POST") {
     return handleStripeWebhook(req);
+  }
+
+  // ── Read-only Explorer API ───────────────────────────────────────────────
+  if (path === "/explorer/stats" && req.method === "GET") {
+    const block = db.query("SELECT COALESCE(MAX(block_number), 0) AS chain_height, COUNT(*) AS total_blocks, COALESCE(AVG(difficulty), 0) AS current_difficulty, 0 AS avg_block_time_secs FROM blocks").get() as any;
+    const tx = db.query("SELECT COUNT(*) AS total_transactions, SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS mempool_size FROM transactions").get() as any;
+    const peers = db.query("SELECT COUNT(*) AS peer_count FROM network_peers WHERE status IS NULL OR status NOT IN ('offline', 'inactive')").get() as any;
+    return jsonResponse({ chain_height: Number(block?.chain_height || 0), total_transactions: Number(tx?.total_transactions || 0), total_blocks: Number(block?.total_blocks || 0), mempool_size: Number(tx?.mempool_size || 0), peer_count: Number(peers?.peer_count || 0), total_supply: 0, circulating_supply: 0, current_difficulty: Number(block?.current_difficulty || 0), hashrate_khs: 0, avg_block_time_secs: Number(block?.avg_block_time_secs || 0), next_halving_block: 210000 });
+  }
+  if (path === "/explorer/blocks" && req.method === "GET") {
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 10), 1), 100);
+    const offset = Math.max(Number(url.searchParams.get("offset") || 0), 0);
+    const rows = db.query("SELECT block_number, hash, prev_hash, created_at AS timestamp, transactions_count, difficulty, miner_address, 0 AS reward, 0 AS total_fees, 0 AS size_bytes, privacy_protocol FROM blocks ORDER BY block_number DESC LIMIT ? OFFSET ?").all(limit, offset) as any[];
+    return jsonResponse(rows.map((r) => ({ ...r, timestamp: r.timestamp ? Math.floor(new Date(r.timestamp).getTime() / 1000) : 0 })));
+  }
+  if (path.startsWith("/explorer/block/") && req.method === "GET") {
+    const number = Number(decodeURIComponent(path.split("/")[3] || ""));
+    if (!Number.isInteger(number) || number < 0) return errorResponse("Invalid block number", 400);
+    const block = db.query("SELECT block_number, hash, prev_hash, created_at AS timestamp, transactions_count, difficulty, miner_address, 0 AS reward, 0 AS total_fees, 0 AS size_bytes, privacy_protocol FROM blocks WHERE block_number = ?").get(number) as any;
+    if (!block) return errorResponse("Block not found", 404);
+    const transactions = db.query("SELECT * FROM transactions WHERE block_number = ? ORDER BY created_at DESC").all(number);
+    return jsonResponse({ ...block, timestamp: block.timestamp ? Math.floor(new Date(block.timestamp).getTime() / 1000) : 0, transactions });
+  }
+  if (path === "/explorer/transactions" && req.method === "GET") {
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 10), 1), 100);
+    const offset = Math.max(Number(url.searchParams.get("offset") || 0), 0);
+    const rows = db.query("SELECT hash, block_number, created_at AS timestamp, 0 AS inputs, 0 AS outputs, amount, fee, privacy_level AS privacy, status FROM transactions ORDER BY created_at DESC LIMIT ? OFFSET ?").all(limit, offset) as any[];
+    return jsonResponse(rows.map((r) => ({ ...r, timestamp: r.timestamp ? Math.floor(new Date(r.timestamp).getTime() / 1000) : 0, status: r.status || (r.block_number == null ? "pending" : "confirmed"), privacy: r.privacy || "RingCT" })));
+  }
+  if (path.startsWith("/explorer/transaction/") && req.method === "GET") {
+    const hash = decodeURIComponent(path.slice("/explorer/transaction/".length));
+    const tx = db.query("SELECT * FROM transactions WHERE hash = ? LIMIT 1").get(hash);
+    if (!tx) return errorResponse("Transaction not found", 404);
+    return jsonResponse(tx);
+  }
+  if (path === "/explorer/search" && req.method === "GET") {
+    const q = (url.searchParams.get("q") || "").trim();
+    if (!q) return jsonResponse({ blocks: [], transactions: [] });
+    const like = `%${q}%`;
+    const blocks = db.query("SELECT block_number, hash, prev_hash, created_at AS timestamp, transactions_count, difficulty, miner_address, 0 AS reward, 0 AS total_fees, 0 AS size_bytes, privacy_protocol FROM blocks WHERE CAST(block_number AS TEXT) = ? OR hash LIKE ? ORDER BY block_number DESC LIMIT 20").all(q, like);
+    const transactions = db.query("SELECT * FROM transactions WHERE hash LIKE ? ORDER BY created_at DESC LIMIT 20").all(like);
+    return jsonResponse({ blocks, transactions });
   }
 
   // Treasury endpoints

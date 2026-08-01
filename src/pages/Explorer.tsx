@@ -52,55 +52,7 @@ interface TxInfo {
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
-const NODE_URL = 'http://localhost:8080';
-
-const FAKE_BLOCKS: BlockInfo[] = [
-  {
-    block_number: 12345, hash: '0x' + 'a1b2'.repeat(16), prev_hash: '0x' + 'c3d4'.repeat(16),
-    timestamp: Math.floor(Date.now() / 1000) - 240, transactions_count: 14, difficulty: 4096,
-    miner_address: 'HSMC_MN_3f2a...bc8d', reward: 50.0, total_fees: 0.35, size_bytes: 28000,
-    privacy_protocol: 'RingCT',
-  },
-  {
-    block_number: 12344, hash: '0x' + 'e5f6'.repeat(16), prev_hash: '0x' + 'a1b2'.repeat(16),
-    timestamp: Math.floor(Date.now() / 1000) - 480, transactions_count: 8, difficulty: 4096,
-    miner_address: 'HSMC_MN_7d1e...fa9c', reward: 50.0, total_fees: 0.12, size_bytes: 15200,
-    privacy_protocol: 'RingCT',
-  },
-  {
-    block_number: 12343, hash: '0x' + '9a8b'.repeat(16), prev_hash: '0x' + 'e5f6'.repeat(16),
-    timestamp: Math.floor(Date.now() / 1000) - 720, transactions_count: 21, difficulty: 4096,
-    miner_address: 'HSMC_MN_2b4c...ed1f', reward: 50.0, total_fees: 0.58, size_bytes: 42000,
-    privacy_protocol: 'RingCT',
-  },
-  {
-    block_number: 12342, hash: '0x' + '7c6d'.repeat(16), prev_hash: '0x' + '9a8b'.repeat(16),
-    timestamp: Math.floor(Date.now() / 1000) - 960, transactions_count: 6, difficulty: 4096,
-    miner_address: 'HSMC_MN_5a8f...03b2', reward: 50.0, total_fees: 0.08, size_bytes: 11200,
-    privacy_protocol: 'RingCT',
-  },
-  {
-    block_number: 12341, hash: '0x' + '5e4f'.repeat(16), prev_hash: '0x' + '7c6d'.repeat(16),
-    timestamp: Math.floor(Date.now() / 1000) - 1200, transactions_count: 17, difficulty: 4096,
-    miner_address: 'HSMC_MN_9d1e...47a5', reward: 50.0, total_fees: 0.42, size_bytes: 35600,
-    privacy_protocol: 'RingCT',
-  },
-];
-
-const FAKE_TXS: TxInfo[] = [
-  { hash: '0x' + '11aa'.repeat(16), block_number: 12345, timestamp: Math.floor(Date.now() / 1000) - 180, inputs: 2, outputs: 3, amount: 150.5, fee: 0.025, privacy: 'RingCT + Stealth', status: 'confirmed' },
-  { hash: '0x' + '22bb'.repeat(16), block_number: 12345, timestamp: Math.floor(Date.now() / 1000) - 200, inputs: 1, outputs: 2, amount: 45.0, fee: 0.012, privacy: 'Transparent', status: 'confirmed' },
-  { hash: '0x' + '33cc'.repeat(16), block_number: 12344, timestamp: Math.floor(Date.now() / 1000) - 400, inputs: 3, outputs: 5, amount: 320.0, fee: 0.031, privacy: 'RingCT', status: 'confirmed' },
-  { hash: '0x' + '44dd'.repeat(16), block_number: 12343, timestamp: Math.floor(Date.now() / 1000) - 700, inputs: 2, outputs: 2, amount: 89.9, fee: 0.018, privacy: 'RingCT + Stealth', status: 'confirmed' },
-  { hash: '0x' + '55ee'.repeat(16), block_number: 12343, timestamp: Math.floor(Date.now() / 1000) - 710, inputs: 1, outputs: 4, amount: 210.0, fee: 0.022, privacy: 'RingCT', status: 'confirmed' },
-];
-
-const FAKE_STATS: ChainStats = {
-  chain_height: 12345, total_transactions: 142_850, total_blocks: 12345,
-  mempool_size: 23, peer_count: 48, total_supply: 500_000_000,
-  circulating_supply: 617_250, current_difficulty: 4096, hashrate_khs: 15_400,
-  avg_block_time_secs: 118, next_halving_block: 210_000,
-};
+const API_BASE = '/node-proxy';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function shorten(s: string, n = 8): string {
@@ -216,31 +168,31 @@ function TxCard({ tx, index }: { tx: TxInfo; index: number }) {
 // Explorer Page — main component
 // ══════════════════════════════════════════════════════════════════════════════
 export default function ExplorerPage() {
-  const [stats, setStats] = useState<ChainStats>(FAKE_STATS);
-  const [blocks, setBlocks] = useState<BlockInfo[]>(FAKE_BLOCKS);
-  const [txs, setTxs] = useState<TxInfo[]>(FAKE_TXS);
+  const [stats, setStats] = useState<ChainStats>({ chain_height: 0, total_transactions: 0, total_blocks: 0, mempool_size: 0, peer_count: 0, total_supply: 0, circulating_supply: 0, current_difficulty: 0, hashrate_khs: 0, avg_block_time_secs: 0, next_halving_block: 210000 });
+  const [blocks, setBlocks] = useState<BlockInfo[]>([]);
+  const [txs, setTxs] = useState<TxInfo[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      const [statsRes, blocksRes] = await Promise.allSettled([
-        fetch(`${NODE_URL}/stats`).then(r => r.json()),
-        fetch(`${NODE_URL}/blocks?offset=0&limit=10`).then(r => r.json()),
+      const responses = await Promise.all([
+        fetch(`${API_BASE}/explorer/stats`),
+        fetch(`${API_BASE}/explorer/blocks?offset=0&limit=10`),
+        fetch(`${API_BASE}/explorer/transactions?offset=0&limit=10`),
       ]);
-
-      if (statsRes.status === 'fulfilled' && statsRes.value?.chain_height) {
-        setStats(prev => ({ ...prev, ...statsRes.value }));
-      }
-      if (blocksRes.status === 'fulfilled' && Array.isArray(blocksRes.value)) {
-        setBlocks(blocksRes.value);
-      }
-    } catch {
-      // Fall back to demo data silently
-    }
-    setLoading(false);
+      if (responses.some(r => !r.ok)) throw new Error('Explorer API request failed');
+      const [statsData, blocksData, txData] = await Promise.all(responses.map(r => r.json()));
+      setStats(prev => ({ ...prev, ...statsData }));
+      setBlocks(Array.isArray(blocksData) ? blocksData : []);
+      setTxs(Array.isArray(txData) ? txData : []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to reach Explorer API');
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -254,8 +206,7 @@ export default function ExplorerPage() {
     e.preventDefault();
     const q = search.trim();
     if (!q) return;
-    // Could navigate to /explorer/block/:num or /explorer/tx/:hash
-    window.alert(`Search for: ${q}\n\nFull block/tx lookup via RPC node will be available at mainnet launch.`);
+    fetch(`${API_BASE}/explorer/search?q=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : Promise.reject(new Error("Search failed"))).then(data => { if (data.blocks?.length) setBlocks(data.blocks); if (data.transactions?.length) setTxs(data.transactions); }).catch(() => setError("Search failed"));
   };
 
   return (
@@ -308,6 +259,9 @@ export default function ExplorerPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
         </motion.form>
+
+        {error && <div className="rounded-lg border border-red-800 bg-red-950/30 p-3 text-center text-sm text-red-300">{error}</div>}
+        {loading && <div className="flex items-center justify-center gap-2 text-sm text-gray-400"><RefreshCw className="w-4 h-4 animate-spin" /> Loading live chain data…</div>}
 
         {/* ── Network Stats Grid ──────────────────────────────────────────── */}
         <div>
@@ -364,7 +318,7 @@ export default function ExplorerPage() {
               <ChevronRight className="w-5 h-5 text-gray-600 cursor-pointer hover:text-primary transition-colors" />
             </div>
             <div className="space-y-3">
-              {blocks.map((block, i) => (
+              {blocks.length === 0 && !loading ? <div className="text-sm text-gray-500 py-6 text-center">No data yet</div> : blocks.map((block, i) => (
                 <BlockCard key={block.block_number} block={block} index={i} />
               ))}
             </div>
@@ -379,7 +333,7 @@ export default function ExplorerPage() {
               <ChevronRight className="w-5 h-5 text-gray-600 cursor-pointer hover:text-primary transition-colors" />
             </div>
             <div className="space-y-2">
-              {txs.map((tx, i) => (
+              {txs.length === 0 && !loading ? <div className="text-sm text-gray-500 py-6 text-center">No data yet</div> : txs.map((tx, i) => (
                 <TxCard key={tx.hash} tx={tx} index={i} />
               ))}
             </div>
