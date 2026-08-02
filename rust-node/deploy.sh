@@ -36,7 +36,7 @@ error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   Astra-HSMC Node — VPS Deploy Script       ║${NC}"
+echo -e "${GREEN}║   HSMC Node — VPS Deploy Script             ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -98,8 +98,8 @@ success "Binary installed to /usr/local/bin/$BINARY_NAME"
 info "Installing systemd service..."
 cat > /etc/systemd/system/hsmc-node.service <<EOF
 [Unit]
-Description=Astra-HSMC Blockchain Node
-Documentation=https://github.com/astra-hsmc
+Description=HSMC Blockchain Node
+Documentation=https://github.com/bnboxr/HSMC-Network
 After=network-online.target
 Wants=network-online.target
 
@@ -175,7 +175,7 @@ if [[ -n "$DOMAIN" && -n "$EMAIL" ]]; then
     
     # Full HTTPS config with RPC proxy
     cat > /etc/nginx/sites-available/hsmc-node <<NGINX_HTTPS
-# Astra-HSMC Node — nginx reverse proxy
+# HSMC Node — nginx reverse proxy
 map \$http_upgrade \$connection_upgrade {
     default upgrade;
     ''      close;
@@ -289,7 +289,7 @@ else
     echo "     ws://YOUR_VPS_IP:${STRATUM_PORT}"
 fi
 echo ""
-echo "  🔐 Set RUST_NODE_URL in Lovable Cloud secrets:"
+echo "  🔐 Set RUST_NODE_URL in your environment (e.g. API-server/frontend secrets):"
 if [[ -n "$DOMAIN" ]]; then
     echo "     RUST_NODE_URL=https://${DOMAIN}"
 else
