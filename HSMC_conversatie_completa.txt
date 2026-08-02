@@ -292,29 +292,4825 @@ Whitepaper-ul pe care ți l-am făcut este documentul 01. Nu trebuie să-l trans
 
 Următorul pas logic este documentul 02 — HSMC Protocol Technical Specification, unde luăm blockchain-ul tău existent și îl definim la nivel de developer, fără să presupunem că e Bitcoin, Ethereum, Cosmos sau altceva. Acolo putem lua fiecare componentă și să o transformăm în task-uri concrete.
 
-[User]
-urmatorul
 
-[Assistant]
-Da. Atunci mergem direct la Documentul 02 — HSMC Protocol Technical Specification. Aici nu mai vorbim în stil de whitepaper; îl facem ca document de lucru pentru developerii care construiesc efectiv blockchain-ul în Rust.
 
-[Assistant — Document 02]
+
+
+# HSMC
+
+## Unified Whitepaper, Roadmap & Technical Specification
+
+### HSMC Network • HSMC Native Asset • HSMCPay • HSMC Wallet • Privacy • Liquidity • Interoperability
+
+**Version:** Master Specification v1.0
+**Status:** Architecture / Development Specification
+**Project:** HSMC
+**Domain:** HSMC.io
+**Copyright:** © 2018–2026 HSMC — All rights reserved.
+**In partnership with CEO OXR**
+
+---
+
+# 0. Document Purpose
+
+This document defines the technical, economic, security, privacy, payment and interoperability architecture of the HSMC ecosystem.
+
+HSMC is designed as an independent blockchain network developed from its own protocol and implementation, rather than being a token or application deployed on Bitcoin, Ethereum or another external blockchain.
+
+The ecosystem consists of:
+
+* **HSMC Network** — the blockchain protocol and decentralized network.
+* **HSMC** — the native protocol asset.
+* **HSMC Node** — the software implementing network participation, consensus, state validation and synchronization.
+* **HSMCPay** — the native payment and settlement infrastructure.
+* **HSMC Wallet** — user-facing wallet infrastructure.
+* **HSMC Privacy Layer** — privacy-preserving transaction infrastructure.
+* **HSMC Liquidity Layer** — native liquidity pools, conversion and settlement mechanisms.
+* **HSMC Interoperability Layer** — bridges, external payment rails and other networks.
+* **HSMC Stable Assets** — protocol-native stable-value assets subject to appropriate reserve, oracle and legal models.
+
+### Important terminology clarification
+
+Original concept:
+
+(**"HSMC is both the blockchain and the native token, sharing identical architecture, functionality and economic rules: same security-first technology, same modules, same UX."**)
+
+Revised definition:
+
+**HSMC Network** refers to the blockchain protocol and decentralized network.
+
+**HSMC** refers to the native asset of that network.
+
+They are therefore part of the same native ecosystem, but they are not technically the same object.
+
+This distinction exists so developers, auditors, regulators and users can clearly distinguish:
+
+**protocol → network → node → asset → payment layer → wallet.**
+
+---
+
+# 1. Executive Summary
+
+HSMC aims to design and deploy a public, scalable, interoperable and security-first blockchain ecosystem capable of operating under hostile network conditions and resisting a broad range of classical, automated, AI-assisted and future cryptographic threats.
+
+The system is designed around:
+
+* decentralized operation;
+* verifiable settlement;
+* privacy by choice;
+* post-quantum cryptographic readiness;
+* fault tolerance;
+* native payment infrastructure;
+* native liquidity;
+* stable-value assets;
+* cross-chain interoperability;
+* developer accessibility;
+* hardware-backed security;
+* selective disclosure;
+* transparent protocol rules.
+
+The fundamental objective is not merely to create another cryptocurrency.
+
+The objective is to create an **independent digital value-transfer and settlement infrastructure**.
+
+HSMC should allow users to transfer value directly within the HSMC ecosystem without requiring Visa, Mastercard, PayPal, Stripe, an exchange or another blockchain to process native HSMC-to-HSMC transactions.
+
+External systems may be connected for interoperability, fiat conversion, card payments, banking access, liquidity and other services, but such external systems should not constitute a single point of failure for native HSMC transactions.
+
+### Core principle
+
+> **External systems should connect to HSMC. HSMC should not require external systems to function internally.**
+
+---
+
+# 2. Vision
+
+HSMC is intended to provide a payment and settlement environment where:
+
+* transactions are verifiable;
+* privacy is controlled by the user;
+* network operation is decentralized;
+* infrastructure failures are isolated;
+* value can move globally through multiple rails;
+* external payment networks can be integrated without becoming mandatory;
+* users can prove that a transaction occurred without exposing unnecessary transaction details;
+* the system can evolve toward post-quantum security;
+* developers can build directly on HSMC.
+
+The long-term objective is a network where the question is not:
+
+> "Which company processes my payment?"
+
+but:
+
+> "Which protocol validates and settles my transaction?"
+
+---
+
+# 3. Design Principles
+
+## 3.1 Decentralization
+
+No single company, server, payment provider, exchange, bank, validator, liquidity provider or external network should be required for native HSMC-to-HSMC operation.
+
+The system must minimize single points of failure.
+
+---
+
+## 3.2 Immutability and Auditability
+
+The ledger must provide cryptographically verifiable transaction history and state transitions.
+
+Private transactions must still generate verifiable cryptographic evidence that the protocol rules were satisfied.
+
+---
+
+## 3.3 Defense in Depth
+
+Security is implemented across multiple layers:
+
+1. cryptography;
+2. consensus;
+3. transaction validation;
+4. networking;
+5. node security;
+6. wallet security;
+7. infrastructure;
+8. application security;
+9. operational security;
+10. monitoring;
+11. incident response;
+12. user security.
+
+No single security mechanism should be treated as sufficient by itself.
+
+---
+
+## 3.4 Privacy by Choice
+
+(**Original: "per-transaction Public / Private toggle."**)
+
+Each supported transaction may allow the user to choose between:
+
+### Public mode
+
+Transaction information intended by the protocol to be public is recorded transparently.
+
+### Private mode
+
+Transaction details are protected through cryptographic privacy mechanisms while the network continues to verify transaction validity.
+
+Privacy must not mean that the transaction does not exist.
+
+Instead:
+
+> **The existence and validity of a transaction can be proven without automatically exposing its private contents.**
+
+---
+
+## 3.5 Selective Disclosure
+
+Users may selectively prove information about a private transaction.
+
+Possible mechanisms include:
+
+* view keys;
+* transaction proofs;
+* cryptographic commitments;
+* threshold-controlled disclosure;
+* audit-specific disclosure mechanisms.
+
+Example:
+
+A user may prove:
+
+> "This transaction belongs to me."
+
+without publishing the complete transaction history to everyone.
+
+---
+
+# 4. HSMC Network Architecture
+
+## 4.1 Protocol
+
+HSMC is an independent blockchain protocol.
+
+The implementation is not required to inherit Bitcoin, Ethereum or another blockchain's consensus or ledger structure.
+
+The current implementation is developed using Rust for core blockchain and node components, with additional ecosystem components implemented in appropriate languages according to security, performance and platform requirements.
+
+---
+
+# 5. Consensus Architecture
+
+(**Original: "Configurable hybrid consensus (BFT PoS / Tendermint-like, DPoS/PoS with delegation) with optional PoW for mining."**)
+
+The HSMC consensus layer is intended to support a configurable security architecture combining Byzantine Fault Tolerant proof-of-stake mechanisms with optional mining mechanisms where justified by the final protocol design.
+
+The exact consensus mechanism must be finalized through:
+
+* formal specification;
+* simulation;
+* adversarial testing;
+* economic analysis;
+* performance benchmarking;
+* security review;
+* formal verification where practical.
+
+Possible components include:
+
+* PoS;
+* delegated participation;
+* BFT-style finality;
+* optional PoW;
+* validator rotation;
+* slashing or equivalent economic penalties;
+* anti-Sybil mechanisms.
+
+The final implementation must avoid combining mechanisms merely for marketing purposes. Every consensus component must have a clearly defined security or economic function.
+
+---
+
+# 6. Node Architecture
+
+HSMC supports multiple node roles.
+
+## 6.1 Validator Node
+
+Responsible for:
+
+* validating transactions;
+* participating in consensus;
+* validating blocks;
+* maintaining state;
+* participating in finality.
+
+---
+
+## 6.2 Full Node
+
+Maintains the blockchain state and validates network data without necessarily participating directly in consensus.
+
+---
+
+## 6.3 Sentinel / Security Node
+
+Designed for:
+
+* anomaly detection;
+* network monitoring;
+* threat detection;
+* peer observation;
+* security telemetry;
+* attack detection.
+
+Sentinel nodes must not automatically become trusted authorities.
+
+---
+
+## 6.4 L2 Sequencer
+
+Where L2 infrastructure is deployed, sequencers may order L2 transactions according to defined protocol rules.
+
+The system must define appropriate escape, verification and fraud/proof mechanisms so that L2 infrastructure does not become an uncontrolled centralized dependency.
+
+---
+
+# 7. Cryptographic Architecture
+
+(**Original: "Signatures: Ed25519 for compatibility, PQC by default (CRYSTALS-Dilithium for signatures, CRYSTALS-Kyber for KEM)."**)
+
+HSMC will use a hybrid cryptographic strategy combining mature classical primitives with standardized post-quantum primitives where appropriate.
+
+The current architecture should be updated to use the current NIST-standardized terminology:
+
+* **ML-DSA** — derived from CRYSTALS-Dilithium, for post-quantum signatures.
+* **ML-KEM** — derived from CRYSTALS-Kyber, for post-quantum key encapsulation.
+* **X25519** — classical elliptic-curve key exchange where appropriate.
+* **Ed25519** — classical signatures where compatibility or specific protocol requirements justify their use.
+
+(**Original: "CRYSTALS-Dilithium" and "CRYSTALS-Kyber"**)
+
+The project should maintain algorithm agility so that cryptographic primitives can be replaced if future research identifies weaknesses or superior standardized primitives.
+
+---
+
+# 8. Hashing and Symmetric Cryptography
+
+Candidate primitives:
+
+* SHA-3;
+* Keccak where protocol compatibility requires it;
+* AES-256;
+* authenticated encryption modes appropriate to the protocol;
+* secure random generation;
+* hardware-backed randomness where available.
+
+Cryptographic choices must be finalized through security review rather than selected solely for performance.
+
+---
+
+# 9. Post-Quantum Security
+
+HSMC is designed to be **post-quantum ready / quantum-resistant where supported by its selected cryptographic primitives**.
+
+(**Original: "ultra-secure ... quantum threats"**)
+
+No cryptographic system should claim absolute protection against unknown future attacks.
+
+The objective is therefore:
+
+> Minimize known quantum-vulnerability surfaces and provide cryptographic agility for future upgrades.
+
+Sensitive operations may additionally support:
+
+* hybrid classical + PQ signatures;
+* hybrid key exchange;
+* key rotation;
+* forward secrecy;
+* hardware-backed keys;
+* threshold authorization.
+
+---
+
+# 10. Privacy Engine
+
+The HSMC Privacy Engine is designed around cryptographic proofs rather than trust in a centralized database.
+
+Candidate components include:
+
+* zk-STARKs;
+* Merkle trees;
+* commitments;
+* nullifiers;
+* shielded state;
+* encrypted transaction metadata;
+* selective disclosure.
+
+(**Original: "zk-STARKs as the primary mechanism (no trusted setup preferred), with SNARK compatibility where necessary."**)
+
+zk-STARKs remain the preferred architecture where their performance and implementation requirements are appropriate.
+
+SNARK-compatible mechanisms may be supported where there is a demonstrable engineering advantage.
+
+---
+
+# 11. Public Transactions
+
+Public transactions are transparent according to the protocol's defined data model.
+
+A public transaction may expose:
+
+* sender/address;
+* recipient/address;
+* amount;
+* fee;
+* timestamp/block;
+* transaction ID;
+* transaction status.
+
+The exact fields must be finalized by the protocol specification.
+
+---
+
+# 12. Private Transactions
+
+Private transactions protect selected transaction information.
+
+The blockchain may contain:
+
+* commitments;
+* nullifiers;
+* encrypted data;
+* proofs;
+* transaction identifiers;
+* state transition evidence.
+
+The blockchain should not automatically expose:
+
+* exact amount;
+* real-world identity;
+* private metadata;
+* private recipient information.
+
+The system must nevertheless allow the network to verify that:
+
+* the sender had sufficient authority/funds;
+* the transaction follows protocol rules;
+* the same private output has not already been spent;
+* the cryptographic proof is valid;
+* the state transition is valid.
+
+---
+
+# 13. Transaction State Model
+
+HSMC Pay should distinguish between transaction submission, blockchain confirmation and recipient receipt.
+
+Proposed state model:
+
+```text
+CREATED
+   ↓
+SIGNED
+   ↓
+BROADCAST
+   ↓
+VALIDATING
+   ↓
+CONFIRMED
+   ↓
+FINALIZED
+   ↓
+SETTLED
+   ↓
+RECEIVED
+```
+
+Failure states:
+
+```text
+REJECTED
+EXPIRED
+FAILED
+CANCELLED
+INVALID
+```
+
+The final protocol must define which states are consensus-level and which are application-level.
+
+---
+
+# 14. Recipient Confirmation
+
+A key HSMCPay requirement is the ability to distinguish:
+
+> "The sender submitted the transaction."
+
+from:
+
+> "The network finalized the transaction."
+
+and:
+
+> "The recipient wallet recognized and received the funds."
+
+A payment receipt may therefore contain:
+
+* transaction ID;
+* finality proof;
+* recipient confirmation;
+* timestamp/block reference;
+* cryptographic proof where appropriate.
+
+This allows a user to prove that a payment completed without requiring the public disclosure of unnecessary private information.
+
+---
+
+# 15. HSMC Token Economics
+
+## 15.1 Initial Supply
+
+(**Original: "Initial supply proposal: 500,000,000 HSMC (adjustable)."**)
+
+Initial proposed supply:
+
+**500,000,000 HSMC**
+
+This remains a proposal until the final economic specification is frozen.
+
+---
+
+## 15.2 Distribution
+
+Potential allocation categories:
+
+* community;
+* team;
+* team vesting;
+* validators;
+* treasury;
+* ecosystem;
+* security grants;
+* liquidity;
+* development incentives.
+
+Exact percentages must be defined before mainnet launch.
+
+---
+
+# 16. HSMC Utility
+
+HSMC may be used for:
+
+* transaction fees;
+* staking;
+* network security;
+* governance;
+* liquidity;
+* ecosystem incentives;
+* premium protocol functionality where applicable.
+
+The system should avoid adding token utility purely for marketing purposes.
+
+Every utility should have a defined technical or economic purpose.
+
+---
+
+# 17. Fee Architecture
+
+(**Original: "Fixed fee policy: base fee 1 EUR/USD; during congestion up to 3 EUR/USD; special protection for very small balances."**)
+
+The proposed HSMC payment fee model is:
+
+* normal base target: approximately **1 EUR/USD equivalent**;
+* congestion maximum target: approximately **3 EUR/USD equivalent**;
+* protected micro-balance fee: approximately **0.10 EUR/USD equivalent** where applicable.
+
+However, these values must not be hard-coded into immutable protocol logic until economic simulations demonstrate that they are sustainable.
+
+The protocol must define:
+
+* fee denomination;
+* oracle dependency;
+* fee conversion;
+* minimum fee;
+* congestion adjustment;
+* validator compensation;
+* treasury allocation;
+* liquidity allocation;
+* micro-payment handling.
+
+---
+
+# 18. Liquidity and Fee Allocation
+
+(**Original: "Fees are reinvested into liquidity pools to bootstrap liquidity and stability."**)
+
+Fees may be distributed according to protocol-defined economic rules.
+
+Potential destinations:
+
+* validators;
+* security;
+* treasury;
+* liquidity providers;
+* ecosystem;
+* protocol development.
+
+Liquidity reinvestment must be governed by deterministic rules and must not expose the system to uncontrolled treasury or AMM risk.
+
+---
+
+# 19. Native Stable Assets
+
+Proposed native assets:
+
+* **USDHSMC**
+* **EURHSMC**
+* **XAUHSMC**
+
+These are protocol-level asset concepts and must not automatically be represented as equivalent to regulated fiat deposits or legally redeemable currencies.
+
+### USDHSMC
+
+Target:
+
+**1 USD**
+
+### EURHSMC
+
+Target:
+
+**1 EUR**
+
+### XAUHSMC
+
+Target:
+
+A defined quantity of gold or gold-equivalent value.
+
+The exact reserve and redemption model must be specified before any claim of 1:1 backing is made.
+
+---
+
+# 20. Oracle Architecture
+
+The oracle layer must use multiple independent data sources.
+
+Requirements:
+
+* source diversity;
+* aggregation;
+* outlier detection;
+* stale-price detection;
+* circuit breakers;
+* manipulation resistance;
+* fallback logic;
+* signed data;
+* timestamp verification.
+
+No single oracle provider should become a critical single point of failure.
+
+---
+
+# 21. HSMC Liquidity Layer
+
+The liquidity engine may support:
+
+* constant-product AMMs;
+* concentrated liquidity;
+* liquidity pools;
+* routing;
+* swaps;
+* fee collection;
+* liquidity incentives.
+
+The system must explicitly model:
+
+* impermanent loss;
+* oracle manipulation;
+* sandwich attacks;
+* liquidity concentration;
+* pool insolvency;
+* flash-loan-style attacks;
+* price manipulation.
+
+---
+
+# 22. HSMCPay
+
+## 22.1 Definition
+
+**HSMCPay is the native payment and settlement infrastructure of the HSMC ecosystem.**
+
+It is not merely a frontend wallet.
+
+Its responsibilities include:
+
+* payment creation;
+* payment authorization;
+* transaction submission;
+* transaction tracking;
+* settlement;
+* merchant payments;
+* payment receipts;
+* payment APIs;
+* conversion routing;
+* external payment integrations;
+* reconciliation;
+* fraud/security controls.
+
+---
+
+# 23. HSMCPay Independence Principle
+
+This is a core requirement.
+
+> **Native HSMCPay transactions must not require Visa, Mastercard, Stripe, PayPal, an external exchange or another blockchain to operate.**
+
+External services may provide:
+
+* fiat on-ramp;
+* fiat off-ramp;
+* card acceptance;
+* bank connectivity;
+* liquidity;
+* exchange access;
+* external settlement;
+* merchant acquiring.
+
+But these services must remain modular.
+
+Example:
+
+```text
+Stripe unavailable
+        ↓
+HSMCPay native transfers continue
+```
+
+```text
+Visa unavailable
+        ↓
+HSMCPay native transfers continue
+```
+
+```text
+Exchange unavailable
+        ↓
+HSMCPay native transfers continue
+```
+
+This is a fundamental **fault-isolation requirement**.
+
+---
+
+# 24. HSMCPay Architecture
+
+```text
+                       HSMC NETWORK
+                            │
+                     ┌──────▼──────┐
+                     │   HSMCPay   │
+                     │ Payment Core│
+                     └──────┬──────┘
+                            │
+       ┌────────────────────┼────────────────────┐
+       │                    │                    │
+     Wallet              Merchant              API
+       │                    │                    │
+       └────────────────────┼────────────────────┘
+                            │
+                     Settlement Engine
+                            │
+            ┌───────────────┼───────────────┐
+            │               │               │
+        HSMC Native       Fiat Rails     External Rails
+            │               │               │
+         HSMC         Bank/Card/PSP    Other Networks
+```
+
+---
+
+# 25. HSMCPay Core
+
+Required modules:
+
+### Payment Engine
+
+Responsible for:
+
+* transaction creation;
+* authorization;
+* signing;
+* broadcasting;
+* confirmation;
+* finality;
+* receipt generation.
+
+### Settlement Engine
+
+Responsible for:
+
+* settlement state;
+* reconciliation;
+* balances;
+* payment completion;
+* external settlement adapters.
+
+### Routing Engine
+
+Responsible for:
+
+* selecting liquidity;
+* selecting payment rail;
+* selecting conversion route;
+* handling unavailable providers.
+
+### Privacy Engine
+
+Responsible for:
+
+* private payment construction;
+* proof generation;
+* verification;
+* selective disclosure.
+
+---
+
+# 26. HSMCPay Native Payment
+
+The preferred native flow:
+
+```text
+User A
+   ↓
+HSMC Wallet
+   ↓
+HSMCPay
+   ↓
+HSMC Network
+   ↓
+Consensus / Validation
+   ↓
+Finality
+   ↓
+User B / Merchant
+```
+
+No card network is required.
+
+No external blockchain is required.
+
+No exchange is required.
+
+---
+
+# 27. Fiat On-Ramp
+
+Fiat conversion is a separate layer.
+
+Example:
+
+```text
+EUR
+ ↓
+Bank / Card / Licensed Gateway
+ ↓
+Fiat Settlement
+ ↓
+HSMCPay
+ ↓
+HSMC / EURHSMC
+```
+
+External fiat providers are therefore adapters rather than protocol dependencies.
+
+---
+
+# 28. Fiat Off-Ramp
+
+```text
 HSMC
-Protocol Technical Specification
-HSMC Network — Core Blockchain Protocol
+ ↓
+HSMCPay
+ ↓
+Licensed Conversion / Liquidity Provider
+ ↓
+Bank / Payment Institution
+ ↓
+EUR / USD / etc.
+```
 
-Document: HSMC Protocol Technical Specification
-Version: v1.0
-Status: Engineering Specification
-Parent Document: HSMC Unified Whitepaper
-Implementation: Rust core protocol / node
-Network: HSMC Mainnet / Testnet
-Domain: HSMC.io
+The HSMC blockchain remains operational independently of the availability of any specific off-ramp.
 
-1. Purpose
+---
+
+# 29. Card Network Interoperability
+
+(**Original: "integrated payment processor able to interoperate with card networks via licensed partners."**)
+
+HSMCPay may integrate with Visa, Mastercard and other card networks through licensed and certified partners.
+
+HSMCPay itself must not attempt to generate unauthorized card credentials or bypass network requirements.
+
+Card issuance and card-network processing require appropriate:
+
+* issuer relationships;
+* BIN sponsorship;
+* processor relationships;
+* acquiring relationships;
+* PCI DSS compliance;
+* EMV certification;
+* tokenization;
+* regulatory compliance.
+
+---
+
+# 30. HSMCPay Card Architecture
+
+```text
+Customer
+   ↓
+HSMC Wallet / Card
+   ↓
+Payment Gateway
+   ↓
+Acquirer
+   ↓
+Card Network
+   ↓
+Issuer Processor / BIN Sponsor
+   ↓
+HSMCPay / HSMC Ledger
+   ↓
+Settlement / Reconciliation
+```
+
+HSMCPay may therefore provide the technology and settlement layer while regulated partners provide the regulated card-network functions.
+
+---
+
+# 31. Merchant Gateway
+
+HSMCPay should expose APIs such as:
+
+```text
+POST /payment/create
+POST /payment/authorize
+POST /payment/capture
+POST /payment/refund
+POST /payment/void
+GET  /payment/{id}
+GET  /payment/{id}/status
+```
+
+Exact API naming is subject to final SDK specification.
+
+---
+
+# 32. Merchant Payment Methods
+
+HSMCPay should support:
+
+* wallet-to-wallet;
+* QR payments;
+* payment links;
+* API payments;
+* NFC/contactless through certified integrations;
+* invoices;
+* recurring payment mechanisms where legally and technically appropriate;
+* merchant refunds;
+* settlement reports.
+
+---
+
+# 33. Payment Receipts
+
+A merchant should be able to receive a cryptographically verifiable payment receipt.
+
+Example:
+
+```text
+Payment ID: XXXXX
+Status: FINALIZED
+Settlement: COMPLETE
+Recipient: CONFIRMED
+Timestamp: VERIFIED
+```
+
+Private transaction information should remain hidden unless disclosure is authorized.
+
+---
+
+# 34. Privacy and Compliance Balance
+
+HSMC is designed to protect user privacy while allowing controlled disclosure mechanisms.
+
+Privacy does not automatically mean:
+
+> "No one can ever prove anything."
+
+Instead:
+
+> **The protocol should minimize unnecessary disclosure while allowing users to prove required facts when necessary.**
+
+Potential mechanisms:
+
+* view keys;
+* selective disclosure;
+* threshold disclosure;
+* transaction proofs;
+* audit-specific authorization.
+
+---
+
+# 35. Threshold Disclosure
+
+(**Original: "threshold reveal (e.g. 3 of 5) for compliance/audit requests."**)
+
+The protocol may support threshold authorization such as:
+
+**3 of 5 authorized parties**
+
+required to release protected information.
+
+The exact governance and legal framework must be defined independently from the cryptographic mechanism.
+
+The cryptography should not automatically create a universal surveillance mechanism.
+
+---
+
+# 36. Cross-Chain Interoperability
+
+The interoperability layer may support:
+
+* bridges;
+* state proofs;
+* light-client verification;
+* relayers;
+* atomic swaps;
+* liquidity routing.
+
+Bridges must be treated as high-risk infrastructure.
+
+No bridge should automatically receive the same security assumptions as HSMC core consensus.
+
+---
+
+# 37. Bridge Security
+
+Required protections:
+
+* validator/relayer diversity;
+* state proof verification;
+* rate limits;
+* circuit breakers;
+* withdrawal delays where justified;
+* monitoring;
+* anomaly detection;
+* emergency pause mechanisms;
+* independent audits.
+
+---
+
+# 38. HSMC Wallet
+
+Supported platforms:
+
+* web;
+* mobile;
+* desktop;
+* hardware;
+* future embedded/payment devices.
+
+Security features may include:
+
+* FIDO2;
+* MPC;
+* hardware security modules;
+* secure enclave;
+* hardware wallets;
+* multi-signature;
+* threshold authorization.
+
+---
+
+# 39. Wallet Security Model
+
+High-value transactions may require:
+
+* hardware key;
+* biometric/device confirmation;
+* out-of-band confirmation;
+* multi-signature;
+* threshold approval.
+
+The user should be able to configure transaction security according to risk.
+
+---
+
+# 40. Wallet Purifier Mode
+
+(**Original: "Anti-Pegasus / Anti-state spyware design — Wallet Purifier Mode — OS Detox."**)
+
+HSMC may provide a hardened wallet security mode designed to detect indicators of device compromise.
+
+Potential mechanisms:
+
+* application integrity checks;
+* secure boot verification where supported;
+* runtime integrity checks;
+* hooking detection;
+* suspicious process detection;
+* environment risk scoring;
+* hardware-backed signing;
+* isolated signing environment.
+
+However, no wallet application can guarantee detection of all advanced spyware.
+
+Therefore the specification should state:
+
+> **Wallet Purifier Mode is a risk-detection and mitigation system, not an absolute guarantee against sophisticated device compromise.**
+
+---
+
+# 41. TEE / Mini-OS Signing
+
+For high-risk operations, HSMC Wallet may use:
+
+* TEE;
+* Secure Enclave;
+* hardware-backed key;
+* isolated signing environment;
+* dedicated secure device.
+
+If the environment is considered compromised, the wallet may:
+
+* refuse signing;
+* require additional authentication;
+* move signing to hardware;
+* require recovery authorization.
+
+---
+
+# 42. Kill-Switch and Recovery
+
+A kill-switch should not automatically destroy funds.
+
+Instead it should place sensitive operations into a protected state.
+
+Recovery may require:
+
+* recovery keys;
+* multisig;
+* threshold authorization;
+* hardware keys;
+* verified backup.
+
+---
+
+# 43. Security Monitoring
+
+HSMC security infrastructure may include:
+
+* sentinel nodes;
+* anomaly detection;
+* IDS/IPS;
+* telemetry;
+* honeypots;
+* deception infrastructure;
+* incident response;
+* security alerts.
+
+Security telemetry must be separated from private transaction data wherever possible.
+
+---
+
+# 44. Threat Model
+
+HSMC must assume attacks from:
+
+* individual attackers;
+* organized criminal groups;
+* automated bots;
+* AI-assisted attackers;
+* malicious insiders;
+* compromised nodes;
+* compromised devices;
+* malicious validators;
+* network attackers;
+* reverse engineering;
+* supply-chain attackers;
+* future quantum-capable adversaries.
+
+---
+
+# 45. AI-Assisted Attack Resistance
+
+HSMC should assume attackers can use AI to:
+
+* discover vulnerabilities;
+* generate malicious transactions;
+* automate probing;
+* analyze network behavior;
+* reverse engineer binaries;
+* identify configuration weaknesses.
+
+Defensive mechanisms should include:
+
+* anomaly detection;
+* rate limiting;
+* deterministic validation;
+* signed updates;
+* reproducible builds;
+* continuous testing;
+* fuzzing;
+* formal verification where appropriate;
+* red-team testing.
+
+---
+
+# 46. Reverse Engineering
+
+The system must assume binaries and client software can be reverse engineered.
+
+Security must therefore come from:
+
+* cryptography;
+* protocol rules;
+* server-side/network validation;
+* secure key management;
+* economic security.
+
+Security must never depend on keeping client software secret.
+
+---
+
+# 47. Deanonymization and Traffic Analysis
+
+(**Original: "Traffic fingerprinting & timing correlation across sentinel nodes..."**)
+
+The system may study traffic patterns for network security and fraud prevention.
+
+Potential mechanisms:
+
+* timing analysis;
+* traffic correlation;
+* anomaly detection;
+* network metadata analysis;
+* abuse detection.
+
+However:
+
+* results are probabilistic;
+* false positives are possible;
+* legal restrictions apply;
+* privacy protections must be maintained;
+* network monitoring must not automatically expose private transaction content.
+
+---
+
+# 48. Governance
+
+The governance system may support:
+
+* on-chain voting;
+* delegated voting;
+* proposal lifecycle;
+* emergency governance;
+* treasury management;
+* protocol upgrades.
+
+Token-weighted governance may be used.
+
+However, critical protocol changes should require additional safeguards so that short-term token concentration cannot trivially compromise the entire network.
+
+---
+
+# 49. Emergency Governance
+
+Emergency procedures may include:
+
+* security patches;
+* bridge shutdown;
+* oracle circuit breaker;
+* compromised key rotation;
+* emergency validator actions;
+* temporary restriction of vulnerable modules.
+
+Emergency powers must be:
+
+* documented;
+* limited;
+* auditable;
+* time-bounded;
+* subject to predefined governance rules.
+
+---
+
+# 50. Regulatory Architecture
+
+HSMC is a technology protocol.
+
+HSMCPay's operation as a regulated payment, custody, exchange or card service may require separate legal entities and licenses depending on jurisdiction.
+
+Potential regulated activities include:
+
+* payment services;
+* electronic money;
+* custody;
+* fiat conversion;
+* card issuance;
+* acquiring;
+* money transmission;
+* exchange;
+* stablecoin issuance.
+
+The project must obtain professional legal advice before operating regulated services publicly.
+
+---
+
+# 51. HSMCPay Legal Architecture
+
+HSMCPay should be designed so that regulated functions can be provided by appropriately licensed entities.
+
+Example:
+
+```text
+HSMC Protocol
+      │
+      ├── HSMCPay Technology
+      │
+      ├── Licensed Fiat Provider
+      │
+      ├── Licensed Card Partner
+      │
+      ├── Licensed Banking Partner
+      │
+      └── Liquidity Providers
+```
+
+This preserves protocol independence while allowing regulated interoperability.
+
+---
+
+# 52. Compliance Architecture
+
+Where required, HSMCPay may support:
+
+* KYC;
+* AML;
+* sanctions screening;
+* transaction monitoring;
+* merchant verification;
+* risk scoring;
+* selective disclosure.
+
+These controls should be implemented at the appropriate application or regulated gateway layer rather than making the entire blockchain inherently permissioned.
+
+---
+
+# 53. Developer Architecture
+
+HSMC should expose developer tooling.
+
+Potential SDKs:
+
+* Rust;
+* TypeScript/JavaScript;
+* Python;
+* Go;
+* mobile SDKs.
+
+Developer APIs should support:
+
+```text
+createWallet()
+getBalance()
+createTransaction()
+signTransaction()
+broadcastTransaction()
+getTransaction()
+waitForFinality()
+verifyPayment()
+createMerchantPayment()
+createInvoice()
+refundPayment()
+```
+
+Exact API specifications will be maintained separately.
+
+---
+
+# 54. Developer Tooling
+
+Required ecosystem components:
+
+* RPC;
+* WebSocket events;
+* SDKs;
+* CLI;
+* node APIs;
+* testnet faucet;
+* block explorer;
+* transaction debugger;
+* developer documentation;
+* local development node;
+* test harness.
+
+---
+
+# 55. Testing Strategy
+
+Testing must occur at multiple levels.
+
+## Unit Testing
+
+Every core module must have unit tests.
+
+## Integration Testing
+
+Modules must be tested together.
+
+## Property Testing
+
+Protocol invariants must be tested against large generated input sets.
+
+## Fuzz Testing
+
+Network and transaction parsers must be fuzzed.
+
+## Adversarial Testing
+
+Malicious nodes and malformed transactions must be simulated.
+
+## Load Testing
+
+The system must be tested under increasing transaction loads.
+
+## Network Failure Testing
+
+Nodes and network links must intentionally fail.
+
+---
+
+# 56. Failure Independence Testing
+
+Required scenarios:
+
+### Scenario A
+
+Stripe unavailable.
+
+Expected:
+
+**HSMC native transfers continue.**
+
+### Scenario B
+
+Visa unavailable.
+
+Expected:
+
+**HSMC native transfers continue.**
+
+### Scenario C
+
+One exchange unavailable.
+
+Expected:
+
+**HSMC continues.**
+
+### Scenario D
+
+One oracle unavailable.
+
+Expected:
+
+**Oracle aggregation continues using remaining valid sources.**
+
+### Scenario E
+
+Large percentage of nodes temporarily unavailable.
+
+Expected:
+
+Network behavior follows the defined consensus safety/liveness guarantees.
+
+### Scenario F
+
+Network partition.
+
+Expected:
+
+The protocol follows explicitly defined safety and recovery rules.
+
+---
+
+# 57. Double-Spend Protection
+
+The system must guarantee according to its consensus model that an invalid double spend cannot become finalized state.
+
+Testing must include:
+
+* simultaneous transactions;
+* conflicting transactions;
+* replay;
+* delayed transactions;
+* network partition;
+* malicious validator behavior.
+
+---
+
+# 58. Replay Protection
+
+Transactions must contain sufficient protocol context to prevent unauthorized replay across:
+
+* blocks;
+* accounts;
+* networks;
+* chains;
+* forks;
+* protocol versions.
+
+---
+
+# 59. Key Management
+
+Critical keys should use:
+
+* HSM;
+* TPM;
+* Secure Enclave;
+* hardware wallet;
+* multisig;
+* threshold cryptography where appropriate.
+
+Private keys must never be unnecessarily exposed to application processes.
+
+---
+
+# 60. CI/CD Security
+
+Build infrastructure should include:
+
+* signed artifacts;
+* reproducible builds;
+* dependency verification;
+* software composition analysis;
+* vulnerability scanning;
+* code review;
+* protected release process.
+
+Critical releases should be cryptographically signed.
+
+---
+
+# 61. Formal Verification
+
+Formal verification should prioritize:
+
+1. consensus-critical logic;
+2. cryptographic verification;
+3. state transition rules;
+4. bridge verification;
+5. high-value financial contracts;
+6. privacy verification;
+7. critical payment logic.
+
+Not every UI component requires formal verification.
+
+---
+
+# 62. Security Audits
+
+Before mainnet:
+
+* independent blockchain audit;
+* cryptographic review;
+* smart contract audit where applicable;
+* payment security review;
+* wallet security review;
+* infrastructure penetration testing;
+* red-team engagement;
+* bridge audit;
+* oracle audit.
+
+---
+
+# 63. Bug Bounty
+
+HSMC should operate a permanent vulnerability disclosure and bug bounty program.
+
+Severity levels:
+
+* Critical;
+* High;
+* Medium;
+* Low;
+* Informational.
+
+Critical blockchain vulnerabilities should receive the highest priority.
+
+---
+
+# 64. Off-Chain Scaling
+
+(**Original: "state channels, rollups, L2 for scalability and privacy."**)
+
+HSMC may support:
+
+* state channels;
+* rollups;
+* L2 networks;
+* payment channels;
+* future sharding.
+
+These should be introduced only after the security assumptions are fully specified.
+
+---
+
+# 65. Sharding
+
+Sharding is considered a long-term scalability option.
+
+It should not be introduced until:
+
+* state consistency is proven;
+* cross-shard transaction behavior is specified;
+* consensus security is preserved;
+* failure scenarios are understood.
+
+---
+
+# 66. Performance Targets
+
+Final performance targets must be determined through benchmarking.
+
+Metrics:
+
+* transactions per second;
+* block time;
+* finality time;
+* latency;
+* node synchronization speed;
+* bandwidth;
+* storage requirements;
+* CPU requirements.
+
+The project must avoid publishing theoretical TPS figures as production guarantees.
+
+---
+
+# 67. Economic Sustainability
+
+The economic model must account for:
+
+* validator rewards;
+* network security;
+* infrastructure costs;
+* liquidity;
+* treasury;
+* user fees;
+* inflation/issuance if applicable;
+* token supply;
+* staking;
+* mining if retained.
+
+---
+
+# 68. Mining
+
+(**Original: "staking, mining, farming — configurable hybrid PoS + optional PoW."**)
+
+Mining may remain an optional component if the final economic and security analysis demonstrates a meaningful benefit.
+
+The final protocol must define:
+
+* mining algorithm;
+* difficulty;
+* reward;
+* validator interaction;
+* PoW/PoS interaction;
+* energy/security trade-offs.
+
+---
+
+# 69. Farming
+
+Liquidity farming may be supported through protocol-defined incentives.
+
+Risks:
+
+* mercenary capital;
+* reward dilution;
+* liquidity withdrawal;
+* manipulation.
+
+Farming rewards must therefore be economically modeled.
+
+---
+
+# 70. Native Conversion
+
+HSMC may provide native conversion between protocol-supported assets.
+
+Example:
+
+```text
+HSMC
+ ↓
+EURHSMC
+ ↓
+USDHSMC
+```
+
+Conversion depends on:
+
+* liquidity;
+* oracle pricing;
+* pool depth;
+* slippage;
+* fees.
+
+---
+
+# 71. Global Payment Architecture
+
+The long-term architecture is:
+
+```text
+                   HSMC NETWORK
+                        │
+                     HSMCPay
+                        │
+        ┌───────────────┼────────────────┐
+        │               │                │
+      Wallet         Merchant         API/SDK
+        │               │                │
+        └───────────────┼────────────────┘
+                        │
+              HSMC Settlement Layer
+                        │
+        ┌───────────────┼────────────────┐
+        │               │                │
+    HSMC Native      Fiat Rails      External Chains
+        │               │                │
+      HSMC          Banks/Cards      Bridges/Swaps
+```
+
+The internal HSMC rail is the foundation.
+
+External rails are interoperability layers.
+
+---
+
+# 72. Global Availability Principle
+
+HSMC should be capable of operating across geographic regions through a distributed node architecture.
+
+No single:
+
+* country;
+* cloud provider;
+* data center;
+* ISP;
+* payment provider;
+* exchange;
+* bank
+
+should be required for the network to continue operating.
+
+---
+
+# 73. Disaster Recovery
+
+Required systems:
+
+* node snapshots;
+* chain recovery;
+* key backup;
+* validator recovery;
+* infrastructure redundancy;
+* geographically distributed nodes;
+* incident response;
+* emergency communication.
+
+Recovery procedures must be tested rather than merely documented.
+
+---
+
+# 74. Mainnet Security Requirements
+
+Mainnet should not launch solely because the software appears functional.
+
+Required gates:
+
+* consensus audit;
+* cryptographic review;
+* network stress testing;
+* wallet testing;
+* privacy audit;
+* payment security testing;
+* bridge testing;
+* oracle testing;
+* disaster recovery testing;
+* red team;
+* bug bounty.
+
+---
+
+# 75. Development Roadmap
+
+## Phase 0 — Architecture and Research
+
+**0–2 months**
+
+* finalize protocol design;
+* finalize consensus;
+* finalize transaction model;
+* cryptographic review;
+* PQC evaluation;
+* economic modeling;
+* legal scoping;
+* HSMCPay architecture.
+
+---
+
+## Phase 1 — Core Testnet
+
+**2–6 months**
+
+* HSMC node;
+* networking;
+* consensus;
+* state;
+* transaction engine;
+* initial testnet;
+* wallet alpha;
+* oracle framework;
+* HSMCPay foundation.
+
+---
+
+## Phase 2 — Privacy and Payment
+
+**6–12 months**
+
+* shielded pools;
+* zk-STARK implementation;
+* privacy proofs;
+* HSMCPay payment lifecycle;
+* merchant API;
+* settlement engine;
+* selective disclosure;
+* initial liquidity framework.
+
+---
+
+## Phase 3 — Security and Interoperability
+
+**9–15 months**
+
+* formal verification;
+* external audits;
+* red team;
+* bug bounty;
+* cross-chain architecture;
+* bridge prototype;
+* payment provider adapters.
+
+---
+
+## Phase 4 — Public Testnet
+
+**12–18 months**
+
+* incentivized testnet;
+* public node participation;
+* developer SDK;
+* merchant testing;
+* liquidity testing;
+* wallet ecosystem;
+* security monitoring.
+
+---
+
+## Phase 5 — Mainnet Preparation
+
+Mainnet launch requires completion of security and operational gates.
+
+---
+
+# 76. HSMCPay Development Roadmap
+
+## M0 — Internal Payment Prototype
+
+* wallet-to-wallet payments;
+* 1-unit testing;
+* payment states;
+* transaction receipts;
+* finality tracking.
+
+---
+
+## M1 — Native Payment Network
+
+* merchant payments;
+* QR;
+* APIs;
+* payment links;
+* settlement;
+* refunds.
+
+---
+
+## M2 — Privacy Payments
+
+* private transactions;
+* commitments;
+* nullifiers;
+* ZK proofs;
+* selective disclosure.
+
+---
+
+## M3 — Liquidity
+
+* native pools;
+* conversion engine;
+* stable assets;
+* oracle integration.
+
+---
+
+## M4 — External Connectivity
+
+* banking adapters;
+* fiat gateways;
+* exchange integrations;
+* card-network partners.
+
+---
+
+## M5 — Global Payment Expansion
+
+* merchant network;
+* regional partners;
+* multiple liquidity providers;
+* multiple fiat rails;
+* card integrations;
+* redundancy.
+
+---
+
+# 77. HSMCPay Master Engineering Backlog
+
+```text
+HSMCPAY
+│
+├── EPIC 01 — Payment Core
+│   ├── Transaction lifecycle
+│   ├── Authorization
+│   ├── Broadcast
+│   ├── Confirmation
+│   ├── Finality
+│   ├── Settlement
+│   └── Receipt
+│
+├── EPIC 02 — Wallet
+│   ├── Balance
+│   ├── Send
+│   ├── Receive
+│   ├── Signing
+│   ├── Recovery
+│   └── Security
+│
+├── EPIC 03 — Privacy
+│   ├── Commitments
+│   ├── Nullifiers
+│   ├── Shielded state
+│   ├── ZK proofs
+│   └── Selective disclosure
+│
+├── EPIC 04 — Merchant
+│   ├── Merchant account
+│   ├── QR
+│   ├── API
+│   ├── Invoice
+│   ├── Refund
+│   └── Settlement
+│
+├── EPIC 05 — Liquidity
+│   ├── Pools
+│   ├── Routing
+│   ├── Conversion
+│   └── Price protection
+│
+├── EPIC 06 — Fiat
+│   ├── Bank adapters
+│   ├── Card adapters
+│   ├── On-ramp
+│   └── Off-ramp
+│
+├── EPIC 07 — Card Network
+│   ├── BIN sponsor
+│   ├── Issuer processor
+│   ├── Tokenization
+│   ├── EMV
+│   └── Settlement
+│
+├── EPIC 08 — Security
+│   ├── Fraud detection
+│   ├── Rate limiting
+│   ├── Device risk
+│   ├── Monitoring
+│   └── Incident response
+│
+├── EPIC 09 — Redundancy
+│   ├── Node failure
+│   ├── Provider failure
+│   ├── Oracle failure
+│   ├── Liquidity failure
+│   └── Network partition
+│
+└── EPIC 10 — Developer Platform
+    ├── SDK
+    ├── RPC
+    ├── WebSocket
+    ├── CLI
+    ├── Documentation
+    └── Testnet tools
+```
+
+---
+
+# 78. Definition of Done — HSMCPay
+
+HSMCPay cannot be considered production-ready until:
+
+* native HSMC-to-HSMC payments work;
+* transaction lifecycle is deterministic;
+* finality is measurable;
+* double spending is prevented;
+* replay attacks are prevented;
+* payment receipts are verifiable;
+* private transactions preserve defined privacy guarantees;
+* wallet recovery works;
+* merchant payments work;
+* refunds are defined;
+* node failures are handled;
+* external provider failures do not stop native payments;
+* oracle failure is handled;
+* liquidity failure is handled;
+* security testing is completed;
+* independent audits are completed;
+* legal requirements for public services are addressed.
+
+---
+
+# 79. Testing With Real Small-Value Transactions
+
+During development, HSMC should be tested with extremely small amounts before scaling.
+
+Example:
+
+```text
+Wallet A
+   ↓
+1 RON equivalent
+   ↓
+Wallet B
+```
+
+Then:
+
+```text
+1 transaction
+10 transactions
+100 transactions
+1,000 transactions
+10,000 transactions
+100,000+ transactions
+```
+
+The objective is not merely to demonstrate that one transaction works.
+
+The objective is to demonstrate that the system continues to work:
+
+* repeatedly;
+* under load;
+* under failure;
+* under attack;
+* after restart;
+* across multiple nodes;
+* across different geographic regions.
+
+---
+
+# 80. Security Acceptance Criteria
+
+Before production:
+
+### Consensus
+
+* safety tested;
+* liveness tested;
+* adversarial validator testing;
+* partition testing.
+
+### Cryptography
+
+* independent cryptographic review;
+* PQ implementation review;
+* key management review.
+
+### Privacy
+
+* proof soundness review;
+* privacy leakage testing;
+* metadata analysis.
+
+### Payment
+
+* double-spend testing;
+* replay testing;
+* settlement testing;
+* reconciliation testing.
+
+### Infrastructure
+
+* penetration testing;
+* supply-chain security;
+* signed builds;
+* recovery testing.
+
+---
+
+# 81. Risk Register
+
+## Risk: Regulatory
+
+Mitigation:
+
+* legal counsel;
+* licensed partners;
+* jurisdiction-specific compliance.
+
+## Risk: Cryptographic weakness
+
+Mitigation:
+
+* algorithm agility;
+* PQC;
+* independent cryptographic review.
+
+## Risk: Bridge failure
+
+Mitigation:
+
+* isolated bridge architecture;
+* limits;
+* circuit breakers;
+* audits.
+
+## Risk: Oracle manipulation
+
+Mitigation:
+
+* multiple sources;
+* aggregation;
+* anomaly detection.
+
+## Risk: Centralization
+
+Mitigation:
+
+* multiple node operators;
+* multiple liquidity providers;
+* multiple external providers;
+* open developer ecosystem.
+
+## Risk: Key compromise
+
+Mitigation:
+
+* hardware security;
+* multisig;
+* MPC;
+* threshold recovery.
+
+## Risk: Network failure
+
+Mitigation:
+
+* geographic distribution;
+* redundant peers;
+* multiple infrastructure providers.
+
+---
+
+# 82. Principles That Must Never Be Violated
+
+The following principles are foundational:
+
+### 1.
+
+**HSMC must not depend on another blockchain for native operation.**
+
+### 2.
+
+**HSMCPay native payments must not depend on Visa/Mastercard.**
+
+### 3.
+
+**External providers must be replaceable whenever technically and legally possible.**
+
+### 4.
+
+**A single provider must not be a single point of failure.**
+
+### 5.
+
+**Privacy must be cryptographic, not a promise.**
+
+### 6.
+
+**Transactions must be verifiable without unnecessary disclosure.**
+
+### 7.
+
+**Security must not depend on secrecy of the source code.**
+
+### 8.
+
+**Critical cryptography must be independently reviewed.**
+
+### 9.
+
+**Protocol claims must be demonstrable through testing.**
+
+### 10.
+
+**The system must fail safely.**
+
+---
+
+# 83. Final Architecture
+
+The complete HSMC ecosystem is therefore:
+
+```text
+                              HSMC
+                               │
+                    ┌──────────┴──────────┐
+                    │                     │
+              HSMC NETWORK             HSMC ASSET
+                    │
+        ┌───────────┼────────────┐
+        │           │            │
+     Consensus    Nodes       State/Ledger
+        │
+        ├───────────────────────────────┐
+        │                               │
+   Privacy Layer                    HSMCPay
+        │                               │
+   ZK / Shielded                  Payment Core
+   Commitments                    Settlement
+   Nullifiers                     Merchant
+   Disclosure                     Wallet
+        │                               │
+        └───────────────┬───────────────┘
+                        │
+                  Liquidity Layer
+                        │
+             ┌──────────┼──────────┐
+             │          │          │
+          HSMC      Stablecoins   Pools
+             │
+             └──────────┬──────────┘
+                        │
+              Interoperability
+                        │
+       ┌────────────────┼────────────────┐
+       │                │                │
+     Banks          Card Networks     Other Chains
+       │                │                │
+       └────────────────┼────────────────┘
+                        │
+                  Global Payments
+```
+
+---
+
+# 84. Final Vision
+
+HSMC is intended to become a decentralized, privacy-aware, security-first digital value network capable of supporting payments, settlement, liquidity and interoperability without making any single external provider indispensable.
+
+Its core philosophy is:
+
+> **Decentralized by architecture.**
+> **Private by choice.**
+> **Verifiable by cryptography.**
+> **Resilient by design.**
+> **Interoperable without dependency.**
+
+HSMCPay extends this philosophy into payments.
+
+A user should be able to transfer value directly through HSMC.
+
+A merchant should be able to accept HSMC without requiring a card network.
+
+A developer should be able to integrate HSMC without controlling the underlying network.
+
+A liquidity provider should be replaceable.
+
+A payment provider should be replaceable.
+
+An exchange should be replaceable.
+
+A node should be replaceable.
+
+And when an external system fails, the HSMC network should continue operating wherever its own consensus and network assumptions remain satisfied.
+
+The long-term objective is not to recreate a centralized financial institution under a different name.
+
+The objective is to build an **independent protocol that allows different financial systems, users, merchants and liquidity providers to connect without requiring any one of them to own the network.**
+
+---
+
+# 85. Core Slogan
+
+## CONNECT. TRANSACT. EVOLVE.
+
+**Connect** — users, merchants, liquidity and networks.
+
+**Transact** — move value through a native settlement network.
+
+**Evolve** — continuously improve security, privacy, scalability and interoperability.
+
+---
+
+# 86. Closing Statement
+
+HSMC is developed as a long-term infrastructure project.
+
+The project begins with the blockchain, node and protocol.
+
+It continues with the wallet and HSMCPay.
+
+It expands through privacy, liquidity, stable assets and interoperability.
+
+And only after the underlying system is tested, audited and demonstrated to be secure should it move toward large-scale public financial infrastructure.
+
+**The objective is not to claim that HSMC has already solved every problem.**
+
+**The objective is to build the technology capable of solving those problems, one verified layer at a time.**
+
+© 2018–2026 HSMC — All rights reserved.
+
+**HSMC.io**
+
+**In partnership with CEO OXR**
+
+
+
+# HSMC
+
+## Protocol Technical Specification
+
+### HSMC Network — Core Blockchain Protocol
+
+**Document:** HSMC Protocol Technical Specification
+**Version:** v1.0
+**Status:** Engineering Specification
+**Parent Document:** HSMC Unified Whitepaper
+**Implementation:** Rust core protocol / node
+**Network:** HSMC Mainnet / Testnet
+**Domain:** HSMC.io
+
+---
+
+# 1. Purpose
+
 This document defines the technical protocol requirements for the HSMC blockchain.
-...
-[Restul Documentului 02 continuă în mesajul anterior, inclusiv secțiunile 1–107, exact în forma transmisă în conversație.]
 
-[User]
-man vrea sa imi dai in format text toata conversatia noastra dela prima discutie pana la ultimul  adica copiezi toata sesiune intrun fisier
+The purpose is to convert the architectural concepts described in the HSMC Whitepaper into precise engineering requirements that can be implemented, tested and audited.
+
+This document defines:
+
+* blockchain state;
+* blocks;
+* transactions;
+* accounts;
+* addresses;
+* cryptographic identity;
+* signatures;
+* fees;
+* mempool;
+* block production;
+* consensus;
+* finality;
+* peer-to-peer communication;
+* validation;
+* synchronization;
+* forks;
+* chain recovery;
+* protocol upgrades;
+* node behavior;
+* testing requirements.
+
+This document does **not** define the complete HSMCPay application layer. HSMCPay receives its own technical specification.
+
+---
+
+# 2. Protocol Philosophy
+
+HSMC is an independent blockchain.
+
+It is not:
+
+* an Ethereum token;
+* a Bitcoin fork;
+* an ERC-20 asset;
+* a Cosmos token;
+* a Substrate parachain;
+* an application deployed on another blockchain.
+
+The HSMC protocol defines its own:
+
+* ledger;
+* state;
+* transaction model;
+* consensus;
+* networking;
+* validation;
+* native asset;
+* fee mechanism;
+* cryptographic identity.
+
+External systems are interoperability layers.
+
+They are not part of HSMC's minimum consensus dependency set.
+
+---
+
+# 3. Core Protocol Requirements
+
+The protocol MUST provide:
+
+### P-001
+
+Deterministic state transitions.
+
+### P-002
+
+Deterministic transaction validation.
+
+### P-003
+
+Deterministic block validation.
+
+### P-004
+
+Double-spend protection.
+
+### P-005
+
+Replay protection.
+
+### P-006
+
+Cryptographic authorization.
+
+### P-007
+
+Consensus finality according to the selected consensus model.
+
+### P-008
+
+Peer-to-peer propagation.
+
+### P-009
+
+Node synchronization.
+
+### P-010
+
+Protocol-version compatibility.
+
+### P-011
+
+Crash recovery.
+
+### P-012
+
+Protection against malformed protocol messages.
+
+### P-013
+
+Cryptographic algorithm agility.
+
+### P-014
+
+Upgrade mechanisms.
+
+---
+
+# 4. Protocol Layers
+
+HSMC is divided into logical layers.
+
+```text
+┌──────────────────────────────────────┐
+│             Applications             │
+│ HSMCPay / Wallet / Explorer / SDKs  │
+├──────────────────────────────────────┤
+│            Application APIs          │
+│             RPC / WS / SDK           │
+├──────────────────────────────────────┤
+│          Transaction Layer           │
+│   Public / Private / Validation      │
+├──────────────────────────────────────┤
+│             State Layer              │
+│ Accounts / Balances / Assets / State│
+├──────────────────────────────────────┤
+│            Consensus Layer           │
+│       Ordering / Finality / PoS      │
+├──────────────────────────────────────┤
+│              Block Layer             │
+│ Headers / Blocks / Commitments       │
+├──────────────────────────────────────┤
+│             Network Layer            │
+│       P2P / Discovery / Gossip       │
+├──────────────────────────────────────┤
+│          Cryptographic Layer         │
+│     Signatures / Hashes / PQC        │
+└──────────────────────────────────────┘
+```
+
+The exact module boundaries in Rust may differ, but logical separation MUST be maintained.
+
+---
+
+# 5. Canonical Data Types
+
+The protocol should use fixed-width types wherever protocol determinism requires them.
+
+Recommended primitive types:
+
+```text id="9v2k8a"
+uint8
+uint16
+uint32
+uint64
+uint128
+byte[]
+Hash
+Address
+Signature
+PublicKey
+Timestamp
+BlockHeight
+ChainId
+TransactionId
+```
+
+Floating-point values MUST NOT be used for consensus-critical monetary calculations.
+
+All monetary calculations MUST use integer or fixed-point representations.
+
+---
+
+# 6. Monetary Representation
+
+HSMC balances MUST be represented using the smallest indivisible protocol unit.
+
+Example:
+
+```text id="3zj6kq"
+1 HSMC = 100,000,000 base units
+```
+
+The exact decimal precision is a protocol constant and must be frozen before mainnet.
+
+No consensus-critical operation may depend on floating-point arithmetic.
+
+---
+
+# 7. Chain Identity
+
+Every HSMC network MUST have a unique:
+
+```text id="p6x4wm"
+ChainID
+```
+
+Examples:
+
+```text
+HSMC-MAINNET
+HSMC-TESTNET
+HSMC-DEVNET
+```
+
+ChainID MUST participate in transaction-domain separation.
+
+This prevents a valid transaction from one network being blindly replayed onto another network.
+
+---
+
+# 8. Block Structure
+
+A block consists of:
+
+```text id="7x3r4d"
+Block
+├── Header
+├── Transactions
+├── Consensus Data
+└── Optional Extension Data
+```
+
+---
+
+# 9. Block Header
+
+Proposed block header:
+
+```text id="0v8k2p"
+BlockHeader {
+    version
+    chain_id
+    height
+    previous_block_hash
+    state_root
+    transaction_root
+    receipt_root
+    consensus_root
+    timestamp
+    proposer_id
+    randomness_commitment
+    protocol_flags
+}
+```
+
+Fields are consensus-critical.
+
+---
+
+# 10. Block Height
+
+Genesis block:
+
+```text
+height = 0
+```
+
+Each subsequent block increments height by exactly one.
+
+A block claiming:
+
+```text
+height = previous.height + N
+```
+
+where `N != 1` MUST be rejected unless the protocol explicitly defines checkpoint synchronization.
+
+---
+
+# 11. Previous Block Hash
+
+Every block except genesis MUST reference the hash of the immediately preceding canonical block.
+
+This creates the blockchain linkage:
+
+```text
+Block N
+   ↓ previous_hash
+Block N-1
+   ↓ previous_hash
+Block N-2
+```
+
+---
+
+# 12. State Root
+
+The `state_root` commits to the complete canonical blockchain state represented by the block.
+
+The state root MUST change deterministically when state changes.
+
+Potential implementation:
+
+```text
+Merkleized State Tree
+```
+
+or another authenticated state structure.
+
+The final structure must be specified in the state-layer specification.
+
+---
+
+# 13. Transaction Root
+
+All transactions included in a block MUST be committed through a deterministic transaction commitment.
+
+Recommended architecture:
+
+```text id="v4r6s2"
+TX1 ─┐
+TX2 ─┼─> Merkle Tree ─> transaction_root
+TX3 ─┤
+TX4 ─┘
+```
+
+The exact tree construction must be deterministic.
+
+---
+
+# 14. Receipt Root
+
+The receipt root commits to transaction execution results.
+
+A receipt may contain:
+
+```text id="g7x2qn"
+Transaction ID
+Status
+Gas/Fee consumed
+Execution result
+Events
+Block height
+```
+
+Private transaction receipts MUST NOT accidentally reveal protected transaction information.
+
+---
+
+# 15. Transaction Model
+
+HSMC supports at least two transaction classes:
+
+```text
+PUBLIC
+PRIVATE
+```
+
+Future transaction types may include:
+
+```text
+STAKE
+UNSTAKE
+VALIDATOR
+GOVERNANCE
+ASSET
+CONTRACT
+BRIDGE
+PAYMENT
+```
+
+Each transaction type MUST have a unique type identifier.
+
+---
+
+# 16. Generic Transaction Structure
+
+```text id="2k9r7c"
+Transaction {
+    version
+    chain_id
+    type
+    nonce
+    sender
+    payload
+    fee
+    expiry
+    signature
+    extensions
+}
+```
+
+The exact binary serialization format MUST be canonical.
+
+---
+
+# 17. Transaction ID
+
+The transaction ID MUST be derived deterministically from the canonical serialized transaction.
+
+Example conceptual model:
+
+```text
+txid = HASH(canonical_transaction_bytes)
+```
+
+The hashing algorithm is defined by the cryptographic specification.
+
+---
+
+# 18. Canonical Serialization
+
+The same transaction MUST produce exactly the same byte representation on every implementation.
+
+Requirements:
+
+* deterministic field order;
+* deterministic integer encoding;
+* deterministic length encoding;
+* no ambiguous representations;
+* no platform-dependent serialization.
+
+Possible implementations:
+
+* custom binary codec;
+* canonical CBOR;
+* another formally specified binary format.
+
+JSON MUST NOT be used as the consensus serialization format.
+
+JSON may be used at RPC/API boundaries.
+
+---
+
+# 19. Nonce
+
+Every account transaction MUST contain a nonce or equivalent replay-prevention mechanism.
+
+Example:
+
+```text id="9s1k4b"
+Account A
+
+Nonce 0 → TX A
+Nonce 1 → TX B
+Nonce 2 → TX C
+```
+
+A transaction with an invalid nonce MUST be rejected according to the protocol's nonce rules.
+
+---
+
+# 20. Transaction Expiry
+
+Transactions may contain:
+
+* expiration block;
+* expiration timestamp;
+* or another bounded validity mechanism.
+
+Expired transactions MUST NOT become valid again merely because they remain in a node's mempool.
+
+---
+
+# 21. Public Transaction
+
+Proposed public payment:
+
+```text id="7m2q5x"
+PublicTransfer {
+    sender
+    recipient
+    amount
+    asset_id
+    memo_optional
+}
+```
+
+The transaction is authorized by the sender's cryptographic signature.
+
+---
+
+# 22. Private Transaction
+
+Private transactions MUST NOT simply encrypt a public transaction and assume that privacy is achieved.
+
+The protocol requires cryptographic state-transition proofs.
+
+Conceptually:
+
+```text
+PrivateTransaction {
+    commitment
+    nullifier
+    proof
+    encrypted_payload
+    fee_data
+    authorization_data
+}
+```
+
+The final implementation will be defined by the Privacy Specification.
+
+---
+
+# 23. Privacy Invariants
+
+A valid private transaction MUST prove, according to the selected privacy protocol:
+
+1. the transaction is authorized;
+2. the consumed state exists;
+3. the consumed state has not already been spent;
+4. the transaction does not create unauthorized value;
+5. the proof is valid;
+6. the resulting state is valid.
+
+---
+
+# 24. Nullifiers
+
+Private spending may use nullifiers.
+
+Conceptually:
+
+```text
+Private Output
+      │
+      ▼
+Secret
+      │
+      ▼
+Nullifier
+      │
+      ▼
+Network checks uniqueness
+```
+
+A nullifier MUST NOT reveal the private transaction details it protects, assuming the privacy construction is correctly implemented.
+
+A previously used nullifier MUST cause the transaction to fail validation.
+
+---
+
+# 25. Commitments
+
+Private outputs may be represented by commitments.
+
+Conceptually:
+
+```text
+commitment = HASH(secret_data)
+```
+
+The actual commitment construction must use a cryptographically reviewed construction suitable for the selected ZK system.
+
+---
+
+# 26. Addresses
+
+HSMC addresses MUST be network-specific.
+
+An address should encode enough information to distinguish:
+
+* network;
+* address type;
+* version;
+* checksum.
+
+Potential structure:
+
+```text id="6n8p2w"
+Address {
+    network
+    version
+    type
+    payload
+    checksum
+}
+```
+
+Addresses MUST NOT rely solely on visual formatting for security.
+
+---
+
+# 27. Address Types
+
+Initial types:
+
+```text
+PUBLIC
+PRIVATE
+```
+
+Future types may include:
+
+```text
+MULTISIG
+SCRIPT
+CONTRACT
+HARDWARE
+THRESHOLD
+```
+
+---
+
+# 28. Cryptographic Authorization
+
+Every spend MUST be authorized by an appropriate cryptographic mechanism.
+
+Potential signature profiles:
+
+```text
+CLASSICAL
+PQ
+HYBRID
+MULTISIG
+THRESHOLD
+```
+
+The exact signature scheme is defined in the HSMC Cryptographic Specification.
+
+---
+
+# 29. Hybrid Signature Model
+
+A high-security transaction may require:
+
+```text
+Classical Signature
+        +
+Post-Quantum Signature
+        ↓
+Valid only if required signatures verify
+```
+
+This provides defense against compromise of one cryptographic family.
+
+The protocol must define whether hybrid signatures are:
+
+* mandatory;
+* optional;
+* account-configurable;
+* transaction-configurable.
+
+---
+
+# 30. Fee Model
+
+Every transaction must specify or derive a fee according to protocol rules.
+
+Fee calculation MUST be deterministic.
+
+The fee mechanism must account for:
+
+* transaction size;
+* computation;
+* state access;
+* congestion;
+* minimum fee.
+
+The whitepaper's proposed economic target:
+
+(**Original: "base fee 1 EUR/USD; congestion up to 3 EUR/USD."**)
+
+is an economic policy target, not necessarily a consensus-level literal fee.
+
+The protocol should calculate fees in native units and use an oracle/conversion mechanism only where an application wants to display the approximate fiat cost.
+
+---
+
+# 31. Fee Calculation
+
+Conceptual model:
+
+```text
+Fee =
+BaseFee
++
+ResourceFee
++
+CongestionAdjustment
++
+PriorityFee
+```
+
+The final formula must be frozen before mainnet.
+
+---
+
+# 32. Small-Balance Protection
+
+(**Original: "minimal fee of 0.10 applies to avoid draining their balance."**)
+
+The protocol may provide a minimum-fee protection mechanism.
+
+However, a rule that allows a transaction to pay less than the actual network cost can create spam or economic attacks.
+
+Therefore the final design must distinguish:
+
+* protocol fee;
+* subsidized fee;
+* sponsored transaction;
+* wallet UI protection.
+
+A better architecture may be:
+
+```text
+Normal transaction
+      ↓
+Normal fee
+
+Small balance
+      ↓
+Fee sponsorship / subsidy
+      ↓
+Treasury or designated sponsor
+```
+
+rather than silently changing consensus fees based only on wallet balance.
+
+---
+
+# 33. Mempool
+
+Each node maintains a local mempool containing transactions not yet finalized.
+
+Mempool requirements:
+
+* signature validation;
+* nonce validation;
+* fee validation;
+* expiration handling;
+* duplicate detection;
+* rate limiting;
+* memory limits;
+* transaction eviction;
+* peer propagation.
+
+---
+
+# 34. Mempool Rules
+
+A node MUST NOT blindly forward every transaction it receives.
+
+Validation should occur before propagation.
+
+Invalid transactions SHOULD be dropped.
+
+Suspicious or abusive peers MAY be rate-limited or temporarily banned.
+
+---
+
+# 35. Transaction Propagation
+
+Conceptual flow:
+
+```text
+Wallet
+   ↓
+Node A
+   ↓
+Peer B ─ Peer C ─ Peer D
+   ↓
+Validator
+```
+
+Gossip propagation should minimize:
+
+* redundant traffic;
+* spam;
+* eclipse attacks;
+* malicious peer amplification.
+
+---
+
+# 36. Peer-to-Peer Network
+
+HSMC nodes communicate through a secure P2P protocol.
+
+Required capabilities:
+
+* peer discovery;
+* handshake;
+* peer authentication where appropriate;
+* block propagation;
+* transaction propagation;
+* state synchronization;
+* peer scoring;
+* connection limits.
+
+---
+
+# 37. Peer Identity
+
+Each node should have a cryptographic identity.
+
+Node identity SHOULD be independent of:
+
+* IP address;
+* physical server;
+* cloud provider.
+
+This allows node identity management to survive infrastructure changes.
+
+---
+
+# 38. Peer Discovery
+
+Potential mechanisms:
+
+* bootstrap nodes;
+* DNS discovery;
+* signed peer lists;
+* DHT;
+* peer exchange;
+* static configuration.
+
+Bootstrap infrastructure MUST NOT become a consensus dependency.
+
+---
+
+# 39. Eclipse Attack Protection
+
+Nodes should maintain diverse peers across:
+
+* IP ranges;
+* autonomous systems;
+* geographic regions;
+* operators;
+* infrastructure providers.
+
+Peer selection should avoid connecting exclusively to one infrastructure cluster.
+
+---
+
+# 40. Consensus
+
+The current architecture targets a BFT-style proof-of-stake consensus system.
+
+(**Original: "BFT PoS / Tendermint-like, DPoS/PoS with delegation, optional PoW."**)
+
+The exact consensus algorithm must be selected based on:
+
+* safety;
+* liveness;
+* decentralization;
+* performance;
+* validator economics;
+* attack resistance.
+
+The protocol MUST NOT describe itself as "Tendermint-like" in the final technical specification unless it actually adopts the relevant algorithmic properties.
+
+---
+
+# 41. Validator Set
+
+Validators participate in block production and finality.
+
+Each validator has:
+
+* validator identity;
+* voting power;
+* cryptographic keys;
+* stake;
+* status;
+* uptime metrics;
+* protocol version.
+
+---
+
+# 42. Validator Lifecycle
+
+```text id="2z5q7m"
+REGISTER
+   ↓
+BOND / STAKE
+   ↓
+ELIGIBLE
+   ↓
+ACTIVE
+   ↓
+INACTIVE / JAILED
+   ↓
+UNBOND
+   ↓
+WITHDRAW
+```
+
+Exact state transitions must be specified.
+
+---
+
+# 43. Validator Selection
+
+Validator selection may be stake-weighted.
+
+The protocol must prevent trivial centralization through:
+
+* stake concentration;
+* delegated stake concentration;
+* validator identity duplication.
+
+Possible mitigations:
+
+* delegation limits;
+* validator caps;
+* diminishing returns;
+* governance mechanisms;
+* geographic/network diversity incentives.
+
+---
+
+# 44. Block Proposal
+
+A selected validator proposes:
+
+```text
+BlockHeader
++
+Transactions
++
+Consensus Data
+```
+
+Other validators verify:
+
+* proposer eligibility;
+* previous block;
+* transactions;
+* state transition;
+* consensus metadata.
+
+---
+
+# 45. Block Voting
+
+Validators participate in consensus voting.
+
+Conceptual model:
+
+```text
+PROPOSE
+   ↓
+PREVOTE
+   ↓
+PRECOMMIT
+   ↓
+FINALIZE
+```
+
+This is conceptual only.
+
+The exact state machine must be defined by the final consensus implementation.
+
+---
+
+# 46. Byzantine Fault Model
+
+If using a BFT-style consensus, the protocol must explicitly define its fault assumptions.
+
+For example:
+
+```text
+n = total validator voting power
+f = Byzantine voting power
+```
+
+The system must define the threshold required for:
+
+* proposal;
+* voting;
+* finality;
+* emergency recovery.
+
+The final protocol must mathematically define the safety assumptions.
+
+---
+
+# 47. Finality
+
+Finality means that a block is considered irreversible under the protocol's consensus assumptions.
+
+The node MUST distinguish:
+
+```text
+UNCONFIRMED
+CONFIRMED
+FINALIZED
+```
+
+Applications such as HSMCPay should use finalized state for high-value settlement.
+
+---
+
+# 48. Fork Handling
+
+Nodes may temporarily observe competing branches.
+
+The protocol must define:
+
+* branch selection;
+* fork resolution;
+* finality protection;
+* invalid branch rejection;
+* recovery after network partition.
+
+A finalized block MUST NOT be silently replaced by a conflicting branch.
+
+---
+
+# 49. Chain Reorganization
+
+If the consensus design permits temporary reorganizations before finality, nodes must define:
+
+* maximum expected reorg depth;
+* state rollback;
+* transaction re-entry;
+* receipt invalidation;
+* application notification.
+
+Finalized state should not be reorganized under normal operation.
+
+---
+
+# 50. Genesis Block
+
+Genesis contains:
+
+* chain ID;
+* initial state;
+* initial supply;
+* genesis validators;
+* protocol parameters;
+* cryptographic parameters;
+* timestamp;
+* genesis hash.
+
+The genesis configuration MUST be deterministically reproducible.
+
+---
+
+# 51. Initial Supply
+
+Proposed:
+
+**500,000,000 HSMC**
+
+The exact allocation must be encoded into genesis state.
+
+Genesis allocation MUST be auditable.
+
+---
+
+# 52. Protocol Parameters
+
+Consensus-critical parameters must be versioned.
+
+Examples:
+
+```text
+block_time
+max_block_size
+max_tx_size
+minimum_fee
+staking_requirement
+validator_limit
+finality_threshold
+```
+
+Parameters MUST have explicit units and encoding.
+
+---
+
+# 53. Parameter Changes
+
+Protocol parameters may be changed through governance or protocol upgrade.
+
+A parameter change MUST define:
+
+* proposal;
+* approval;
+* activation height;
+* compatibility;
+* rollback/emergency behavior.
+
+---
+
+# 54. Protocol Version
+
+Every block MUST identify the protocol version.
+
+Example:
+
+```text
+protocol_version = 1
+```
+
+Nodes should reject incompatible blocks according to version rules.
+
+---
+
+# 55. Hard Fork
+
+A consensus-breaking protocol change requires a coordinated protocol upgrade.
+
+The project must define:
+
+* activation height;
+* minimum node version;
+* migration;
+* state compatibility;
+* rollback procedure.
+
+---
+
+# 56. Soft Fork
+
+Where possible, backwards-compatible restrictions may be introduced without requiring all nodes to immediately upgrade.
+
+This depends on the final consensus architecture.
+
+---
+
+# 57. State Storage
+
+The node requires persistent state storage.
+
+Logical databases:
+
+```text id="4f7m1z"
+Blockchain
+├── Blocks
+├── BlockHeaders
+├── Transactions
+├── Receipts
+├── State
+├── Validators
+├── Mempool
+└── Indexes
+```
+
+The exact database engine is an implementation decision.
+
+---
+
+# 58. State Machine
+
+The HSMC state machine processes:
+
+```text
+Previous State
++
+Transaction
+=
+New State
+```
+
+The result MUST be deterministic.
+
+Two honest nodes processing identical valid input MUST produce identical resulting state.
+
+---
+
+# 59. State Transition Function
+
+Conceptually:
+
+```text id="7y2n4x"
+apply(
+    previous_state,
+    transaction
+)
+→
+{
+    new_state,
+    receipt
+}
+```
+
+This function is consensus-critical.
+
+---
+
+# 60. State Invariants
+
+The protocol MUST preserve invariants including:
+
+### No unauthorized creation
+
+A transaction cannot create HSMC outside defined issuance rules.
+
+### No unauthorized spending
+
+A user cannot spend another user's funds.
+
+### No duplicate spending
+
+The same spend cannot be finalized twice.
+
+### Conservation
+
+Total supply must follow defined issuance/burn rules.
+
+### Determinism
+
+State transitions must be deterministic.
+
+---
+
+# 61. Supply Rules
+
+The protocol must explicitly define:
+
+```text
+initial_supply
++
+issuance
+-
+burn
+=
+circulating_supply
+```
+
+If staking rewards create new HSMC, issuance must be explicitly represented.
+
+---
+
+# 62. Burn Mechanism
+
+If fees are partially burned, the burn must be consensus-visible.
+
+If fees are distributed instead, distribution must also be deterministic.
+
+The final economics must select one clearly defined model.
+
+---
+
+# 63. Transaction Validation Pipeline
+
+A node should validate transactions in stages:
+
+```text
+Receive
+  ↓
+Deserialize
+  ↓
+Format Validation
+  ↓
+Version Validation
+  ↓
+Chain ID Validation
+  ↓
+Signature Validation
+  ↓
+Nonce Validation
+  ↓
+Balance / State Validation
+  ↓
+Fee Validation
+  ↓
+Privacy Proof Validation (if private)
+  ↓
+Mempool
+  ↓
+Block
+```
+
+---
+
+# 64. Block Validation Pipeline
+
+```text id="q2n8xc"
+Receive Block
+    ↓
+Decode
+    ↓
+Header Validation
+    ↓
+Previous Block Validation
+    ↓
+Consensus Validation
+    ↓
+Transaction Validation
+    ↓
+State Transition
+    ↓
+State Root Check
+    ↓
+Transaction Root Check
+    ↓
+Receipt Root Check
+    ↓
+Accept / Reject
+```
+
+---
+
+# 65. Node Startup
+
+A node startup sequence:
+
+```text id="j4p6wd"
+Load Configuration
+       ↓
+Load Cryptographic Keys
+       ↓
+Initialize Database
+       ↓
+Load Last State
+       ↓
+Initialize Network
+       ↓
+Discover Peers
+       ↓
+Synchronize
+       ↓
+Verify State
+       ↓
+Enter Consensus / Full Node Mode
+```
+
+---
+
+# 66. Crash Recovery
+
+If a node crashes during block processing:
+
+1. restart;
+2. inspect last durable state;
+3. verify last finalized block;
+4. recover incomplete operations;
+5. synchronize missing data;
+6. resume normal operation.
+
+The database layer must provide atomicity sufficient for deterministic recovery.
+
+---
+
+# 67. Snapshot Synchronization
+
+For large chains, nodes may use verified snapshots.
+
+Snapshots MUST contain:
+
+* state;
+* block reference;
+* state root;
+* protocol version;
+* verification metadata.
+
+A node MUST cryptographically verify the snapshot before trusting it.
+
+---
+
+# 68. Fast Synchronization
+
+Future optimization may support:
+
+* checkpoint sync;
+* state sync;
+* snapshot sync;
+* parallel block download.
+
+Fast sync MUST NOT bypass cryptographic verification.
+
+---
+
+# 69. Time
+
+Consensus-critical timestamps MUST NOT blindly trust local system time.
+
+The protocol must define:
+
+* allowed clock drift;
+* block timestamp rules;
+* validator time behavior;
+* timestamp validation.
+
+---
+
+# 70. Randomness
+
+If validator selection or protocol logic requires randomness, the randomness source must be explicitly specified.
+
+Possible mechanisms:
+
+* VRF;
+* threshold randomness;
+* commit-reveal;
+* consensus-derived randomness.
+
+Randomness MUST be resistant to trivial proposer manipulation.
+
+---
+
+# 71. Anti-Spam
+
+HSMC should implement:
+
+* minimum fees;
+* transaction size limits;
+* mempool limits;
+* peer rate limits;
+* per-account transaction limits where appropriate;
+* computational cost limits.
+
+Anti-spam measures MUST NOT accidentally prevent legitimate low-value payments.
+
+---
+
+# 72. Denial-of-Service Resistance
+
+Nodes should protect:
+
+* P2P connections;
+* RPC;
+* transaction processing;
+* block processing;
+* cryptographic verification;
+* memory;
+* disk;
+* CPU.
+
+Expensive cryptographic operations may require appropriate fees or limits.
+
+---
+
+# 73. RPC
+
+The node should expose a versioned RPC interface.
+
+Example:
+
+```text id="6k1v8q"
+GET  /v1/status
+GET  /v1/block/{height}
+GET  /v1/transaction/{txid}
+GET  /v1/account/{address}
+POST /v1/transaction/broadcast
+GET  /v1/network
+GET  /v1/validators
+```
+
+The final API specification is maintained separately.
+
+---
+
+# 74. WebSocket
+
+WebSocket/event subscriptions may provide:
+
+* new block;
+* transaction status;
+* finality;
+* account updates;
+* validator events.
+
+---
+
+# 75. Explorer
+
+The HSMC explorer should provide:
+
+* block search;
+* transaction search;
+* account search;
+* validator information;
+* network statistics.
+
+Private transactions must not be exposed through the explorer beyond what the protocol intentionally makes public.
+
+---
+
+# 76. Node CLI
+
+Example:
+
+```text id="8g3p2n"
+hsmcd start
+hsmcd status
+hsmcd sync
+hsmcd peers
+hsmcd wallet
+hsmcd validator
+hsmcd version
+hsmcd export-state
+hsmcd import-state
+```
+
+Exact commands are implementation-defined.
+
+---
+
+# 77. Rust Architecture
+
+Recommended conceptual structure:
+
+```text id="5z7m1q"
+hsmc/
+│
+├── core/
+│   ├── types/
+│   ├── hashing/
+│   ├── serialization/
+│   └── primitives/
+│
+├── crypto/
+│   ├── signatures/
+│   ├── pqc/
+│   ├── keys/
+│   └── proofs/
+│
+├── ledger/
+│   ├── state/
+│   ├── accounts/
+│   ├── assets/
+│   └── transactions/
+│
+├── consensus/
+│   ├── validator/
+│   ├── proposer/
+│   ├── voting/
+│   └── finality/
+│
+├── network/
+│   ├── p2p/
+│   ├── discovery/
+│   ├── gossip/
+│   └── sync/
+│
+├── mempool/
+│
+├── storage/
+│
+├── rpc/
+│
+├── node/
+│
+└── tests/
+```
+
+This is a recommended logical architecture, not a mandatory filesystem structure.
+
+---
+
+# 78. Rust Safety Requirements
+
+Consensus-critical Rust code MUST prioritize:
+
+* memory safety;
+* deterministic behavior;
+* explicit error handling;
+* no undefined behavior;
+* controlled dependencies;
+* minimal unsafe code;
+* fuzz testing;
+* property testing.
+
+`unsafe` code should be avoided in consensus-critical paths unless formally justified and reviewed.
+
+---
+
+# 79. Dependency Management
+
+Dependencies must be:
+
+* pinned;
+* reviewed;
+* vulnerability-scanned;
+* reproducibly built.
+
+Critical cryptographic dependencies require special review.
+
+---
+
+# 80. Reproducible Builds
+
+The project should provide reproducible node builds.
+
+Given:
+
+```text
+same source
++
+same dependencies
++
+same build configuration
+```
+
+the resulting binary should be reproducible.
+
+---
+
+# 81. Cryptographic Agility
+
+The protocol MUST include versioned cryptographic identifiers.
+
+Example:
+
+```text
+signature_algorithm = 1
+key_exchange_algorithm = 1
+hash_algorithm = 1
+```
+
+Future algorithms can then be introduced without redesigning the entire protocol.
+
+---
+
+# 82. Protocol Extensions
+
+Future protocol features should use explicit extension identifiers.
+
+Example:
+
+```text
+extension_id
+extension_version
+extension_payload
+```
+
+Unknown optional extensions may be ignored where safe.
+
+Unknown consensus-critical extensions MUST cause rejection.
+
+---
+
+# 83. Governance Transactions
+
+Future governance transactions may contain:
+
+```text
+proposal
+vote
+delegation
+parameter_change
+upgrade
+```
+
+Governance is an application of protocol state and must follow consensus rules.
+
+---
+
+# 84. Validator Slashing
+
+If slashing is implemented, the protocol must define punishable behavior.
+
+Potential violations:
+
+* double signing;
+* invalid block proposal;
+* malicious consensus behavior;
+* extended downtime.
+
+Slashing must be carefully designed to avoid punishing validators for ordinary network failures.
+
+---
+
+# 85. Delegation
+
+Users may delegate stake to validators.
+
+Delegation must define:
+
+* ownership;
+* rewards;
+* validator responsibility;
+* undelegation period;
+* slashing effects;
+* voting rights.
+
+---
+
+# 86. Validator Commission
+
+If delegation is supported, validators may charge a commission.
+
+Commission rules must be:
+
+* visible;
+* deterministic;
+* bounded;
+* change-controlled.
+
+---
+
+# 87. Staking Withdrawal
+
+Unstaking may use an unbonding period.
+
+This reduces certain long-range and governance attacks and provides time for protocol enforcement.
+
+Exact duration is a protocol parameter.
+
+---
+
+# 88. Security Boundary
+
+The HSMC core security boundary includes:
+
+```text
+Consensus
+State
+Cryptographic Verification
+Block Validation
+Transaction Validation
+```
+
+The following are outside the minimum consensus boundary:
+
+```text
+Wallet UI
+Explorer
+Merchant UI
+External Exchange
+Stripe
+PayPal
+Visa
+Mastercard
+Bank
+```
+
+This distinction is fundamental.
+
+---
+
+# 89. External Dependency Rule
+
+If an external service disappears, HSMC should continue operating unless that service is explicitly required for the specific operation being performed.
+
+Example:
+
+```text
+External fiat provider unavailable
+        ↓
+Fiat conversion unavailable
+        ↓
+Native HSMC transfers remain operational
+```
+
+---
+
+# 90. Network Degradation
+
+If network conditions degrade:
+
+* nodes should continue operating where possible;
+* consensus should follow its safety/liveness guarantees;
+* applications should receive accurate status;
+* transactions should not be falsely reported as finalized.
+
+---
+
+# 91. Security Event Model
+
+Nodes should emit structured security events:
+
+```text
+PEER_BANNED
+INVALID_BLOCK
+INVALID_TRANSACTION
+CONSENSUS_FAILURE
+ORACLE_FAILURE
+KEY_COMPROMISE
+PROTOCOL_ERROR
+STATE_MISMATCH
+```
+
+Sensitive data must not be logged unnecessarily.
+
+---
+
+# 92. Logging
+
+Logs must support:
+
+* debugging;
+* monitoring;
+* incident response;
+* audit.
+
+Logs MUST NOT contain:
+
+* private keys;
+* seed phrases;
+* secrets;
+* unnecessary private transaction information.
+
+---
+
+# 93. Metrics
+
+Nodes should expose metrics for:
+
+* block time;
+* finality time;
+* peer count;
+* transaction rate;
+* mempool size;
+* CPU;
+* memory;
+* disk;
+* consensus participation;
+* validator uptime.
+
+---
+
+# 94. Observability
+
+Production infrastructure should support:
+
+```text
+Metrics
++
+Logs
++
+Tracing
++
+Alerts
+```
+
+Monitoring infrastructure must itself be redundant.
+
+---
+
+# 95. Testing Requirements
+
+## Unit
+
+All deterministic core modules.
+
+## Integration
+
+Cross-module behavior.
+
+## Property
+
+State invariants.
+
+## Fuzz
+
+Serialization, networking, transactions.
+
+## Consensus Simulation
+
+Byzantine validators.
+
+## Load
+
+High transaction volume.
+
+## Recovery
+
+Crash/restart.
+
+## Network Partition
+
+Disconnected validator groups.
+
+## Adversarial
+
+Malicious peers and malformed blocks.
+
+---
+
+# 96. Mandatory Protocol Tests
+
+The following MUST exist before mainnet:
+
+```text
+TEST-PROTO-001
+Valid transaction accepted
+
+TEST-PROTO-002
+Invalid signature rejected
+
+TEST-PROTO-003
+Replay rejected
+
+TEST-PROTO-004
+Double spend rejected
+
+TEST-PROTO-005
+Invalid nonce rejected
+
+TEST-PROTO-006
+Invalid fee rejected
+
+TEST-PROTO-007
+Malformed transaction rejected
+
+TEST-PROTO-008
+Invalid block rejected
+
+TEST-PROTO-009
+Invalid state root rejected
+
+TEST-PROTO-010
+Invalid previous hash rejected
+
+TEST-PROTO-011
+Invalid consensus proof rejected
+
+TEST-PROTO-012
+Chain ID replay rejected
+
+TEST-PROTO-013
+Node restart recovery succeeds
+
+TEST-PROTO-014
+Network partition behavior matches specification
+
+TEST-PROTO-015
+Private proof validation succeeds
+
+TEST-PROTO-016
+Invalid private proof rejected
+```
+
+---
+
+# 97. Mainnet Acceptance Criteria
+
+HSMC core MUST NOT be considered production-ready until:
+
+* consensus is finalized;
+* state transition is deterministic;
+* transaction format is frozen;
+* block format is frozen;
+* cryptographic algorithms are reviewed;
+* P2P protocol is tested;
+* synchronization is tested;
+* crash recovery is tested;
+* adversarial testing is completed;
+* external security audit is completed;
+* reproducible builds are available;
+* monitoring exists;
+* incident response exists;
+* upgrade mechanism exists.
+
+---
+
+# 98. Implementation Order
+
+The development order should be:
+
+```text id="7f9c3m"
+1. Core types
+      ↓
+2. Serialization
+      ↓
+3. Hashing
+      ↓
+4. Cryptographic identity
+      ↓
+5. Transactions
+      ↓
+6. State
+      ↓
+7. Block
+      ↓
+8. Validation
+      ↓
+9. Storage
+      ↓
+10. Mempool
+      ↓
+11. P2P
+      ↓
+12. Synchronization
+      ↓
+13. Consensus
+      ↓
+14. Finality
+      ↓
+15. RPC
+      ↓
+16. Testnet
+      ↓
+17. Security testing
+```
+
+---
+
+# 99. Definition of Done — Core Blockchain
+
+The core blockchain is considered complete for testnet when:
+
+### Blockchain
+
+* blocks are created;
+* blocks are validated;
+* blocks are persisted;
+* state roots are deterministic.
+
+### Transactions
+
+* transactions can be created;
+* signed;
+* broadcast;
+* validated;
+* included;
+* finalized.
+
+### Networking
+
+* nodes discover each other;
+* transactions propagate;
+* blocks propagate;
+* nodes synchronize.
+
+### Consensus
+
+* validators participate;
+* blocks receive votes;
+* finality occurs;
+* invalid blocks are rejected.
+
+### Recovery
+
+* node restart works;
+* state recovery works;
+* synchronization resumes.
+
+---
+
+# 100. Testnet Definition
+
+The first HSMC testnet should provide:
+
+* public node binary;
+* genesis configuration;
+* chain ID;
+* faucet;
+* explorer;
+* RPC;
+* wallet;
+* validator instructions;
+* monitoring;
+* bug reporting.
+
+The testnet is not economically equivalent to mainnet.
+
+---
+
+# 101. Testnet Phases
+
+### Devnet
+
+Single developer environment.
+
+### Private Testnet
+
+Controlled nodes.
+
+### Public Testnet
+
+Open node participation.
+
+### Adversarial Testnet
+
+Intentional attacks and failure simulations.
+
+### Incentivized Testnet
+
+Participants receive defined rewards for testing.
+
+---
+
+# 102. Mainnet Genesis Requirements
+
+Before mainnet genesis:
+
+* genesis state frozen;
+* validator set verified;
+* chain ID frozen;
+* protocol parameters frozen;
+* cryptographic identifiers frozen;
+* genesis hash independently reproduced;
+* binaries reproducibly built;
+* launch procedure tested.
+
+---
+
+# 103. Protocol Change Management
+
+Every protocol change must have:
+
+```text
+Proposal
+ ↓
+Specification
+ ↓
+Implementation
+ ↓
+Tests
+ ↓
+Security Review
+ ↓
+Testnet
+ ↓
+Adversarial Testing
+ ↓
+Approval
+ ↓
+Activation
+```
+
+No consensus-critical change should be deployed directly to mainnet without this lifecycle.
+
+---
+
+# 104. Security Philosophy
+
+HSMC must never rely on:
+
+> "Nobody knows how the system works."
+
+Instead:
+
+> **The system should remain secure even when attackers understand the protocol completely.**
+
+Security comes from:
+
+* mathematics;
+* cryptography;
+* consensus;
+* economic incentives;
+* code correctness;
+* testing;
+* operational discipline.
+
+---
+
+# 105. Protocol Invariants
+
+The following are permanent design invariants unless a formally approved protocol upgrade changes them:
+
+1. No unauthorized spending.
+2. No invalid state transition.
+3. No invalid finalized block.
+4. No silent double spend.
+5. No cross-chain replay.
+6. Deterministic state.
+7. Deterministic validation.
+8. Cryptographic authorization.
+9. Explicit protocol versioning.
+10. Auditable state transitions.
+
+---
+
+# 106. Final Technical Principle
+
+HSMC is not considered complete because:
+
+> "the node runs."
+
+It is complete only when the network can demonstrate:
+
+```text
+Correctness
++
+Security
++
+Determinism
++
+Finality
++
+Recovery
++
+Scalability
++
+Observability
++
+Upgradeability
+```
+
+under realistic and adversarial conditions.
+
+---
+
+# 107. Next Specification
+
+This document defines the **HSMC blockchain protocol**.
+
+The next engineering document is:
+
+# HSMC NODE TECHNICAL SPECIFICATION
+
+It will define the actual Rust node in significantly greater detail:
+
+```text
+Node
+├── P2P
+├── Consensus
+├── Mempool
+├── Storage
+├── State Engine
+├── Block Engine
+├── Transaction Engine
+├── Crypto
+├── RPC
+├── Sync
+├── Validator
+├── Configuration
+├── Logging
+├── Metrics
+└── Security
+```
+
+That document will convert this protocol into:
+
+**EPIC → TASK → SUBTASK → FILE/MODULE → FUNCTION → INPUT → OUTPUT → ERROR → TEST → ACCEPTANCE CRITERIA.**
+
+That is the point where the specification becomes directly actionable for the Rust developers building HSMC.
+Da. Acum că am documentul complet în față, da — asta schimbă mult discuția. Nu vorbim despre „o idee de blockchain + un payment app”. Ai deja o viziune de ecosistem: HSMC blockchain + HSMC Pay + wallet + privacy + liquidity + stablecoins + interoperability + propriul node/network.
+
+Și mai văd ceva important: documentul tău spune deja explicit că HSMCPay trebuie să poată funcționa independent în interiorul HSMC, iar cardurile Visa/Mastercard sunt doar o extensie prin parteneri licențiați. Asta este direcția corectă.
+
+Totuși, aș face câteva corecții tehnice înainte să-l consider „spec final”.
+
+1. Aș separa clar „HSMC” de „HSMC token”
+
+În document spui:
+
+HSMC is both the blockchain and the native token
+
+Aș formula mai precis:
+
+HSMC Network = blockchain/protocol
+HSMC = native asset/token
+HSMC Pay = payment infrastructure
+HSMC Wallet = client/custody interface
+
+Asta îi ajută enorm pe developeri să nu confunde protocolul cu activul.
+
+2. Aș schimba puțin partea cu „quantum”
+
+Nu aș spune pur și simplu „quantum blockchain”.
+
+Mai corect tehnic este:
+
+Quantum-resistant / post-quantum capable blockchain
+
+Și aici aș actualiza documentul: CRYSTALS-Kyber și CRYSTALS-Dilithium au fost standardizate de NIST sub denumirile ML-KEM și ML-DSA. Pentru un whitepaper actualizat în 2026, merită folosite denumirile standardizate.
+
+3. „Instant conversion” trebuie definită
+
+Aici este o diferență foarte importantă.
+
+HSMC poate face instant:
+
+HSMC → USDHSMC
+
+dacă există lichiditate.
+
+Dar:
+
+HSMC → USD bancar
+
+nu este doar o funcție blockchain. Ai nevoie de un fiat rail, custodie/settlement și infrastructură juridică.
+
+Aș defini în whitepaper:
+
+Native conversion: protocol-level conversion between HSMC-native assets and supported liquidity pools.
+
+și separat:
+
+Fiat conversion: external regulated gateway connecting HSMC to banking/payment infrastructure.
+
+Asta face documentul mult mai greu de atacat.
+
+Iar HSMCPay l-aș reconstrui astfel
+
+Nu:
+
+HSMCPay = Visa competitor
+
+ci:
+
+HSMCPay = native payment protocol and settlement engine for HSMC.
+
+Cardurile sunt doar unul dintre „edges”.
+
+                       HSMC NETWORK
+                             │
+                     ┌───────▼───────┐
+                     │    HSMCPay    │
+                     │ Payment Core  │
+                     └───────┬───────┘
+                             │
+        ┌────────────┬───────┼────────┬────────────┐
+        │            │       │        │            │
+      Wallet      Merchant   QR      API      Settlement
+        │            │       │        │            │
+        └────────────┴───────┼────────┴────────────┘
+                             │
+                    External Gateways
+                             │
+             ┌───────────────┼───────────────┐
+             │               │               │
+           Banks         Card Networks     Exchanges
+
+HSMCPay funcționează fără partea de jos.
+
+Partea de jos există doar pentru interoperabilitate.
+
+Asta este exact filozofia pe care mi-ai descris-o.
+
+Și aici aș adăuga o regulă foarte importantă
+Failure Independence
+
+În specificația HSMCPay aș pune explicit:
+
+No external payment provider, card network, exchange, bank, liquidity provider, oracle provider or fiat gateway shall constitute a single point of failure for native HSMC-to-HSMC transactions.
+
+În română, pe înțeles:
+
+Dacă Stripe cade, HSMC continuă.
+Dacă Visa cade, HSMC continuă.
+Dacă un exchange cade, HSMC continuă.
+Dacă un oracle cade, celelalte surse continuă.
+Dacă un liquidity provider cade, ceilalți pot continua.
+Dacă un nod cade, rețeaua continuă.
+
+Asta chiar se potrivește cu ce mi-ai spus tu de la început.
+
+Dar sunt și câteva lucruri din document pe care eu NU le-aș implementa încă
+
+Ai pus foarte multe lucruri:
+
+zk-STARK
+PQC
+hybrid consensus
+PoS
+PoW
+L2
+rollups
+state channels
+sharding
+bridges
+AMM
+stablecoins
+XAU token
+oracles
+cards
+NFC
+MPC
+FIDO2
+anti-spyware
+sentinel nodes
+AI anomaly detection
+deanonymization
+
+Asta este enorm.
+
+Pericolul principal nu este că nu se poate face.
+
+Pericolul este să construiești 20 de sisteme complexe simultan înainte ca fundația să fie definitivă.
+
+Eu aș face:
+
+HSMC Core
+
+1. Networking
+2. Consensus
+3. State
+4. Transactions
+5. Cryptography
+6. Mempool
+7. Finality
+8. Node synchronization
+
+↓
+
+HSMCPay Core
+
+9. Payment state machine
+10. Settlement
+11. Wallet integration
+12. Merchant payments
+
+↓
+
+Privacy
+
+13. Commitments
+14. Nullifiers
+15. zk proofs
+16. Selective disclosure
+
+↓
+
+Economics
+
+17. Fees
+18. Liquidity
+19. Stablecoins
+
+↓
+
+Interoperability
+
+20. Fiat gateways
+21. Exchanges
+22. Card networks
+23. Cross-chain
+
+Aș lăsa sharding, L2 complex, card issuing, XAUHSMC, anti-spyware OS etc. după ce core-ul este solid.
+
+Și partea cea mai importantă pentru ce mi-ai cerut anterior
+
+Acum că am specificația ta, eu pot să-ți fac taskurile pe HSMC-ul real, nu să inventez o arhitectură generică.
+
+De exemplu:
+
+HSMC PAY
+│
+├── EPIC-01 Payment Core
+│   ├── TASK-01 Transaction lifecycle
+│   │   ├── SUBTASK Define states
+│   │   ├── SUBTASK Define transitions
+│   │   ├── SUBTASK Define failure states
+│   │   └── SUBTASK Write tests
+│   │
+│   ├── TASK-02 Payment authorization
+│   ├── TASK-03 Settlement
+│   └── TASK-04 Finality tracking
+│
+├── EPIC-02 HSMC Wallet Integration
+│   ├── TASK-01 Balance API
+│   ├── TASK-02 Send
+│   ├── TASK-03 Receive
+│   └── TASK-04 Payment receipts
+│
+├── EPIC-03 Privacy
+│   ├── TASK-01 Shielded transaction
+│   ├── TASK-02 Commitment
+│   ├── TASK-03 Nullifier
+│   ├── TASK-04 ZK proof
+│   └── TASK-05 Selective disclosure
+│
+├── EPIC-04 Merchant
+│   ├── TASK-01 Merchant account
+│   ├── TASK-02 QR
+│   ├── TASK-03 API
+│   ├── TASK-04 Refund
+│   └── TASK-05 Settlement
+│
+├── EPIC-05 Fiat
+│   ├── TASK-01 Bank adapter
+│   ├── TASK-02 Card gateway adapter
+│   ├── TASK-03 Stablecoin on-ramp
+│   └── TASK-04 Off-ramp
+│
+└── EPIC-06 Resilience
+    ├── TASK-01 Provider failure
+    ├── TASK-02 Node failure
+    ├── TASK-03 Network partition
+    ├── TASK-04 Recovery
+    └── TASK-05 Disaster testing
+
+Și fiecare task poate avea:
+
+Scop → explicație pentru utilizator → cerințe tehnice → input/output → dependențe → subtasks → acceptance criteria → test cases → security considerations → Definition of Done.
+
+Asta ar deveni practic documentația de implementare HSMCPay, nu doar o listă de idei.
+
+Și da: după documentul pe care tocmai mi l-ai dat, aș păstra viziunea HSMC aproape exact în direcția asta, dar aș face whitepaper-ul mai riguros tehnic și aș transforma partea 17–18 într-o specificație HSMCPay mult mai detaliată. Acolo este piesa care lipsește acum pentru ce vrei tu să construiești.
+
