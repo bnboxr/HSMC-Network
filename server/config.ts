@@ -1,6 +1,4 @@
 /** Centralized, fail-closed API server configuration. */
-import { resolve } from "path";
-
 const MIN_SECRET_LENGTH = 32;
 const DEV_DEFAULTS = new Set(["change-me", "changeme", "development", "dev", "secret", "password", "hsmc-secret"]);
 
