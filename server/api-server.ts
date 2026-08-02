@@ -43,7 +43,7 @@ const START_TIME = Date.now();
 // HSMC Rust node RPC endpoint (shielded pool proxy). Module-scope so the
 // proxy handler can always see it (was previously declared after the final
 // `return` inside handleRequestInner — TDZ ReferenceError on every request).
-const NODE_RPC_URL = process.env.HSMC_NODE_RPC || "http://127.0.0.1:8080";
+const NODE_RPC_URL = process.env.HSMC_NODE_RPC?.trim() || "";
 
 // ── Schema (from schema.sqlite.sql) ──────────────────────────────────────────
 const SCHEMA_SQL = `
@@ -355,6 +355,12 @@ db.exec("PRAGMA foreign_keys=OFF;");
 
 // Create tables
 db.exec(SCHEMA_SQL);
+// Bounded payment safety migrations. Blockchain tx hashes are only populated by
+// a verified node path; buy settlements use an explicit off-chain reference.
+try { db.exec("ALTER TABLE payment_sessions ADD COLUMN ledger_reference TEXT"); } catch {}
+try { db.exec("ALTER TABLE webhook_events ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"); } catch {}
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_buy_settlement_intent ON treasury_transactions(payment_intent_id) WHERE type = 'buy_fee'"); } catch {}
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_buy_settlement_session ON treasury_transactions(session_id) WHERE type = 'buy_fee'"); } catch {}
 const SCHEMA_TABLE_COUNT = db.query(
   "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
 ).get() as { cnt: number };
@@ -955,7 +961,7 @@ function settleBuySession(sessionId: string):
     ).get(sessionId) as { id: string; fee_hsmc: number; fee_tier: string } | null;
     return {
       ok: true,
-      txHash: String(session.settlement_tx_hash || "0x"),
+      txHash: session.settlement_tx_hash ? String(session.settlement_tx_hash) : null,
       amountHsmc: Number(session.amount_hsmc ?? 0),
       feeHsmc: existingTreasury?.fee_hsmc ?? 0,
       feeTier: existingTreasury?.fee_tier ?? "n/a",
@@ -965,8 +971,13 @@ function settleBuySession(sessionId: string):
     };
   }
 
+  // Claim the pending session atomically before any settlement writes.
+  const claim = db.run("UPDATE payment_sessions SET status = 'settling' WHERE session_id = ? AND status = 'pending'", sessionId);
+  if (claim.changes === 0) return { ok: false, status: 409, error: "Payment session is already being settled; retry safely" };
   const now = new Date().toISOString();
-  const txHash = "0x" + randomUUID().replace(/-/g, "");
+  // Stripe settlement is an off-chain credit; no fabricated blockchain hash.
+  const txHash: string | null = null;
+  const ledgerReference = `hsmcpay:${sessionId}`;
   const amountUsd = Number(session.amount_usd ?? 0);
   const amountHsmc = Number(session.amount_hsmc ?? 0);
   const { fee: feeUsd, tier: feeTier } = calculateHsmcFee(amountUsd);
@@ -990,13 +1001,13 @@ function settleBuySession(sessionId: string):
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'buy_fee', 'settled', ?)`,
     treasuryTxId, amountUsd, feeHsmc, feeTier, paymentIntentId, sessionId,
     userId, txHash,
-    `HSMCPay buy settlement — ${feeTier} tier`
+    `HSMCPay buy settlement — ${feeTier} tier — ledger ${ledgerReference}`
   );
 
   // Mark session as settled
   db.run(
-    `UPDATE payment_sessions SET status = 'settled', settlement_tx_hash = ?, otp_expires_at = ? WHERE session_id = ?`,
-    txHash, now, sessionId
+    `UPDATE payment_sessions SET status = 'settled', settlement_tx_hash = ?, ledger_reference = ?, otp_expires_at = ? WHERE session_id = ? AND status = 'pending'`,
+    txHash, ledgerReference, now, sessionId
   );
 
   // Credit wallet balance with net amount (after deducting fee)
@@ -1177,6 +1188,7 @@ async function handleStripeCheckout(req: Request): Promise<Response> {
 
     return jsonResponse({
       tx_hash: settled.txHash,
+      ledger_reference: `hsmcpay:${sessionId}`,
       amount_hsmc: settled.amountHsmc.toFixed(6),
       fee_hsmc: settled.feeHsmc.toFixed(2),
       fee_tier: settled.feeTier,
@@ -1291,16 +1303,9 @@ async function handleStripePayout(req: Request): Promise<Response> {
 
   if (action === "settle") {
     const payoutSessionId = body.payout_session_id;
-    const txHash = body.tx_hash;
-
-    if (!payoutSessionId || !txHash) {
-      return errorResponse("payout_session_id and tx_hash are required", 400);
-    }
-
-    if (!txHash.startsWith("0x") || txHash.length < 10) {
-      return errorResponse("tx_hash must be a valid transaction hash starting with 0x", 400);
-    }
-
+    if (!payoutSessionId) return errorResponse("payout_session_id is required", 400);
+    // Client-supplied tx_hash is never settlement proof; verifier output is the only source.
+    const txHash: string | null = null;
     const session = db.query(
       "SELECT * FROM payment_sessions WHERE session_id = ? AND processor = 'payout'"
     ).get(payoutSessionId) as Record<string, unknown> | null;
@@ -1356,6 +1361,11 @@ async function handleStripePayout(req: Request): Promise<Response> {
       );
     }
 
+    // No payout is created until a real, configured node verifier exists.
+    // Client-provided tx_hash is never accepted as settlement proof.
+    if (!NODE_RPC_URL || !process.env.HSMC_NODE_VERIFY_PATH?.trim()) {
+      return errorResponse("HSMC node transaction verification is not configured; payout remains pending", 503);
+    }
     // ── Create the Stripe payout FIRST (fail-closed) ───────────────────────
     // The HSMC burn only happens after Stripe accepts the payout. If the
     // Stripe API call fails, propagate the real error — no fabricated success.
@@ -1977,23 +1987,18 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
     return errorResponse(`Webhook signature verification failed: ${msg}`, 400);
   }
 
-  // ── Idempotency check — don't process the same event twice ──────────────
-  const existing = db.query("SELECT id FROM webhook_events WHERE id = ?").get(event.id) as { id: string } | null;
-  if (existing) {
-    console.log(`[Stripe] Webhook event ${event.id} already processed — skipping`);
-    return jsonResponse({ received: true, status: "already_processed" });
+  // Reserve the event as pending. Only successful business processing marks it
+  // processed; pending events remain retryable and never return success.
+  const existing = db.query("SELECT status FROM webhook_events WHERE id = ?").get(event.id) as { status?: string } | null;
+  if (existing?.status === "processed") return jsonResponse({ received: true, status: "already_processed" });
+  if (!existing) {
+    try {
+      db.run("INSERT INTO webhook_events (id, event_type, payment_intent_id, status) VALUES (?, ?, ?, 'pending')", event.id, event.type, (event.data.object as any)?.id || null);
+    } catch { return errorResponse("Webhook event reservation failed; retry", 503); }
+  } else {
+    db.run("UPDATE webhook_events SET status = 'pending' WHERE id = ?", event.id);
   }
-
-  // Record the event as processed
-  db.run(
-    "INSERT INTO webhook_events (id, event_type, payment_intent_id) VALUES (?, ?, ?)",
-    event.id,
-    event.type,
-    (event.data.object as any)?.id || null
-  );
-
   console.log(`[Stripe] Webhook received: ${event.type} (event: ${event.id})`);
-
   // ── Process event ───────────────────────────────────────────────────────
   try {
     switch (event.type) {
@@ -2011,7 +2016,8 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
 
         if (!session) {
           console.warn(`[Stripe] No payment session found for PaymentIntent ${piId}`);
-          return jsonResponse({ received: true, warning: "no_session_found" });
+          db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
+        return jsonResponse({ received: true, warning: "no_session_found" });
         }
 
         // Settle via the shared settlement logic (fee schedule, treasury
@@ -2019,10 +2025,11 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         const settled = settleBuySession(String(session.session_id));
         if (!settled.ok) {
           console.error(`[Stripe] Settlement failed for ${piId}: ${settled.error}`);
-          return jsonResponse({ received: true, status: "settle_failed", error: settled.error });
+          return errorResponse(`Settlement failed and will be retried: ${settled.error}`, settled.status ?? 503);
         }
         console.log(`[Stripe] Wallet credited: ${settled.amountHsmc.toFixed(6)} HSMC (fee: ${settled.feeHsmc.toFixed(2)} HSMC, tier: ${settled.feeTier})`);
 
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true, status: "settled", tx_hash: settled.txHash });
       }
 
@@ -2043,12 +2050,14 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
           piId
         );
 
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true, status: "marked_failed" });
       }
 
       case "payment_intent.processing": {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         console.log(`[Stripe] PaymentIntent processing: ${paymentIntent.id}`);
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true, status: "acknowledged" });
       }
 
@@ -2062,6 +2071,7 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
           paymentIntent.id
         );
 
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true, status: "marked_cancelled" });
       }
 
@@ -2075,6 +2085,7 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         // Update local card if we have it
         db.run("UPDATE cards SET last4 = ?, brand = ?, expiration_month = ?, expiration_year = ? WHERE stripe_card_id = ?",
           ic.last4 || null, ic.brand || null, ic.exp_month || null, ic.exp_year || null, ic.id);
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true });
       }
 
@@ -2087,6 +2098,7 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         if (newStatus) {
           db.run("UPDATE cards SET status = ? WHERE stripe_card_id = ?", newStatus, ic.id);
         }
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true });
       }
 
@@ -2102,7 +2114,8 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
 
         if (!card) {
           console.warn(`[Card Webhook] Card ${cardId} not found locally — approving by default`);
-          return jsonResponse({ approved: true });
+          db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
+        return jsonResponse({ approved: true });
         }
 
         const amountCents = Number(ia.amount || 0);
@@ -2111,13 +2124,15 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         // Check card status
         if (card.status !== "active") {
           console.log(`[Card Webhook] Declined: card status is ${card.status}`);
-          return jsonResponse({ approved: false, reason: "card_not_active" });
+          db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
+        return jsonResponse({ approved: false, reason: "card_not_active" });
         }
 
         // Check per-transaction limit
         if (amountUsd > Number(card.per_tx_limit_usd || 500)) {
           console.log(`[Card Webhook] Declined: per-tx limit ${card.per_tx_limit_usd} < ${amountUsd}`);
-          return jsonResponse({ approved: false, reason: "per_transaction_limit_exceeded" });
+          db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
+        return jsonResponse({ approved: false, reason: "per_transaction_limit_exceeded" });
         }
 
         // Check daily limit
@@ -2128,17 +2143,20 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         const dailyTotalUsd = dailyTotal / 100;
         if (dailyTotalUsd + amountUsd > Number(card.daily_limit_usd || 1000)) {
           console.log(`[Card Webhook] Declined: daily limit ${card.daily_limit_usd} exceeded (${dailyTotalUsd} + ${amountUsd})`);
-          return jsonResponse({ approved: false, reason: "daily_limit_exceeded" });
+          db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
+        return jsonResponse({ approved: false, reason: "daily_limit_exceeded" });
         }
 
         // Check card balance
         const balanceCents = Number(card.card_balance_usd_cents || 0);
         if (balanceCents < amountCents) {
           console.log(`[Card Webhook] Declined: insufficient balance ${balanceCents} < ${amountCents}`);
-          return jsonResponse({ approved: false, reason: "insufficient_funds" });
+          db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
+        return jsonResponse({ approved: false, reason: "insufficient_funds" });
         }
 
         console.log(`[Card Webhook] Approved: $${amountUsd.toFixed(2)} at ${ia.merchant_data?.name || "unknown"}`);
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ approved: true });
       }
 
@@ -2158,6 +2176,7 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
             new Date().toISOString()
           );
         }
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true });
       }
 
@@ -2168,7 +2187,8 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         const card = db.query("SELECT id, card_balance_usd_cents FROM cards WHERE stripe_card_id = ?").get(itx.card?.id) as Record<string, unknown> | null;
         if (!card) {
           console.warn(`[Card Webhook] Card not found for transaction ${itx.id}`);
-          return jsonResponse({ received: true, warning: "card_not_found" });
+          db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
+        return jsonResponse({ received: true, warning: "card_not_found" });
         }
 
         // Deduct from card balance
@@ -2208,6 +2228,7 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
           }
         } catch { /* notification best-effort */ }
 
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true });
       }
 
@@ -2219,6 +2240,7 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
         } else if (chu.status === "active") {
           db.run("UPDATE cardholders SET verification_status = 'verified' WHERE stripe_cardholder_id = ?", chu.id);
         }
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true });
       }
 
@@ -2236,6 +2258,7 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
             payoutSessionId
           );
         }
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true, status: "payout_confirmed" });
       }
 
@@ -2254,18 +2277,19 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
             payoutSessionId
           );
         }
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true, status: "payout_failed" });
       }
 
       default:
         console.log(`[Stripe] Unhandled event type: ${event.type}`);
+        db.run("UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?", event.id);
         return jsonResponse({ received: true, status: "unhandled_event_type" });
     }
   } catch (err: unknown) {
-    // Always return 200 to Stripe even on processing errors (prevents infinite retries)
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Stripe] Webhook processing error for ${event.type}:`, msg);
-    return jsonResponse({ received: true, error: "processing_error", detail: msg });
+    return errorResponse(`Webhook processing failed; retryable: ${msg}`, 503, msg);
   }
 }
 // ── Internal Transfer (H7 fix: atomic multi-wallet transfer) ──────────────────
