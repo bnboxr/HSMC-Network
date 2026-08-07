@@ -52,9 +52,10 @@ export async function initEncryptionKey(): Promise<void> {
   const rawKey = process.env[ENCRYPTION_KEY_ENV] || "";
 
   if (!rawKey || rawKey.length < 16) {
-    _keyInitError = `DB_ENCRYPTION_KEY is not set or too short (< 16 chars). Column encryption DISABLED.`;
-    console.warn(`[DB-CRYPTO] ⚠️  ${_keyInitError}`);
+    _keyInitError = `DB_ENCRYPTION_KEY is not set or too short (< 16 chars).`;
     _keyInitialized = true;
+    if (process.env.NODE_ENV === "production") throw new Error(`[DB-CRYPTO] ${_keyInitError} Production startup aborted.`);
+    console.warn(`[DB-CRYPTO] ⚠️  ${_keyInitError} Encryption unavailable in development.`);
     return;
   }
 
@@ -82,12 +83,11 @@ export function getEncryptionInitError(): string | null {
 /**
  * Encrypt a plaintext string with AES-256-GCM.
  * Returns format: "base64(iv):base64(ciphertext+tag)"
- * If encryption is not available, returns plaintext prefixed with "PLAINTEXT:" warning marker.
+ * If encryption is not available, throws rather than storing plaintext.
  */
 export async function encryptField(plaintext: string): Promise<string> {
   if (!_encryptionKey) {
-    console.warn("[DB-CRYPTO] encryptField called but encryption not initialized — storing as plaintext");
-    return `PLAINTEXT:${plaintext}`;
+    throw new Error("[DB-CRYPTO] Encryption key unavailable; refusing to store plaintext");
   }
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -105,24 +105,25 @@ export async function encryptField(plaintext: string): Promise<string> {
 
 /**
  * Decrypt a ciphertext string produced by encryptField.
- * Accepts legacy "PLAINTEXT:" prefix (no-op).
+ * Legacy plaintext values are rejected in production.
  * If encryption is not available and string doesn't have "PLAINTEXT:" prefix,
  * returns the original string (backward compat with pre-encryption data).
  */
 export async function decryptField(ciphertext: string): Promise<string> {
   // Handle legacy plaintext marker
   if (ciphertext.startsWith("PLAINTEXT:")) {
+    if (process.env.NODE_ENV === "production") throw new Error("[DB-CRYPTO] Refusing legacy plaintext value in production");
     return ciphertext.slice(10);
   }
 
   if (!_encryptionKey) {
-    // Encryption not available — return as-is (backward compat)
+    if (process.env.NODE_ENV === "production") throw new Error("[DB-CRYPTO] Encryption key unavailable; refusing plaintext fallback");
     return ciphertext;
   }
 
   const colonIdx = ciphertext.indexOf(":");
   if (colonIdx < 0) {
-    // No colon: might be legacy plaintext data, return as-is
+    if (process.env.NODE_ENV === "production") throw new Error("[DB-CRYPTO] Refusing legacy plaintext data in production");
     return ciphertext;
   }
 
@@ -139,8 +140,8 @@ export async function decryptField(ciphertext: string): Promise<string> {
     );
     return new TextDecoder().decode(plaintext);
   } catch (err: unknown) {
-    // Decryption failed — might be legacy unencrypted data
-    console.warn(`[DB-CRYPTO] decryptField failed (assuming legacy plaintext): ${err instanceof Error ? err.message : String(err)}`);
+    if (process.env.NODE_ENV === "production") throw new Error("[DB-CRYPTO] Decryption failed; refusing plaintext fallback");
+    console.warn(`[DB-CRYPTO] decryptField failed in development: ${err instanceof Error ? err.message : String(err)}`);
     return ciphertext;
   }
 }
