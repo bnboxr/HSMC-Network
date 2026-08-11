@@ -22,4 +22,5 @@ indexmap    = { workspace = true }
 parking_lot = { workspace = true }
 once_cell   = { workspace = true }
 bitflags    = { workspace = true }
+ed25519-dalek = { workspace = true }
 

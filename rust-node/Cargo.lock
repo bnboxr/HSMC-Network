@@ -1301,6 +1301,7 @@ dependencies = [
  "anyhow",
  "bitflags",
  "chrono",
+ "ed25519-dalek",
  "hex",
  "hmac",
  "indexmap",

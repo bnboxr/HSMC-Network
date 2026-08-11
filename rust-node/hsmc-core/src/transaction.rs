@@ -1,3 +1,4 @@
+use chrono::Utc;
 /// ============================================================================
 /// HSMC Transaction — Full Production Transaction Engine
 /// ============================================================================
@@ -17,13 +18,15 @@
 /// All hashes are double-SHA256 (SHA256d) with a domain separator prefix
 /// to prevent cross-protocol hash collisions.
 /// ============================================================================
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use chrono::Utc;
-use uuid::Uuid;
-use std::fmt;
 use std::collections::HashMap;
+use std::fmt;
+use uuid::Uuid;
+
+/// Domain separator for transaction-body commitments. Unlike the legacy
+/// `compute_tx_hash`, this commits to all immutable consensus fields.
+pub const TX_CONSENSUS_HASH_PREFIX: &[u8] = b"HSMC_TX_V3";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -55,9 +58,9 @@ pub const MIN_BASE_FEE: f64 = 0.0001;
 
 /// Fee schedule multipliers per privacy level (vs. base fee)
 pub const FEE_MULTIPLIER_TRANSPARENT: f64 = 1.0;
-pub const FEE_MULTIPLIER_RINGCT:      f64 = 10.0;
-pub const FEE_MULTIPLIER_STEALTH:     f64 = 20.0;
-pub const FEE_MULTIPLIER_FULL:        f64 = 50.0;
+pub const FEE_MULTIPLIER_RINGCT: f64 = 10.0;
+pub const FEE_MULTIPLIER_STEALTH: f64 = 20.0;
+pub const FEE_MULTIPLIER_FULL: f64 = 50.0;
 
 /// Cross-chain bridge fee rate (0.3%)
 pub const BRIDGE_FEE_RATE: f64 = 0.003;
@@ -90,9 +93,9 @@ impl PrivacyLevel {
     pub fn min_fee(&self) -> f64 {
         match self {
             Self::Transparent => MIN_BASE_FEE,
-            Self::RingCt      => MIN_BASE_FEE * FEE_MULTIPLIER_RINGCT,
-            Self::Stealth     => MIN_BASE_FEE * FEE_MULTIPLIER_STEALTH,
-            Self::Full        => MIN_BASE_FEE * FEE_MULTIPLIER_FULL,
+            Self::RingCt => MIN_BASE_FEE * FEE_MULTIPLIER_RINGCT,
+            Self::Stealth => MIN_BASE_FEE * FEE_MULTIPLIER_STEALTH,
+            Self::Full => MIN_BASE_FEE * FEE_MULTIPLIER_FULL,
         }
     }
 
@@ -100,9 +103,9 @@ impl PrivacyLevel {
     pub fn fee_multiplier(&self) -> f64 {
         match self {
             Self::Transparent => FEE_MULTIPLIER_TRANSPARENT,
-            Self::RingCt      => FEE_MULTIPLIER_RINGCT,
-            Self::Stealth     => FEE_MULTIPLIER_STEALTH,
-            Self::Full        => FEE_MULTIPLIER_FULL,
+            Self::RingCt => FEE_MULTIPLIER_RINGCT,
+            Self::Stealth => FEE_MULTIPLIER_STEALTH,
+            Self::Full => FEE_MULTIPLIER_FULL,
         }
     }
 
@@ -110,34 +113,36 @@ impl PrivacyLevel {
     pub fn byte_overhead(&self) -> usize {
         match self {
             Self::Transparent => 0,
-            Self::RingCt      => 2048,  // ring sig + commitment
-            Self::Stealth     => 2560,  // ring sig + commitment + stealth key
-            Self::Full        => 4096,  // all above + bulletproof
+            Self::RingCt => 2048,  // ring sig + commitment
+            Self::Stealth => 2560, // ring sig + commitment + stealth key
+            Self::Full => 4096,    // all above + bulletproof
         }
     }
 
     /// Human-readable description
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Transparent =>
-                "Transparent: amounts, sender and receiver are public",
-            Self::RingCt =>
-                "RingCT: amounts hidden; sender hidden via LSAG ring signature (11-16 decoys)",
-            Self::Stealth =>
-                "Stealth: ring signature + one-time stealth address via ECDH key exchange",
-            Self::Full =>
-                "Full Privacy: RingCT + Stealth + Bulletproof range proofs (Monero-equivalent)",
+            Self::Transparent => "Transparent: amounts, sender and receiver are public",
+            Self::RingCt => {
+                "RingCT: amounts hidden; sender hidden via LSAG ring signature (11-16 decoys)"
+            }
+            Self::Stealth => {
+                "Stealth: ring signature + one-time stealth address via ECDH key exchange"
+            }
+            Self::Full => {
+                "Full Privacy: RingCT + Stealth + Bulletproof range proofs (Monero-equivalent)"
+            }
         }
     }
 
     /// Parse from string (case-insensitive)
     pub fn from_str_insensitive(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "transparent"           => Some(Self::Transparent),
-            "ringct" | "ring_ct"    => Some(Self::RingCt),
-            "stealth"               => Some(Self::Stealth),
-            "full"                  => Some(Self::Full),
-            _                       => None,
+            "transparent" => Some(Self::Transparent),
+            "ringct" | "ring_ct" => Some(Self::RingCt),
+            "stealth" => Some(Self::Stealth),
+            "full" => Some(Self::Full),
+            _ => None,
         }
     }
 }
@@ -146,9 +151,9 @@ impl fmt::Display for PrivacyLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Transparent => write!(f, "transparent"),
-            Self::RingCt      => write!(f, "ringct"),
-            Self::Stealth     => write!(f, "stealth"),
-            Self::Full        => write!(f, "full"),
+            Self::RingCt => write!(f, "ringct"),
+            Self::Stealth => write!(f, "stealth"),
+            Self::Full => write!(f, "full"),
         }
     }
 }
@@ -181,14 +186,14 @@ pub enum TxStatus {
 impl fmt::Display for TxStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Pending         => write!(f, "pending"),
-            Self::Confirmed       => write!(f, "confirmed"),
-            Self::Failed          => write!(f, "failed"),
-            Self::BridgeLocked    => write!(f, "bridge_locked"),
-            Self::BridgeMinted    => write!(f, "bridge_minted"),
-            Self::DandelionStem   => write!(f, "dandelion_stem"),
-            Self::Replaced        => write!(f, "replaced"),
-            Self::MempoolEvicted  => write!(f, "mempool_evicted"),
+            Self::Pending => write!(f, "pending"),
+            Self::Confirmed => write!(f, "confirmed"),
+            Self::Failed => write!(f, "failed"),
+            Self::BridgeLocked => write!(f, "bridge_locked"),
+            Self::BridgeMinted => write!(f, "bridge_minted"),
+            Self::DandelionStem => write!(f, "dandelion_stem"),
+            Self::Replaced => write!(f, "replaced"),
+            Self::MempoolEvicted => write!(f, "mempool_evicted"),
         }
     }
 }
@@ -217,24 +222,24 @@ pub struct TxInput {
 impl TxInput {
     pub fn new(prev_tx_hash: &str, output_index: u32, unlock_script: &str) -> Self {
         Self {
-            prev_tx_hash:  prev_tx_hash.to_string(),
+            prev_tx_hash: prev_tx_hash.to_string(),
             output_index,
             unlock_script: unlock_script.to_string(),
-            sequence:      0xFFFF_FFFF, // final (no RBF)
-            ring_members:  vec![],
-            key_image:     None,
+            sequence: 0xFFFF_FFFF, // final (no RBF)
+            ring_members: vec![],
+            key_image: None,
         }
     }
 
     /// Create an RBF-signalling input (sequence < 0xFFFFFFFE)
     pub fn new_rbf(prev_tx_hash: &str, output_index: u32, unlock_script: &str) -> Self {
         Self {
-            prev_tx_hash:  prev_tx_hash.to_string(),
+            prev_tx_hash: prev_tx_hash.to_string(),
             output_index,
             unlock_script: unlock_script.to_string(),
-            sequence:      0xFFFF_FFFD, // signals RBF opt-in
-            ring_members:  vec![],
-            key_image:     None,
+            sequence: 0xFFFF_FFFD, // signals RBF opt-in
+            ring_members: vec![],
+            key_image: None,
         }
     }
 
@@ -289,12 +294,12 @@ impl TxOutput {
     pub fn new(amount: f64, address: &str) -> Self {
         Self {
             amount,
-            address:        address.to_string(),
-            lock_script:    format!("OP_DUP OP_HASH160 {} OP_EQUALVERIFY OP_CHECKSIG", address),
-            commitment:     None,
-            stealth_key:    None,
-            ephemeral_key:  None,
-            output_type:    OutputType::P2Pkh,
+            address: address.to_string(),
+            lock_script: format!("OP_DUP OP_HASH160 {} OP_EQUALVERIFY OP_CHECKSIG", address),
+            commitment: None,
+            stealth_key: None,
+            ephemeral_key: None,
+            output_type: OutputType::P2Pkh,
         }
     }
 
@@ -418,11 +423,11 @@ pub enum BridgeChain {
 impl fmt::Display for BridgeChain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Bsc       => write!(f, "bsc"),
-            Self::Ethereum  => write!(f, "ethereum"),
-            Self::Polygon   => write!(f, "polygon"),
+            Self::Bsc => write!(f, "bsc"),
+            Self::Ethereum => write!(f, "ethereum"),
+            Self::Polygon => write!(f, "polygon"),
             Self::Avalanche => write!(f, "avalanche"),
-            Self::Arbitrum  => write!(f, "arbitrum"),
+            Self::Arbitrum => write!(f, "arbitrum"),
         }
     }
 }
@@ -431,11 +436,11 @@ impl BridgeChain {
     /// EVM chain ID for each supported chain
     pub fn chain_id(&self) -> u64 {
         match self {
-            Self::Bsc       => 56,
-            Self::Ethereum  => 1,
-            Self::Polygon   => 137,
+            Self::Bsc => 56,
+            Self::Ethereum => 1,
+            Self::Polygon => 137,
             Self::Avalanche => 43114,
-            Self::Arbitrum  => 42161,
+            Self::Arbitrum => 42161,
         }
     }
 
@@ -444,11 +449,26 @@ impl BridgeChain {
     /// Falls back to placeholder addresses if env vars are not set.
     pub fn whsmc_contract(&self) -> String {
         let (env_key, placeholder) = match self {
-            Self::Bsc       => ("WHSMC_BSC_ADDRESS",       "0x0000000000000000000000000000000000001001"),
-            Self::Ethereum  => ("WHSMC_ETH_ADDRESS",       "0x0000000000000000000000000000000000001002"),
-            Self::Polygon   => ("WHSMC_POLYGON_ADDRESS",   "0x0000000000000000000000000000000000001003"),
-            Self::Avalanche => ("WHSMC_AVALANCHE_ADDRESS", "0x0000000000000000000000000000000000001004"),
-            Self::Arbitrum  => ("WHSMC_ARBITRUM_ADDRESS",  "0x0000000000000000000000000000000000001005"),
+            Self::Bsc => (
+                "WHSMC_BSC_ADDRESS",
+                "0x0000000000000000000000000000000000001001",
+            ),
+            Self::Ethereum => (
+                "WHSMC_ETH_ADDRESS",
+                "0x0000000000000000000000000000000000001002",
+            ),
+            Self::Polygon => (
+                "WHSMC_POLYGON_ADDRESS",
+                "0x0000000000000000000000000000000000001003",
+            ),
+            Self::Avalanche => (
+                "WHSMC_AVALANCHE_ADDRESS",
+                "0x0000000000000000000000000000000000001004",
+            ),
+            Self::Arbitrum => (
+                "WHSMC_ARBITRUM_ADDRESS",
+                "0x0000000000000000000000000000000000001005",
+            ),
         };
         std::env::var(env_key).unwrap_or_else(|_| placeholder.to_string())
     }
@@ -496,16 +516,17 @@ impl BridgeData {
     /// Signature: mint(address to, uint256 amount, bytes32 mainnetTxHash)
     pub fn encode_mint_calldata(&mut self, mainnet_tx_hash: &str) {
         let amount_wei = (self.amount_after_fee * 1e18) as u128;
-        let padded_addr = format!("000000000000000000000000{}", &self.dest_address.trim_start_matches("0x"));
+        let padded_addr = format!(
+            "000000000000000000000000{}",
+            &self.dest_address.trim_start_matches("0x")
+        );
         let padded_amount = format!("{:064x}", amount_wei);
         let tx_hash_clean = mainnet_tx_hash.trim_start_matches("0x");
         let padded_hash = format!("{:0>64}", tx_hash_clean);
         // keccak4 of "mint(address,uint256,bytes32)" = 0x40c10f19
         self.mint_calldata = Some(format!(
             "0x40c10f19{}{}{}",
-            padded_addr,
-            padded_amount,
-            padded_hash,
+            padded_addr, padded_amount, padded_hash,
         ));
     }
 }
@@ -525,27 +546,27 @@ pub enum TxPayload {
     /// RingCT — confidential amount + ring signature
     RingCt {
         ring_signature: RingSignatureProof,
-        input_commitments:  Vec<PedersenCommitment>,
+        input_commitments: Vec<PedersenCommitment>,
         output_commitments: Vec<PedersenCommitment>,
-        excess_commitment:  PedersenCommitment, // ensures sum_in == sum_out + fee
+        excess_commitment: PedersenCommitment, // ensures sum_in == sum_out + fee
     },
 
     /// Stealth — ring signature + one-time address
     Stealth {
         ring_signature: RingSignatureProof,
-        stealth_proof:  StealthProof,
-        input_commitments:  Vec<PedersenCommitment>,
+        stealth_proof: StealthProof,
+        input_commitments: Vec<PedersenCommitment>,
         output_commitments: Vec<PedersenCommitment>,
     },
 
     /// Full privacy — RingCT + Stealth + Bulletproof range proof
     Full {
-        ring_signature:  RingSignatureProof,
-        stealth_proof:   StealthProof,
-        range_proof:     BulletproofRangeProof,
-        input_commitments:  Vec<PedersenCommitment>,
+        ring_signature: RingSignatureProof,
+        stealth_proof: StealthProof,
+        range_proof: BulletproofRangeProof,
+        input_commitments: Vec<PedersenCommitment>,
         output_commitments: Vec<PedersenCommitment>,
-        excess_commitment:  PedersenCommitment,
+        excess_commitment: PedersenCommitment,
     },
 
     /// Cross-chain bridge lock
@@ -558,8 +579,8 @@ pub enum TxPayload {
     /// Miner coinbase reward
     Coinbase {
         block_height: u64,
-        reward:       f64,
-        script_data:  String,
+        reward: f64,
+        script_data: String,
     },
 
     /// Post-Quantum — ECDSA + Dilithium-5 hybrid signatures, Kyber-1024 KEM
@@ -589,13 +610,18 @@ pub enum TxPayload {
 impl TxPayload {
     pub fn privacy_level(&self) -> PrivacyLevel {
         match self {
-            Self::Transparent   => PrivacyLevel::Transparent,
+            Self::Transparent => PrivacyLevel::Transparent,
             Self::RingCt { .. } => PrivacyLevel::RingCt,
-            Self::Stealth { .. }=> PrivacyLevel::Stealth,
-            Self::Full { .. }   => PrivacyLevel::Full,
-            Self::BridgeLock { stealth_proof, .. } =>
-                if stealth_proof.is_some() { PrivacyLevel::Stealth } else { PrivacyLevel::Transparent },
-            Self::Coinbase { .. }=> PrivacyLevel::Transparent,
+            Self::Stealth { .. } => PrivacyLevel::Stealth,
+            Self::Full { .. } => PrivacyLevel::Full,
+            Self::BridgeLock { stealth_proof, .. } => {
+                if stealth_proof.is_some() {
+                    PrivacyLevel::Stealth
+                } else {
+                    PrivacyLevel::Transparent
+                }
+            }
+            Self::Coinbase { .. } => PrivacyLevel::Transparent,
             Self::PostQuantum { base_privacy, .. } => base_privacy.clone(),
         }
     }
@@ -632,20 +658,20 @@ pub struct Transaction {
 
     // ── Addressing ──────────────────────────────────────────────────────────
     pub from_address: String,
-    pub to_address:   String,
+    pub to_address: String,
 
     // ── Amounts (0 for RingCT — use commitment instead) ─────────────────────
     pub amount: f64,
-    pub fee:    f64,
+    pub fee: f64,
 
     // ── Status & timing ─────────────────────────────────────────────────────
-    pub status:       TxStatus,
-    pub created_at:   i64,
+    pub status: TxStatus,
+    pub created_at: i64,
     pub confirmed_at: Option<i64>,
     pub block_number: Option<u64>,
 
     // ── UTXO model ──────────────────────────────────────────────────────────
-    pub inputs:  Vec<TxInput>,
+    pub inputs: Vec<TxInput>,
     pub outputs: Vec<TxOutput>,
 
     // ── Privacy level ────────────────────────────────────────────────────────
@@ -653,40 +679,40 @@ pub struct Transaction {
 
     // ── Legacy flat fields (kept for backwards-compat / DB queries) ─────────
     /// LSAG ring signature (hex-serialised) — set for RingCt/Stealth/Full
-    pub ring_signature:  Option<String>,
+    pub ring_signature: Option<String>,
     /// One-time stealth address — set for Stealth/Full
     pub stealth_address: Option<String>,
     /// Pedersen commitment (hex) — set for RingCt/Stealth/Full
-    pub commitment:      Option<String>,
+    pub commitment: Option<String>,
     /// Bulletproof range proof (hex) — set for Full
-    pub range_proof:     Option<String>,
+    pub range_proof: Option<String>,
     /// Ring size (11-16) — set for ring signature transactions
-    pub decoy_count:     Option<u8>,
+    pub decoy_count: Option<u8>,
     /// Key image (hex) — prevents double-spend in ring signature txs
-    pub key_image:       Option<String>,
+    pub key_image: Option<String>,
 
     // ── Typed payload (includes structured proofs) ───────────────────────────
     pub payload: TxPayload,
 
     // ── Bridge fields ────────────────────────────────────────────────────────
-    pub bridge_dest_chain:   Option<String>,
+    pub bridge_dest_chain: Option<String>,
     pub bridge_dest_address: Option<String>,
-    pub bridge_tx_hash:      Option<String>,
-    pub bridge_sequence:     Option<u64>,
+    pub bridge_tx_hash: Option<String>,
+    pub bridge_sequence: Option<u64>,
 
     // ── Miscellaneous ────────────────────────────────────────────────────────
     /// Optional on-chain memo (max MAX_MEMO_LEN chars; encrypted for privacy txs)
-    pub memo:          Option<String>,
+    pub memo: Option<String>,
     /// Replace-By-Fee: previous tx hash this replaces (if RBF)
     pub replaces_hash: Option<String>,
     /// Estimated serialised tx size in bytes (for fee market)
-    pub size_bytes:    u32,
+    pub size_bytes: u32,
     /// Lock time: tx is invalid until this block height
-    pub lock_time:     u64,
+    pub lock_time: u64,
     /// Nonce: prevents replay attacks on the same account
-    pub nonce:         u64,
+    pub nonce: u64,
     /// Custom metadata (explorer annotations, wallet labels, etc.)
-    pub metadata:      HashMap<String, String>,
+    pub metadata: HashMap<String, String>,
 }
 
 impl Transaction {
@@ -694,46 +720,48 @@ impl Transaction {
 
     /// Create a new transparent transfer transaction
     pub fn new(from: &str, to: &str, amount: f64, fee: f64, privacy: PrivacyLevel) -> Self {
-        let id  = Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
-        let hash = compute_tx_hash(TX_HASH_PREFIX, &id, from, to, amount, fee, now);
+        let hash = String::new();
 
         let output = TxOutput::new(amount, to);
         let size = 250 + output.byte_size() as u32 + privacy.byte_overhead() as u32;
 
-        Self {
+        let mut tx = Self {
             id,
             hash,
-            version:            2,
-            from_address:       from.to_string(),
-            to_address:         to.to_string(),
+            version: 2,
+            from_address: from.to_string(),
+            to_address: to.to_string(),
             amount,
             fee,
-            status:             TxStatus::Pending,
-            created_at:         now,
-            confirmed_at:       None,
-            block_number:       None,
-            inputs:             vec![TxInput::new("0".repeat(64).as_str(), 0, "")],
-            outputs:            vec![output],
-            privacy_level:      privacy.clone(),
-            ring_signature:     None,
-            stealth_address:    None,
-            commitment:         None,
-            range_proof:        None,
-            decoy_count:        None,
-            key_image:          None,
-            payload:            TxPayload::Transparent,
-            bridge_dest_chain:  None,
-            bridge_dest_address:None,
-            bridge_tx_hash:     None,
-            bridge_sequence:    None,
-            memo:               None,
-            replaces_hash:      None,
-            size_bytes:         size,
-            lock_time:          0,
-            nonce:              0,
-            metadata:           HashMap::new(),
-        }
+            status: TxStatus::Pending,
+            created_at: now,
+            confirmed_at: None,
+            block_number: None,
+            inputs: vec![TxInput::new("0".repeat(64).as_str(), 0, "")],
+            outputs: vec![output],
+            privacy_level: privacy.clone(),
+            ring_signature: None,
+            stealth_address: None,
+            commitment: None,
+            range_proof: None,
+            decoy_count: None,
+            key_image: None,
+            payload: TxPayload::Transparent,
+            bridge_dest_chain: None,
+            bridge_dest_address: None,
+            bridge_tx_hash: None,
+            bridge_sequence: None,
+            memo: None,
+            replaces_hash: None,
+            size_bytes: size,
+            lock_time: 0,
+            nonce: 0,
+            metadata: HashMap::new(),
+        };
+        tx.refresh_hash();
+        tx
     }
 
     /// Create a coinbase transaction for a miner reward
@@ -744,7 +772,7 @@ impl Transaction {
         fees: f64,
         script_data: &str,
     ) -> Self {
-        let id  = Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
         let total_reward = reward + fees;
         let hash = compute_tx_hash(
@@ -760,7 +788,10 @@ impl Transaction {
         let output = TxOutput {
             amount: total_reward,
             address: miner_address.to_string(),
-            lock_script: format!("OP_DUP OP_HASH160 {} OP_EQUALVERIFY OP_CHECKSIG", miner_address),
+            lock_script: format!(
+                "OP_DUP OP_HASH160 {} OP_EQUALVERIFY OP_CHECKSIG",
+                miner_address
+            ),
             commitment: None,
             stealth_key: None,
             ephemeral_key: None,
@@ -772,37 +803,37 @@ impl Transaction {
             hash,
             version: 2,
             from_address: "coinbase".to_string(),
-            to_address:   miner_address.to_string(),
-            amount:       total_reward,
-            fee:          0.0,
-            status:       TxStatus::Confirmed,
-            created_at:   now,
+            to_address: miner_address.to_string(),
+            amount: total_reward,
+            fee: 0.0,
+            status: TxStatus::Confirmed,
+            created_at: now,
             confirmed_at: Some(now),
             block_number: Some(block_number),
-            inputs:       vec![],
-            outputs:      vec![output],
+            inputs: vec![],
+            outputs: vec![output],
             privacy_level: PrivacyLevel::Transparent,
-            ring_signature:     None,
-            stealth_address:    None,
-            commitment:         None,
-            range_proof:        None,
-            decoy_count:        None,
-            key_image:          None,
+            ring_signature: None,
+            stealth_address: None,
+            commitment: None,
+            range_proof: None,
+            decoy_count: None,
+            key_image: None,
             payload: TxPayload::Coinbase {
                 block_height: block_number,
                 reward,
                 script_data: script_data.to_string(),
             },
-            bridge_dest_chain:  None,
-            bridge_dest_address:None,
-            bridge_tx_hash:     None,
-            bridge_sequence:    None,
-            memo:               None,
-            replaces_hash:      None,
-            size_bytes:         250,
-            lock_time:          0,
-            nonce:              0,
-            metadata:           HashMap::new(),
+            bridge_dest_chain: None,
+            bridge_dest_address: None,
+            bridge_tx_hash: None,
+            bridge_sequence: None,
+            memo: None,
+            replaces_hash: None,
+            size_bytes: 250,
+            lock_time: 0,
+            nonce: 0,
+            metadata: HashMap::new(),
         }
     }
 
@@ -820,7 +851,7 @@ impl Transaction {
                 min: BRIDGE_MIN_AMOUNT,
             });
         }
-        let id  = Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp();
         let bridge = BridgeData::new(dest_chain, dest_address, amount, sequence);
         let fee = bridge.fee;
@@ -839,7 +870,7 @@ impl Transaction {
             amount,
             address: "bridge_vault_0000000000000000000000000000000000000000".to_string(),
             lock_script: format!("OP_BRIDGE_LOCK {} {}", bridge.dest_chain, dest_address),
-            commitment:  None,
+            commitment: None,
             stealth_key: None,
             ephemeral_key: None,
             output_type: OutputType::BridgeLock,
@@ -852,37 +883,37 @@ impl Transaction {
             id,
             hash,
             version: 2,
-            from_address:       from.to_string(),
-            to_address:         "bridge_vault".to_string(),
+            from_address: from.to_string(),
+            to_address: "bridge_vault".to_string(),
             amount,
             fee,
-            status:             TxStatus::Pending,
-            created_at:         now,
-            confirmed_at:       None,
-            block_number:       None,
-            inputs:             vec![TxInput::new("0".repeat(64).as_str(), 0, "")],
-            outputs:            vec![lock_output],
-            privacy_level:      PrivacyLevel::Transparent,
-            ring_signature:     None,
-            stealth_address:    None,
-            commitment:         None,
-            range_proof:        None,
-            decoy_count:        None,
-            key_image:          None,
+            status: TxStatus::Pending,
+            created_at: now,
+            confirmed_at: None,
+            block_number: None,
+            inputs: vec![TxInput::new("0".repeat(64).as_str(), 0, "")],
+            outputs: vec![lock_output],
+            privacy_level: PrivacyLevel::Transparent,
+            ring_signature: None,
+            stealth_address: None,
+            commitment: None,
+            range_proof: None,
+            decoy_count: None,
+            key_image: None,
             payload: TxPayload::BridgeLock {
                 bridge,
                 stealth_proof: None,
             },
-            bridge_dest_chain:  Some(dest_chain_str),
-            bridge_dest_address:Some(dest_address.to_string()),
-            bridge_tx_hash:     None,
-            bridge_sequence:    Some(bridge_seq),
-            memo:               None,
-            replaces_hash:      None,
-            size_bytes:         350,
-            lock_time:          0,
-            nonce:              0,
-            metadata:           HashMap::new(),
+            bridge_dest_chain: Some(dest_chain_str),
+            bridge_dest_address: Some(dest_address.to_string()),
+            bridge_tx_hash: None,
+            bridge_sequence: Some(bridge_seq),
+            memo: None,
+            replaces_hash: None,
+            size_bytes: 350,
+            lock_time: 0,
+            nonce: 0,
+            metadata: HashMap::new(),
         })
     }
 
@@ -890,7 +921,7 @@ impl Transaction {
 
     /// Mark this transaction as confirmed in a block
     pub fn confirm(&mut self, block_number: u64) {
-        self.status       = TxStatus::Confirmed;
+        self.status = TxStatus::Confirmed;
         self.confirmed_at = Some(Utc::now().timestamp());
         self.block_number = Some(block_number);
     }
@@ -902,9 +933,9 @@ impl Transaction {
 
     /// Mark as bridge-minted (wHSMC successfully minted on destination chain)
     pub fn bridge_mint(&mut self, evm_tx_hash: &str) {
-        self.status          = TxStatus::BridgeMinted;
-        self.bridge_tx_hash  = Some(evm_tx_hash.to_string());
-        self.confirmed_at    = Some(Utc::now().timestamp());
+        self.status = TxStatus::BridgeMinted;
+        self.bridge_tx_hash = Some(evm_tx_hash.to_string());
+        self.confirmed_at = Some(Utc::now().timestamp());
     }
 
     /// Replace-by-fee: update fee and recalculate hash
@@ -918,16 +949,8 @@ impl Transaction {
         let old_hash = self.hash.clone();
         self.fee = new_fee;
         self.replaces_hash = Some(old_hash);
-        // Recalculate hash with new fee
-        self.hash = compute_tx_hash(
-            TX_HASH_PREFIX,
-            &self.id,
-            &self.from_address,
-            &self.to_address,
-            self.amount,
-            self.fee,
-            self.created_at,
-        );
+        // Recalculate the full consensus commitment after changing the fee.
+        self.refresh_hash();
         Ok(())
     }
 
@@ -940,9 +963,9 @@ impl Transaction {
         key_image: &str,
     ) {
         self.ring_signature = Some(ring_sig.to_string());
-        self.commitment     = Some(commitment.to_string());
-        self.decoy_count    = Some(ring_size);
-        self.key_image      = Some(key_image.to_string());
+        self.commitment = Some(commitment.to_string());
+        self.decoy_count = Some(ring_size);
+        self.key_image = Some(key_image.to_string());
     }
 
     /// Attach stealth proof fields
@@ -974,13 +997,90 @@ impl Transaction {
 
     /// Fee per byte (for mempool prioritisation)
     pub fn fee_per_byte(&self) -> f64 {
-        if self.size_bytes == 0 { return self.fee; }
+        if self.size_bytes == 0 {
+            return self.fee;
+        }
         self.fee / self.size_bytes as f64
     }
 
     /// Whether this transaction has a higher effective fee than `other`
     pub fn has_higher_priority_than(&self, other: &Transaction) -> bool {
         self.fee_per_byte() > other.fee_per_byte()
+    }
+
+    // ── Consensus commitments ───────────────────────────────────────────────
+
+    /// Stable serialization of immutable transaction fields. Confirmation state
+    /// and free-form metadata are deliberately not consensus data.
+    fn consensus_preimage(&self, blank_unlock_scripts: bool) -> Vec<u8> {
+        let inputs: Vec<TxInput> = self
+            .inputs
+            .iter()
+            .cloned()
+            .map(|mut input| {
+                if blank_unlock_scripts {
+                    input.unlock_script.clear();
+                }
+                input
+            })
+            .collect();
+        serde_json::to_vec(&(
+            self.version,
+            &self.id,
+            &self.from_address,
+            &self.to_address,
+            self.amount,
+            self.fee,
+            self.created_at,
+            inputs,
+            &self.outputs,
+            &self.privacy_level,
+            &self.ring_signature,
+            &self.stealth_address,
+            &self.commitment,
+            &self.range_proof,
+            self.decoy_count,
+            &self.key_image,
+            &self.payload,
+            &self.bridge_dest_chain,
+            &self.bridge_dest_address,
+            &self.bridge_tx_hash,
+            self.bridge_sequence,
+            &self.memo,
+            &self.replaces_hash,
+            self.size_bytes,
+            self.lock_time,
+            self.nonce,
+        ))
+        .expect("consensus transaction fields must be serializable")
+    }
+
+    /// Compute the hash committed by block Merkle leaves.
+    pub fn consensus_hash(&self) -> String {
+        let mut first = Sha256::new();
+        first.update(TX_CONSENSUS_HASH_PREFIX);
+        first.update(self.consensus_preimage(false));
+        let first = first.finalize();
+        format!("0x{}", hex::encode(Sha256::digest(first)))
+    }
+
+    /// Refresh the transaction commitment after intentional modification.
+    pub fn refresh_hash(&mut self) {
+        self.hash = self.consensus_hash();
+    }
+
+    /// Return true only when `hash` commits to this exact transaction body.
+    pub fn has_valid_consensus_hash(&self) -> bool {
+        self.hash == self.consensus_hash()
+    }
+
+    /// Message authenticated by an input signature. Scripts are blanked to avoid
+    /// circular signing, while all outputs and outpoints remain committed.
+    pub fn spending_message(&self) -> Vec<u8> {
+        let mut h = Sha256::new();
+        h.update(b"HSMC_TX_SPEND_V1");
+        h.update(self.consensus_preimage(true));
+        h.finalize().to_vec()
     }
 
     // ── Validation helpers ────────────────────────────────────────────────────
@@ -1036,7 +1136,7 @@ pub enum TxValidationError {
     SelfTransfer,
     NegativeOrNonFiniteAmount,
     NegativeOrNonFiniteFee,
-    FeeTooLow                { required: f64, provided: f64 },
+    FeeTooLow { required: f64, provided: f64 },
     MissingRingSignature,
     MissingCommitment,
     MissingRangeProof,
@@ -1045,59 +1145,77 @@ pub enum TxValidationError {
     InvalidCommitmentStructure,
     InvalidRangeProofStructure,
     InvalidStealthProof,
-    RingTooSmall             { size: usize, min: usize },
-    RingTooBig               { size: usize, max: usize },
-    TooManyInputs            { count: usize, max: usize },
-    TooManyOutputs           { count: usize, max: usize },
-    MemoTooLong              { len: usize, max: usize },
-    BridgeAmountTooSmall     { amount: f64, min: f64 },
+    RingTooSmall { size: usize, min: usize },
+    RingTooBig { size: usize, max: usize },
+    TooManyInputs { count: usize, max: usize },
+    TooManyOutputs { count: usize, max: usize },
+    MemoTooLong { len: usize, max: usize },
+    BridgeAmountTooSmall { amount: f64, min: f64 },
     BridgeInvalidAddress,
-    RbfFeeTooLow             { current_fee: f64, new_fee: f64 },
-    TransactionTooLarge      { size: u32, max: u32 },
-    DoubleSpendDetected      { key_image: String },
-    LockTimeNotMet           { lock_time: u64, height: u64 },
+    RbfFeeTooLow { current_fee: f64, new_fee: f64 },
+    TransactionTooLarge { size: u32, max: u32 },
+    DoubleSpendDetected { key_image: String },
+    LockTimeNotMet { lock_time: u64, height: u64 },
 }
 
 impl fmt::Display for TxValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyHash                  => write!(f, "Transaction hash is empty"),
-            Self::EmptyFromAddress           => write!(f, "from_address is empty"),
-            Self::EmptyToAddress             => write!(f, "to_address is empty"),
-            Self::SelfTransfer               => write!(f, "Self-transfers are not allowed"),
-            Self::NegativeOrNonFiniteAmount  => write!(f, "Amount must be finite and non-negative"),
-            Self::NegativeOrNonFiniteFee     => write!(f, "Fee must be finite and non-negative"),
-            Self::FeeTooLow { required, provided } =>
-                write!(f, "Fee too low: required {:.6} HSMC, provided {:.6}", required, provided),
-            Self::MissingRingSignature       => write!(f, "Privacy level requires ring_signature"),
-            Self::MissingCommitment          => write!(f, "Privacy level requires Pedersen commitment"),
-            Self::MissingRangeProof          => write!(f, "Full privacy requires Bulletproof range_proof"),
-            Self::MissingStealthAddress      => write!(f, "Privacy level requires stealth_address"),
-            Self::InvalidRingSignatureStructure => write!(f, "Ring signature has invalid structure"),
-            Self::InvalidCommitmentStructure    => write!(f, "Commitment has invalid structure"),
-            Self::InvalidRangeProofStructure    => write!(f, "Range proof has invalid structure"),
-            Self::InvalidStealthProof           => write!(f, "Stealth proof is invalid"),
-            Self::RingTooSmall { size, min } =>
-                write!(f, "Ring size {} < minimum {}", size, min),
-            Self::RingTooBig { size, max } =>
-                write!(f, "Ring size {} > maximum {}", size, max),
-            Self::TooManyInputs { count, max } =>
-                write!(f, "Too many inputs: {} (max {})", count, max),
-            Self::TooManyOutputs { count, max } =>
-                write!(f, "Too many outputs: {} (max {})", count, max),
-            Self::MemoTooLong { len, max } =>
-                write!(f, "Memo too long: {} chars (max {})", len, max),
-            Self::BridgeAmountTooSmall { amount, min } =>
-                write!(f, "Bridge amount {:.4} < minimum {:.4} HSMC", amount, min),
-            Self::BridgeInvalidAddress       => write!(f, "Bridge destination address is invalid"),
-            Self::RbfFeeTooLow { current_fee, new_fee } =>
-                write!(f, "RBF fee {:.6} must be > current fee {:.6}", new_fee, current_fee),
-            Self::TransactionTooLarge { size, max } =>
-                write!(f, "Tx too large: {} bytes (max {})", size, max),
-            Self::DoubleSpendDetected { key_image } =>
-                write!(f, "Double spend detected: key image {} already seen", &key_image[..12.min(key_image.len())]),
-            Self::LockTimeNotMet { lock_time, height } =>
-                write!(f, "Lock time {} not met at height {}", lock_time, height),
+            Self::EmptyHash => write!(f, "Transaction hash is empty"),
+            Self::EmptyFromAddress => write!(f, "from_address is empty"),
+            Self::EmptyToAddress => write!(f, "to_address is empty"),
+            Self::SelfTransfer => write!(f, "Self-transfers are not allowed"),
+            Self::NegativeOrNonFiniteAmount => write!(f, "Amount must be finite and non-negative"),
+            Self::NegativeOrNonFiniteFee => write!(f, "Fee must be finite and non-negative"),
+            Self::FeeTooLow { required, provided } => write!(
+                f,
+                "Fee too low: required {:.6} HSMC, provided {:.6}",
+                required, provided
+            ),
+            Self::MissingRingSignature => write!(f, "Privacy level requires ring_signature"),
+            Self::MissingCommitment => write!(f, "Privacy level requires Pedersen commitment"),
+            Self::MissingRangeProof => write!(f, "Full privacy requires Bulletproof range_proof"),
+            Self::MissingStealthAddress => write!(f, "Privacy level requires stealth_address"),
+            Self::InvalidRingSignatureStructure => {
+                write!(f, "Ring signature has invalid structure")
+            }
+            Self::InvalidCommitmentStructure => write!(f, "Commitment has invalid structure"),
+            Self::InvalidRangeProofStructure => write!(f, "Range proof has invalid structure"),
+            Self::InvalidStealthProof => write!(f, "Stealth proof is invalid"),
+            Self::RingTooSmall { size, min } => write!(f, "Ring size {} < minimum {}", size, min),
+            Self::RingTooBig { size, max } => write!(f, "Ring size {} > maximum {}", size, max),
+            Self::TooManyInputs { count, max } => {
+                write!(f, "Too many inputs: {} (max {})", count, max)
+            }
+            Self::TooManyOutputs { count, max } => {
+                write!(f, "Too many outputs: {} (max {})", count, max)
+            }
+            Self::MemoTooLong { len, max } => {
+                write!(f, "Memo too long: {} chars (max {})", len, max)
+            }
+            Self::BridgeAmountTooSmall { amount, min } => {
+                write!(f, "Bridge amount {:.4} < minimum {:.4} HSMC", amount, min)
+            }
+            Self::BridgeInvalidAddress => write!(f, "Bridge destination address is invalid"),
+            Self::RbfFeeTooLow {
+                current_fee,
+                new_fee,
+            } => write!(
+                f,
+                "RBF fee {:.6} must be > current fee {:.6}",
+                new_fee, current_fee
+            ),
+            Self::TransactionTooLarge { size, max } => {
+                write!(f, "Tx too large: {} bytes (max {})", size, max)
+            }
+            Self::DoubleSpendDetected { key_image } => write!(
+                f,
+                "Double spend detected: key image {} already seen",
+                &key_image[..12.min(key_image.len())]
+            ),
+            Self::LockTimeNotMet { lock_time, height } => {
+                write!(f, "Lock time {} not met at height {}", lock_time, height)
+            }
         }
     }
 }
@@ -1107,9 +1225,15 @@ impl std::error::Error for TxValidationError {}
 /// Validate a transaction for mempool acceptance (does not check double-spend — that's Chain's job)
 pub fn validate_tx(tx: &Transaction) -> Result<(), TxValidationError> {
     // Basic field checks
-    if tx.hash.is_empty()         { return Err(TxValidationError::EmptyHash); }
-    if tx.from_address.is_empty() { return Err(TxValidationError::EmptyFromAddress); }
-    if tx.to_address.is_empty()   { return Err(TxValidationError::EmptyToAddress); }
+    if tx.hash.is_empty() {
+        return Err(TxValidationError::EmptyHash);
+    }
+    if tx.from_address.is_empty() {
+        return Err(TxValidationError::EmptyFromAddress);
+    }
+    if tx.to_address.is_empty() {
+        return Err(TxValidationError::EmptyToAddress);
+    }
     if tx.from_address == tx.to_address && !tx.is_coinbase() {
         return Err(TxValidationError::SelfTransfer);
     }
@@ -1123,33 +1247,50 @@ pub fn validate_tx(tx: &Transaction) -> Result<(), TxValidationError> {
     }
 
     // Skip fee/privacy checks for coinbase
-    if tx.is_coinbase() { return Ok(()); }
+    if tx.is_coinbase() {
+        return Ok(());
+    }
 
     // Fee floor
     let min_fee = tx.min_fee();
     if tx.fee < min_fee {
-        return Err(TxValidationError::FeeTooLow { required: min_fee, provided: tx.fee });
+        return Err(TxValidationError::FeeTooLow {
+            required: min_fee,
+            provided: tx.fee,
+        });
     }
 
     // UTXO limits
     if tx.inputs.len() > MAX_TX_INPUTS {
-        return Err(TxValidationError::TooManyInputs { count: tx.inputs.len(), max: MAX_TX_INPUTS });
+        return Err(TxValidationError::TooManyInputs {
+            count: tx.inputs.len(),
+            max: MAX_TX_INPUTS,
+        });
     }
     if tx.outputs.len() > MAX_TX_OUTPUTS {
-        return Err(TxValidationError::TooManyOutputs { count: tx.outputs.len(), max: MAX_TX_OUTPUTS });
+        return Err(TxValidationError::TooManyOutputs {
+            count: tx.outputs.len(),
+            max: MAX_TX_OUTPUTS,
+        });
     }
 
     // Memo length
     if let Some(ref m) = tx.memo {
         if m.len() > MAX_MEMO_LEN {
-            return Err(TxValidationError::MemoTooLong { len: m.len(), max: MAX_MEMO_LEN });
+            return Err(TxValidationError::MemoTooLong {
+                len: m.len(),
+                max: MAX_MEMO_LEN,
+            });
         }
     }
 
     // Transaction size
     let max_tx_size = 65536u32; // 64 KB
     if tx.size_bytes > max_tx_size {
-        return Err(TxValidationError::TransactionTooLarge { size: tx.size_bytes, max: max_tx_size });
+        return Err(TxValidationError::TransactionTooLarge {
+            size: tx.size_bytes,
+            max: max_tx_size,
+        });
     }
 
     // Privacy proof requirements
@@ -1157,27 +1298,56 @@ pub fn validate_tx(tx: &Transaction) -> Result<(), TxValidationError> {
         PrivacyLevel::Transparent => {}
 
         PrivacyLevel::RingCt => {
-            let sig = tx.ring_signature.as_deref().ok_or(TxValidationError::MissingRingSignature)?;
-            tx.commitment.as_deref().ok_or(TxValidationError::MissingCommitment)?;
+            let sig = tx
+                .ring_signature
+                .as_deref()
+                .ok_or(TxValidationError::MissingRingSignature)?;
+            tx.commitment
+                .as_deref()
+                .ok_or(TxValidationError::MissingCommitment)?;
             // Validate ring size embedded in legacy field
             if let Some(ring_size) = tx.decoy_count {
                 let n = ring_size as usize;
-                if n < MIN_RING_SIZE { return Err(TxValidationError::RingTooSmall { size: n, min: MIN_RING_SIZE }); }
-                if n > MAX_RING_SIZE { return Err(TxValidationError::RingTooBig   { size: n, max: MAX_RING_SIZE }); }
+                if n < MIN_RING_SIZE {
+                    return Err(TxValidationError::RingTooSmall {
+                        size: n,
+                        min: MIN_RING_SIZE,
+                    });
+                }
+                if n > MAX_RING_SIZE {
+                    return Err(TxValidationError::RingTooBig {
+                        size: n,
+                        max: MAX_RING_SIZE,
+                    });
+                }
             }
         }
 
         PrivacyLevel::Stealth => {
-            tx.ring_signature.as_deref().ok_or(TxValidationError::MissingRingSignature)?;
-            tx.stealth_address.as_deref().ok_or(TxValidationError::MissingStealthAddress)?;
-            tx.commitment.as_deref().ok_or(TxValidationError::MissingCommitment)?;
+            tx.ring_signature
+                .as_deref()
+                .ok_or(TxValidationError::MissingRingSignature)?;
+            tx.stealth_address
+                .as_deref()
+                .ok_or(TxValidationError::MissingStealthAddress)?;
+            tx.commitment
+                .as_deref()
+                .ok_or(TxValidationError::MissingCommitment)?;
         }
 
         PrivacyLevel::Full => {
-            tx.ring_signature.as_deref().ok_or(TxValidationError::MissingRingSignature)?;
-            tx.stealth_address.as_deref().ok_or(TxValidationError::MissingStealthAddress)?;
-            tx.commitment.as_deref().ok_or(TxValidationError::MissingCommitment)?;
-            tx.range_proof.as_deref().ok_or(TxValidationError::MissingRangeProof)?;
+            tx.ring_signature
+                .as_deref()
+                .ok_or(TxValidationError::MissingRingSignature)?;
+            tx.stealth_address
+                .as_deref()
+                .ok_or(TxValidationError::MissingStealthAddress)?;
+            tx.commitment
+                .as_deref()
+                .ok_or(TxValidationError::MissingCommitment)?;
+            tx.range_proof
+                .as_deref()
+                .ok_or(TxValidationError::MissingRangeProof)?;
             // Validate range proof structure
             if let Some(ref rp) = tx.range_proof {
                 if rp.is_empty() || rp.len() % 2 != 0 {
@@ -1248,18 +1418,18 @@ pub fn recommend_fee(
     let privacy_mult = privacy.fee_multiplier();
     let congestion_mult = 1.0 + congestion_factor * 3.0;
 
-    let slow   = (base * privacy_mult * congestion_mult * 0.7).max(privacy.min_fee());
+    let slow = (base * privacy_mult * congestion_mult * 0.7).max(privacy.min_fee());
     let normal = (base * privacy_mult * congestion_mult * 1.0).max(privacy.min_fee());
-    let fast   = (base * privacy_mult * congestion_mult * 2.0).max(privacy.min_fee());
+    let fast = (base * privacy_mult * congestion_mult * 2.0).max(privacy.min_fee());
 
     FeeRecommendation { slow, normal, fast }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeeRecommendation {
-    pub slow:   f64,
+    pub slow: f64,
     pub normal: f64,
-    pub fast:   f64,
+    pub fast: f64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1279,29 +1449,41 @@ mod tests {
     #[test]
     fn test_reject_self_transfer() {
         let tx = Transaction::new("ADDR_A", "ADDR_A", 1.0, 0.001, PrivacyLevel::Transparent);
-        assert!(matches!(validate_tx(&tx), Err(TxValidationError::SelfTransfer)));
+        assert!(matches!(
+            validate_tx(&tx),
+            Err(TxValidationError::SelfTransfer)
+        ));
     }
 
     #[test]
     fn test_reject_low_fee() {
         let tx = Transaction::new("ADDR_A", "ADDR_B", 1.0, 0.000001, PrivacyLevel::Transparent);
-        assert!(matches!(validate_tx(&tx), Err(TxValidationError::FeeTooLow { .. })));
+        assert!(matches!(
+            validate_tx(&tx),
+            Err(TxValidationError::FeeTooLow { .. })
+        ));
     }
 
     #[test]
     fn test_reject_ringct_without_ring_sig() {
         let tx = Transaction::new("ADDR_A", "ADDR_B", 0.0, 0.001, PrivacyLevel::RingCt);
-        assert!(matches!(validate_tx(&tx), Err(TxValidationError::MissingRingSignature)));
+        assert!(matches!(
+            validate_tx(&tx),
+            Err(TxValidationError::MissingRingSignature)
+        ));
     }
 
     #[test]
     fn test_reject_full_without_range_proof() {
         let mut tx = Transaction::new("ADDR_A", "ADDR_B", 0.0, 0.005, PrivacyLevel::Full);
-        tx.ring_signature  = Some("deadbeef".repeat(8));
+        tx.ring_signature = Some("deadbeef".repeat(8));
         tx.stealth_address = Some("0xStealth".into());
-        tx.commitment      = Some("0xCommit".into());
+        tx.commitment = Some("0xCommit".into());
         // range_proof is still None → should fail
-        assert!(matches!(validate_tx(&tx), Err(TxValidationError::MissingRangeProof)));
+        assert!(matches!(
+            validate_tx(&tx),
+            Err(TxValidationError::MissingRangeProof)
+        ));
     }
 
     #[test]
@@ -1312,9 +1494,9 @@ mod tests {
 
     #[test]
     fn test_hash_determinism() {
-        let id  = "test-id-001";
-        let h1  = compute_tx_hash(TX_HASH_PREFIX, id, "from", "to", 1.0, 0.001, 1_700_000_000);
-        let h2  = compute_tx_hash(TX_HASH_PREFIX, id, "from", "to", 1.0, 0.001, 1_700_000_000);
+        let id = "test-id-001";
+        let h1 = compute_tx_hash(TX_HASH_PREFIX, id, "from", "to", 1.0, 0.001, 1_700_000_000);
+        let h2 = compute_tx_hash(TX_HASH_PREFIX, id, "from", "to", 1.0, 0.001, 1_700_000_000);
         assert_eq!(h1, h2);
     }
 
@@ -1327,7 +1509,10 @@ mod tests {
             "0xRecipient",
             1,
         );
-        assert!(matches!(result, Err(TxValidationError::BridgeAmountTooSmall { .. })));
+        assert!(matches!(
+            result,
+            Err(TxValidationError::BridgeAmountTooSmall { .. })
+        ));
     }
 
     #[test]
@@ -1356,9 +1541,9 @@ mod tests {
     #[test]
     fn test_priority_ordering() {
         let mut high_fee = Transaction::new("A", "B", 1.0, 0.01, PrivacyLevel::Transparent);
-        let mut low_fee  = Transaction::new("A", "B", 1.0, 0.001, PrivacyLevel::Transparent);
+        let mut low_fee = Transaction::new("A", "B", 1.0, 0.001, PrivacyLevel::Transparent);
         high_fee.size_bytes = 250;
-        low_fee.size_bytes  = 250;
+        low_fee.size_bytes = 250;
         assert!(high_fee.has_higher_priority_than(&low_fee));
     }
 
