@@ -235,6 +235,8 @@ pub enum WalletError {
     InvalidAddress(String),
 }
 
+impl std::error::Error for WalletError {}
+
 impl std::fmt::Display for WalletError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn test_merkle_root_single() {
-        let hashes = vec!["abc123".to_string()];
+        let hashes = vec!["ab".repeat(32)];
         let root = merkle_root(&hashes);
         assert_eq!(root.len(), 64);
     }

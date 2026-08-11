@@ -713,7 +713,7 @@ mod tests {
         let hash = &Sha256::digest(sha)[..20];
         let mut script_bytes = vec![0x76, 0xa9, 0x14]; // OP_DUP OP_HASH160 PUSH20
         script_bytes.extend_from_slice(hash);
-        script_bytes.extend_from_slice(&[0x88]); // OP_EQUALVERIFY only (no checksig for this test)
+        script_bytes.extend_from_slice(&[0x88, 0xac]); // OP_EQUALVERIFY OP_CHECKSIG
         let script = Script::new(script_bytes);
 
         let mut interp = ScriptInterpreter::standard();
