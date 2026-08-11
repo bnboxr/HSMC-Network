@@ -22,11 +22,14 @@ dashmap           = { workspace = true }
 parking_lot       = { workspace = true }
 bytes             = { workspace = true }
 crossbeam-channel = { workspace = true }
+# NodeServices derives use bitflags 2.x serde support.
+bitflags          = { workspace = true, features = ["serde"] }
 hsmc-core         = { path = "../hsmc-core" }
 
 # Noise Protocol encryption for P2P connections
 snow              = "0.9"
 chacha20poly1305  = "0.10"
 blake2            = "0.10"
-x25519-dalek      = "2"
+# Noise identity keys require the audited StaticSecret API gated in x25519-dalek 2.x.
+x25519-dalek      = { version = "2", features = ["static_secrets"] }
 
