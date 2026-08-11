@@ -18,6 +18,7 @@ use chrono::Utc;
 /// All hashes are double-SHA256 (SHA256d) with a domain separator prefix
 /// to prevent cross-protocol hash collisions.
 /// ============================================================================
+use serde::ser::{SerializeSeq, Serializer as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -1024,35 +1025,48 @@ impl Transaction {
                 input
             })
             .collect();
-        serde_json::to_vec(&(
-            self.version,
-            &self.id,
-            &self.from_address,
-            &self.to_address,
-            self.amount,
-            self.fee,
-            self.created_at,
-            inputs,
-            &self.outputs,
-            &self.privacy_level,
-            &self.ring_signature,
-            &self.stealth_address,
-            &self.commitment,
-            &self.range_proof,
-            self.decoy_count,
-            &self.key_image,
-            &self.payload,
-            &self.bridge_dest_chain,
-            &self.bridge_dest_address,
-            &self.bridge_tx_hash,
-            self.bridge_sequence,
-            &self.memo,
-            &self.replaces_hash,
-            self.size_bytes,
-            self.lock_time,
-            self.nonce,
-        ))
-        .expect("consensus transaction fields must be serializable")
+        // serde only implements tuple serialization up to a fixed arity. Encode the
+        // same ordered JSON sequence explicitly so every consensus field remains
+        // committed without changing the preimage's array representation.
+        let mut preimage = Vec::new();
+        {
+            let mut serializer = serde_json::Serializer::new(&mut preimage);
+            let mut sequence = serializer
+                .serialize_seq(Some(26))
+                .expect("consensus transaction fields must be serializable");
+            sequence.serialize_element(&self.version).unwrap();
+            sequence.serialize_element(&self.id).unwrap();
+            sequence.serialize_element(&self.from_address).unwrap();
+            sequence.serialize_element(&self.to_address).unwrap();
+            sequence.serialize_element(&self.amount).unwrap();
+            sequence.serialize_element(&self.fee).unwrap();
+            sequence.serialize_element(&self.created_at).unwrap();
+            sequence.serialize_element(&inputs).unwrap();
+            sequence.serialize_element(&self.outputs).unwrap();
+            sequence.serialize_element(&self.privacy_level).unwrap();
+            sequence.serialize_element(&self.ring_signature).unwrap();
+            sequence.serialize_element(&self.stealth_address).unwrap();
+            sequence.serialize_element(&self.commitment).unwrap();
+            sequence.serialize_element(&self.range_proof).unwrap();
+            sequence.serialize_element(&self.decoy_count).unwrap();
+            sequence.serialize_element(&self.key_image).unwrap();
+            sequence.serialize_element(&self.payload).unwrap();
+            sequence.serialize_element(&self.bridge_dest_chain).unwrap();
+            sequence
+                .serialize_element(&self.bridge_dest_address)
+                .unwrap();
+            sequence.serialize_element(&self.bridge_tx_hash).unwrap();
+            sequence.serialize_element(&self.bridge_sequence).unwrap();
+            sequence.serialize_element(&self.memo).unwrap();
+            sequence.serialize_element(&self.replaces_hash).unwrap();
+            sequence.serialize_element(&self.size_bytes).unwrap();
+            sequence.serialize_element(&self.lock_time).unwrap();
+            sequence.serialize_element(&self.nonce).unwrap();
+            sequence
+                .end()
+                .expect("consensus transaction fields must be serializable");
+        }
+        preimage
     }
 
     /// Compute the hash committed by block Merkle leaves.

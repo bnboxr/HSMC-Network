@@ -178,6 +178,11 @@ impl UtxoSet {
         format!("{}:{}", tx_hash, index)
     }
 
+    /// Look up an unspent output by its typed `(transaction hash, output index)` outpoint.
+    pub fn get(&self, tx_hash: &str, output_index: u32) -> Option<&Utxo> {
+        self.utxos.get(&Self::utxo_key(tx_hash, output_index))
+    }
+
     pub fn add(&mut self, utxo: Utxo) {
         let key = Self::utxo_key(&utxo.tx_hash, utxo.output_index);
         self.by_address
@@ -1236,7 +1241,10 @@ mod tests {
             commitment: None,
         });
         assert_eq!(utxo.balance_of("HSMC_addr_test"), 50.0);
+        assert_eq!(utxo.get("txA", 0).expect("outpoint exists").amount, 50.0);
+        assert!(utxo.get("txA", 1).is_none());
         utxo.spend("txA", 0);
+        assert!(utxo.get("txA", 0).is_none());
         assert_eq!(utxo.balance_of("HSMC_addr_test"), 0.0);
     }
 
