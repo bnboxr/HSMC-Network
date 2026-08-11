@@ -70,17 +70,28 @@ impl BlockStore {
     pub fn load_chain(&self, chain: &mut Chain) -> Result<(usize, u64)> {
         let cf = self.db.cf_handle(CF_BLOCKS).ok_or_else(|| anyhow!("CF_BLOCKS missing"))?;
         let iter = self.db.iterator_cf(cf, IteratorMode::Start);
-        let mut count = 0usize;
+        let mut blocks = Vec::new();
         for item in iter {
             let (_, value) = item?;
             let block: Block = serde_json::from_slice(&value)?;
-            if block.block_number == 0 { continue; }
-            chain.blocks.push(block.clone());
-            chain.index.insert(block.block_number, chain.blocks.len() - 1);
-            count += 1;
+            if block.block_number != 0 {
+                blocks.push(block);
+            }
         }
-        let tip = chain.height();
-        info!(loaded = count, tip, "Chain restored from RocksDB");
+
+        // Never restore headers alone. Replaying each persisted block through the
+        // consensus state machine reconstructs UTXOs, replay/double-spend indices,
+        // hash indices, difficulty, and reorg undo data from accepted block bodies.
+        let mut rebuilt = Chain::new();
+        for block in &blocks {
+            rebuilt.add_block(block.clone()).map_err(|e| anyhow!(
+                "persisted block #{} failed consensus replay: {}", block.block_number, e
+            ))?;
+        }
+        let count = blocks.len();
+        let tip = rebuilt.height();
+        *chain = rebuilt;
+        info!(loaded = count, tip, "Chain restored and consensus state rebuilt from RocksDB");
         Ok((count, tip))
     }
 
@@ -93,5 +104,63 @@ impl BlockStore {
         batch.delete_cf(cf_h, hash.as_bytes());
         self.db.write(batch)?;
         Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hsmc_core::{difficulty_to_leading_zeros, leading_zeros_in_hash, Block, MIN_DIFFICULTY};
+    use std::sync::Arc;
+
+    fn mine_block(mut block: Block) -> Block {
+        for nonce in 0..u64::MAX {
+            block.nonce = nonce;
+            let hash = block.compute_hash();
+            if leading_zeros_in_hash(&hash) >= difficulty_to_leading_zeros(block.difficulty) {
+                block.hash = hash;
+                return block;
+            }
+        }
+        unreachable!("nonce space exhausted")
+    }
+
+    #[test]
+    fn restart_rebuilds_consensus_utxo_state_from_persisted_blocks() {
+        let path = std::env::temp_dir().join(format!(
+            "hsmc-block-store-rebuild-{}-{}", std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let (coinbase_hash, reward, block_hash) = {
+            let db = Arc::new(crate::open_db(&path).expect("open database"));
+            let store = BlockStore::new(db);
+            let mut chain = Chain::new();
+            chain.difficulty = MIN_DIFFICULTY;
+            let block = mine_block(Block::new(
+                1, chain.tip().hash.clone(), "HSMC_restart_test_miner".into(),
+                MIN_DIFFICULTY, vec![],
+            ));
+            let coinbase_hash = block.transactions[0].clone();
+            let reward = block.reward;
+            let block_hash = block.hash.clone();
+            chain.add_block(block.clone()).expect("accept source block");
+            store.put(&block).expect("persist source block");
+            (coinbase_hash, reward, block_hash)
+        };
+
+        let db = Arc::new(crate::open_db(&path).expect("reopen database"));
+        let store = BlockStore::new(db);
+        let mut restarted = Chain::new();
+        assert_eq!(store.load_chain(&mut restarted).expect("rebuild chain"), (1, 1));
+        assert_eq!(restarted.height(), 1);
+        assert!(restarted.hash_index.contains_key(&block_hash));
+        assert_eq!(
+            restarted.utxo_set.get(&coinbase_hash, 0)
+                .expect("persisted coinbase rebuilt into UTXO set").amount,
+            reward
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(path);
     }
 }

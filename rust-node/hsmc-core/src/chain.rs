@@ -238,6 +238,17 @@ impl UtxoSet {
     }
 }
 
+/// Exact state changes made by an accepted block. Retaining this undo data is
+/// consensus-critical while the block remains on the active chain: a reorg must
+/// restore every consumed output and remove every replay/double-spend marker.
+#[derive(Debug, Clone, Default)]
+struct BlockUndo {
+    spent_utxos: Vec<Utxo>,
+    created_outpoints: Vec<(String, u32)>,
+    confirmed_transactions: Vec<String>,
+    spent_outpoints: Vec<(String, Option<String>)>,
+}
+
 /// Verify the supported transparent spend format: the referenced output must
 /// lock to `ED25519:<32-byte-public-key-hex>` and the input must carry a
 /// hex-encoded Ed25519 signature over `Transaction::spending_message()`.
@@ -321,6 +332,8 @@ pub struct Chain {
     pub confirmed_transactions: HashMap<String, u64>,
     /// Removed outpoints retained as a spent index for explicit double-spend errors.
     pub spent_outpoints: HashMap<String, String>,
+    /// Per-active-block undo data used to restore all transaction effects on reorg.
+    block_undos: HashMap<String, BlockUndo>,
 
     // ── Orphan pool ──────────────────────────────────────────────────────────
     /// Orphan blocks waiting for their parent
@@ -370,6 +383,7 @@ impl Chain {
             utxo_set,
             confirmed_transactions: HashMap::new(),
             spent_outpoints: HashMap::new(),
+            block_undos: HashMap::new(),
             orphans: HashMap::new(),
             stats: ChainStats::default(),
             chain_id: 8888,
@@ -553,6 +567,7 @@ impl Chain {
         let mut next_spent = self.spent_outpoints.clone();
         let mut next_confirmed = self.confirmed_transactions.clone();
         let mut block_outpoints = HashSet::new();
+        let mut undo = BlockUndo::default();
 
         for tx in &block.transaction_data {
             if tx.privacy_level != PrivacyLevel::Transparent {
@@ -616,6 +631,9 @@ impl Chain {
                     ChainError::InvalidBlock(format!("invalid signature for {}: {}", outpoint, e))
                 })?;
                 input_total += source.amount;
+                undo.spent_utxos.push(source);
+                undo.spent_outpoints
+                    .push((outpoint.clone(), next_spent.get(&outpoint).cloned()));
             }
 
             let mut output_total = 0.0;
@@ -641,7 +659,11 @@ impl Chain {
                 }
                 output_total += output.amount;
             }
-            if (output_total - tx.amount).abs() > 1e-9 || input_total + 1e-9 < output_total + tx.fee
+            // Transparent transactions must account for every input. Accepting
+            // `input > outputs + fee` silently burns the difference and makes the
+            // consensus supply dependent on an accidental transaction shape.
+            if (output_total - tx.amount).abs() > 1e-9
+                || (input_total - (output_total + tx.fee)).abs() > 1e-9
             {
                 return Err(ChainError::InvalidBlock(format!(
                     "transaction {} violates input/output conservation",
@@ -663,13 +685,15 @@ impl Chain {
                     block_height: block.block_number,
                     commitment: output.commitment.clone(),
                 });
+                undo.created_outpoints.push((tx.hash.clone(), index as u32));
             }
             next_confirmed.insert(tx.hash.clone(), block.block_number);
+            undo.confirmed_transactions.push(tx.hash.clone());
         }
 
         let coinbase_hash = block.transactions.first().cloned().unwrap_or_default();
         next_utxos.add(Utxo {
-            tx_hash: coinbase_hash,
+            tx_hash: coinbase_hash.clone(),
             output_index: 0,
             amount: block.reward + block.total_fees,
             address: block.miner_address.clone(),
@@ -680,16 +704,45 @@ impl Chain {
             block_height: block.block_number,
             commitment: None,
         });
+        undo.created_outpoints.push((coinbase_hash, 0));
         self.utxo_set = next_utxos;
         self.spent_outpoints = next_spent;
         self.confirmed_transactions = next_confirmed;
+        self.block_undos.insert(block.hash.clone(), undo);
         Ok(())
     }
 
-    /// Remove a block's effects from the UTXO set (for reorg rollback)
-    fn rollback_block_from_utxo_set(&mut self, block: &Block) {
-        let coinbase_hash = block.transactions.first().cloned().unwrap_or_default();
-        self.utxo_set.spend(&coinbase_hash, 0);
+    /// Remove all effects of one active-chain block. The matching undo record is
+    /// written only after atomic application, so a reorg either restores the
+    /// exact pre-block UTXO/replay state or fails closed.
+    fn rollback_block_from_utxo_set(&mut self, block: &Block) -> Result<(), ChainError> {
+        let undo = self.block_undos.remove(&block.hash).ok_or_else(|| {
+            ChainError::InvalidBlock(format!("missing undo data for block {}", block.hash))
+        })?;
+
+        // Remove descendants before restoring inputs. This also handles valid
+        // same-block transaction chains where one user tx spends another's output.
+        for (tx_hash, output_index) in undo.created_outpoints.iter().rev() {
+            self.utxo_set.spend(tx_hash, *output_index);
+        }
+        for tx_hash in &undo.confirmed_transactions {
+            self.confirmed_transactions.remove(tx_hash);
+        }
+        for (outpoint, previous) in undo.spent_outpoints.iter().rev() {
+            match previous {
+                Some(tx_hash) => {
+                    self.spent_outpoints
+                        .insert(outpoint.clone(), tx_hash.clone());
+                }
+                None => {
+                    self.spent_outpoints.remove(outpoint);
+                }
+            }
+        }
+        for utxo in undo.spent_utxos {
+            self.utxo_set.add(utxo);
+        }
+        Ok(())
     }
 
     // ── Difficulty Retargeting ────────────────────────────────────────────────
@@ -776,10 +829,10 @@ impl Chain {
         // Roll back blocks to common ancestor
         let rollback_start = common_ancestor as usize + 1;
         let rolled_back: Vec<Block> = self.blocks.drain(rollback_start..).collect();
-        for b in &rolled_back {
+        for b in rolled_back.iter().rev() {
             self.index.remove(&b.block_number);
             self.hash_index.remove(&b.hash);
-            self.rollback_block_from_utxo_set(b);
+            self.rollback_block_from_utxo_set(b)?;
         }
         self.total_chain_work = self.blocks.iter().map(|b| b.compute_chain_work()).sum();
 
@@ -1001,7 +1054,7 @@ impl Chain {
 
             // Reward doesn't exceed halving schedule
             let max_reward = block_reward(curr.block_number) + curr.total_fees;
-            if curr.reward > max_reward + 1e-9 {
+            if !curr.reward.is_finite() || curr.reward > max_reward + 1e-9 {
                 return Err(ChainError::ChainIntegrityFailure {
                     block_number: curr.block_number,
                     reason: format!(
@@ -1108,7 +1161,7 @@ mod tests {
         chain.utxo_set.add(Utxo {
             tx_hash: source_hash.into(),
             output_index: 0,
-            amount: amount + 1.0,
+            amount: amount + 0.001,
             address: sender.clone(),
             lock_script: format!("ED25519:{}", hex::encode(public_key.as_bytes())),
             block_height: chain.height(),
@@ -1310,6 +1363,96 @@ mod tests {
         unknown.outputs = vec![TxOutput::new(1.0, "HSMC_recipient")];
         unknown.refresh_hash();
         assert!(chain.add_block(block_with_tx(&chain, unknown)).is_err());
+    }
+
+    #[test]
+    fn rejects_excess_input_that_would_silently_burn_value() {
+        let mut chain = Chain::new();
+        chain.difficulty = MIN_DIFFICULTY;
+        let tx = signed_spend(&mut chain, "excess_funding", 5.0);
+        // The signature commits to the outpoint and transaction, not the mutable
+        // local fixture amount. Raise the source from 5.001 to 6.0 to model an
+        // input whose unrepresented remainder would previously have been burned.
+        let mut source = chain
+            .utxo_set
+            .spend("excess_funding", 0)
+            .expect("fixture source exists");
+        source.amount = 6.0;
+        chain.utxo_set.add(source);
+
+        assert!(chain.add_block(block_with_tx(&chain, tx)).is_err());
+        assert!(chain.utxo_set.get("excess_funding", 0).is_some());
+    }
+
+    #[test]
+    fn rejects_coinbase_claim_above_subsidy_plus_fees_on_live_acceptance() {
+        let mut chain = Chain::new();
+        chain.difficulty = MIN_DIFFICULTY;
+        let mut block = make_valid_block(&chain);
+        block.reward += 1.0;
+        // The reward is body data rather than header data in this format, but
+        // remine defensively so the regression exercises live add_block checks.
+        block = mine_block(block);
+
+        assert!(chain.add_block(block).is_err());
+        assert_eq!(chain.height(), 0);
+    }
+
+    #[test]
+    fn reorg_rolls_back_all_user_transaction_state() {
+        let mut chain = Chain::new();
+        chain.difficulty = MIN_DIFFICULTY;
+        let tx = signed_spend(&mut chain, "reorg_funding", 5.0);
+        let tx_hash = tx.hash.clone();
+        let old_block = block_with_tx(&chain, tx);
+        let old_block_hash = old_block.hash.clone();
+        chain.add_block(old_block).expect("old block accepted");
+        assert!(chain.utxo_set.get("reorg_funding", 0).is_none());
+        assert!(chain.utxo_set.get(&tx_hash, 0).is_some());
+        assert!(chain.spent_outpoints.contains_key("reorg_funding:0"));
+        assert!(chain.confirmed_transactions.contains_key(&tx_hash));
+
+        let genesis = chain.blocks[0].clone();
+        let mut fork_one = Block::new(
+            1,
+            genesis.hash.clone(),
+            "HSMC_fork_miner".into(),
+            MIN_DIFFICULTY,
+            vec![],
+        );
+        fork_one.timestamp = genesis.timestamp + 1;
+        let fork_one = mine_block(fork_one);
+        let mut fork_two = Block::new(
+            2,
+            fork_one.hash.clone(),
+            "HSMC_fork_miner".into(),
+            MIN_DIFFICULTY,
+            vec![],
+        );
+        fork_two.timestamp = fork_one.timestamp + 1;
+        let fork_two = mine_block(fork_two);
+        let mut fork_three = Block::new(
+            3,
+            fork_two.hash.clone(),
+            "HSMC_fork_miner".into(),
+            MIN_DIFFICULTY,
+            vec![],
+        );
+        fork_three.timestamp = fork_two.timestamp + 1;
+        let fork_three = mine_block(fork_three);
+
+        assert_eq!(
+            chain
+                .try_reorg(vec![fork_one, fork_two, fork_three])
+                .unwrap(),
+            3
+        );
+        assert_eq!(chain.height(), 3);
+        assert!(chain.get_block_by_hash(&old_block_hash).is_none());
+        assert!(chain.utxo_set.get("reorg_funding", 0).is_some());
+        assert!(chain.utxo_set.get(&tx_hash, 0).is_none());
+        assert!(!chain.spent_outpoints.contains_key("reorg_funding:0"));
+        assert!(!chain.confirmed_transactions.contains_key(&tx_hash));
     }
 
     #[test]

@@ -521,14 +521,15 @@ impl Block {
             return Err(BlockValidationError::InvalidCoinbase);
         }
 
-        // 11. Reward check (within halving schedule)
-        let expected_reward = block_reward(self.block_number);
-        let fee_reward = self.reward - expected_reward;
-        if fee_reward < -1e-9 {
-            // reward cannot be less than subsidy (unless total_fees compensates)
+        // 11. Coinbase may claim at most the scheduled subsidy plus fees.
+        // Under-claiming is permitted (the subsidy is simply unclaimed), but an
+        // over-claim would inflate supply and must be rejected during live block
+        // acceptance, not merely by an offline chain-integrity scan.
+        let max_reward = block_reward(self.block_number) + self.total_fees;
+        if !self.reward.is_finite() || self.reward > max_reward + 1e-9 {
             return Err(BlockValidationError::InvalidReward {
                 claimed: self.reward,
-                max_allowed: expected_reward + self.total_fees,
+                max_allowed: max_reward,
             });
         }
 
