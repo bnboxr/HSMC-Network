@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Search, Cube, Blocks, Cpu, Activity, Clock, Hash,
+  Search, Box, Blocks, Cpu, Activity, Clock, Hash,
   ChevronRight, Shield, Network, Zap, Database, ArrowUpRight,
   RefreshCw, Circle, BoxSelect, Binary
 } from 'lucide-react';
@@ -106,7 +106,7 @@ function BlockCard({ block, index }: { block: BlockInfo; index: number }) {
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Cube className="w-4 h-4 text-primary" />
+          <Box className="w-4 h-4 text-primary" />
           <span className="text-white font-mono font-bold">
             Block #{block.block_number.toLocaleString()}
           </span>
@@ -211,7 +211,7 @@ export default function ExplorerPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <SEO title="HSMC Block Explorer — Mainnet" description="Explore the HSMC blockchain — blocks, transactions, stats, and network activity." />
+      <SEO title="HSMC Block Explorer — Mainnet" description="Explore the HSMC blockchain — blocks, transactions, stats, and network activity." path="/explorer" />
       <Navbar />
 
       <main className="max-w-7xl mx-auto px-4 py-8 space-y-8">
@@ -313,7 +313,7 @@ export default function ExplorerPage() {
           <div>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold flex items-center gap-2">
-                <Cube className="w-5 h-5 text-primary" /> Latest Blocks
+                <Box className="w-5 h-5 text-primary" /> Latest Blocks
               </h2>
               <ChevronRight className="w-5 h-5 text-gray-600 cursor-pointer hover:text-primary transition-colors" />
             </div>

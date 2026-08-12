@@ -1,52 +1,52 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://astranet-pulse.lovable.app/</loc>
+    <loc>https://hsmc-network.ctonew.app/</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/landing</loc>
+    <loc>https://hsmc-network.ctonew.app/landing</loc>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/whitepaper</loc>
+    <loc>https://hsmc-network.ctonew.app/whitepaper</loc>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/mainnet</loc>
+    <loc>https://hsmc-network.ctonew.app/mainnet</loc>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/mainnet/readiness</loc>
+    <loc>https://hsmc-network.ctonew.app/mainnet/readiness</loc>
     <changefreq>weekly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/rust-node</loc>
+    <loc>https://hsmc-network.ctonew.app/rust-node</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/node</loc>
+    <loc>https://hsmc-network.ctonew.app/node</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/investors</loc>
+    <loc>https://hsmc-network.ctonew.app/investors</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/listing-kit</loc>
+    <loc>https://hsmc-network.ctonew.app/listing-kit</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://astranet-pulse.lovable.app/onboarding</loc>
+    <loc>https://hsmc-network.ctonew.app/onboarding</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>

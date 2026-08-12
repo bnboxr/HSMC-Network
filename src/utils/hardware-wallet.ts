@@ -50,20 +50,55 @@ export interface SignedTransaction {
 
 // ─── Ledger CDN dynamic imports ─────────────────────────────────────────────────
 
-let _ledgerTransportModule: typeof import('@ledgerhq/hw-transport-webusb') | null = null;
-let _ledgerEthModule: typeof import('@ledgerhq/hw-app-eth') | null = null;
+/**
+ * The @ledgerhq packages are NOT npm dependencies: the Ledger transport and
+ * Ethereum app are loaded at runtime from esm.sh (see loadLedgerModules).
+ * These local interfaces describe only the members this module uses, so the
+ * integration type-checks without pulling the heavy @ledgerhq dependency tree
+ * into the frontend bundle.
+ */
+interface LedgerTransport {
+  close(): Promise<void>;
+}
+
+interface LedgerTransportModule {
+  default?: { create(): Promise<LedgerTransport> };
+  create?(): Promise<LedgerTransport>;
+}
+
+interface LedgerEthApp {
+  getAddress(path: string, display?: boolean): Promise<{ address: string }>;
+  getAppConfiguration(): Promise<{ arbitraryDataEnabled: boolean }>;
+  clearSignTransaction(
+    path: string,
+    tx: Record<string, string | number>,
+    opts?: unknown
+  ): Promise<{ r: string; s: string; v: string }>;
+}
+
+interface LedgerEthModule {
+  default?: new (transport: LedgerTransport) => LedgerEthApp;
+  new?(transport: LedgerTransport): LedgerEthApp;
+}
+
+let _ledgerTransportModule: LedgerTransportModule | null = null;
+let _ledgerEthModule: LedgerEthModule | null = null;
 
 async function loadLedgerModules(): Promise<void> {
   if (_ledgerTransportModule && _ledgerEthModule) return;
 
   // esm.sh transpiles CJS → ESM and bundles everything.  Pin the versions.
+  // Module specifiers are held in variables so TS doesn't try to resolve them
+  // as npm packages — Vite loads them from the CDN at runtime (@vite-ignore).
+  const transportUrl = 'https://esm.sh/@ledgerhq/hw-transport-webusb@6.29.4';
+  const ethUrl = 'https://esm.sh/@ledgerhq/hw-app-eth@6.41.0';
   const [transportMod, ethMod] = await Promise.all([
-    import(/* @vite-ignore */ 'https://esm.sh/@ledgerhq/hw-transport-webusb@6.29.4'),
-    import(/* @vite-ignore */ 'https://esm.sh/@ledgerhq/hw-app-eth@6.41.0'),
+    import(/* @vite-ignore */ transportUrl),
+    import(/* @vite-ignore */ ethUrl),
   ]);
 
-  _ledgerTransportModule = transportMod as typeof import('@ledgerhq/hw-transport-webusb');
-  _ledgerEthModule = ethMod as typeof import('@ledgerhq/hw-app-eth');
+  _ledgerTransportModule = transportMod as LedgerTransportModule;
+  _ledgerEthModule = ethMod as LedgerEthModule;
 }
 
 /**
@@ -86,7 +121,10 @@ export async function connectLedger(
   const transport = await Transport.create();
 
   try {
-    const Eth = _ledgerEthModule!.default || _ledgerEthModule!;
+    // esm.sh CJS interop: the class may be exported as `default` or as the module itself.
+    const Eth = (_ledgerEthModule!.default || _ledgerEthModule) as new (
+      transport: LedgerTransport
+    ) => LedgerEthApp;
     const eth = new Eth(transport);
 
     const { address } = await eth.getAddress(path, false);
@@ -151,13 +189,16 @@ export async function signLedgerTransaction(
   const transport = await Transport.create();
 
   try {
-    const Eth = _ledgerEthModule!.default || _ledgerEthModule!;
+    // esm.sh CJS interop: the class may be exported as `default` or as the module itself.
+    const Eth = (_ledgerEthModule!.default || _ledgerEthModule) as new (
+      transport: LedgerTransport
+    ) => LedgerEthApp;
     const eth = new Eth(transport);
 
     // EIP-1559 vs legacy detection: if maxFeePerGas is present, use 1559
     const isEIP1559 = !!tx.maxFeePerGas || !!tx.maxPriorityFeePerGas;
 
-    const ledgerTx: Record<string, string> = {
+    const ledgerTx: Record<string, string | number> = {
       to: tx.to,
       value: tx.value,
       data: tx.data || '0x',
@@ -409,7 +450,7 @@ export function detectHardwareWalletSupport(): {
   const hasWebUSB =
     typeof navigator !== 'undefined' &&
     'usb' in navigator &&
-    typeof (navigator as Navigator & { usb?: unknown }).usb?.getDevices === 'function';
+    typeof (navigator as Navigator & { usb?: { getDevices?: () => Promise<unknown> } }).usb?.getDevices === 'function';
 
   return {
     ledger: hasWebUSB,

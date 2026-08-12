@@ -75,6 +75,10 @@ export async function authenticateWithSeed(
 
   // ── Try local auth in background (non-blocking) ──────────────────
   const email = `${address}@hsmc.wallet`;
+  // Local auth is not available in this build: functions.invoke() resolves with a
+  // clear "Feature not available" error, so the chain below logs and skips sign-in.
+  const localAuth = async (_payload: { email: string; password: string }) =>
+    ({ error: { message: 'Feature not available: local auth. Use the API server /auth/login.' } });
   supabase.functions.invoke('wallet-signin', { body: { address, auth_password } })
     .then(async ({ error: fnErr }) => {
       if (fnErr) { console.warn('[seed-auth] wallet-signin skipped:', fnErr.message); return; }
