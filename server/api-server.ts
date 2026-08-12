@@ -555,7 +555,7 @@ async function extractJWTUser(req: Request): Promise<string | null> {
   if (token.split(".").length !== 3) return null;
   const payload = await verifyJWT(token);
   if (!payload) return null;
-  return (payload.sub || payload.user_id || payload.id) as string | null;
+  return (payload.sub || payload.userId || payload.user_id || payload.id) as string | null;
 }
 
 async function requireJWTUser(req: Request): Promise<{ userId: string } | Response> {
