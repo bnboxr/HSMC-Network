@@ -26,16 +26,15 @@ use std::sync::Arc;
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT as G;
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use sha3::Keccak256;
 use thiserror::Error;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 use wasmtime::{
-    Caller, Config, Engine, Extern, Func, Instance, Linker, Memory, Module, Store, StoreLimits,
-    Trap,
+    Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -451,6 +450,10 @@ struct HostState {
     token_ledger: Arc<RwLock<HashMap<([u8; 32], [u8; 32]), u64>>>,
     /// Global call depth (shared across cross-contract calls).
     call_depth: Arc<std::sync::atomic::AtomicU32>,
+    /// Per-store resource limits (memory cap etc.). Attached via
+    /// `Store::limiter`; wasmtime 47 requires the limiter to live inside the
+    /// store data (see `Store::limiter` docs) rather than being a temporary.
+    limits: StoreLimits,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -476,10 +479,17 @@ impl HsmcVm {
         wasm_config.consume_fuel(true);
         wasm_config.epoch_interruption(true);
 
-        // Set memory limits
-        wasm_config.static_memory_maximum_size(config.memory_limit as u64);
-        wasm_config.static_memory_guard_size(0);
-        wasm_config.dynamic_memory_guard_size(0);
+        // Set memory limits.
+        //
+        // wasmtime 47 removed `static_memory_maximum_size`, `static_memory_guard_size`
+        // and `dynamic_memory_guard_size` from `Config`. The Config-level linear-memory
+        // cap now only exists on `PoolingAllocationConfig` (pooling allocator feature,
+        // not enabled here), so the per-contract memory cap is enforced at the store
+        // level instead: each `Store` carries a `StoreLimits` limiter (built below)
+        // that rejects any `memory.grow` beyond `config.memory_limit`.
+        // Guard sizes are unified under `Config::memory_guard_size` and default to a
+        // safe non-zero value — we keep the default (bounds-check safety) instead of
+        // zeroing it as the old API allowed.
 
         let engine = Engine::new(&wasm_config)
             .map_err(|e| VmError::CompileError(e.to_string()))?;
@@ -604,6 +614,9 @@ impl HsmcVm {
             engine: self.engine.clone(),
             token_ledger: self.token_ledger.clone(),
             call_depth: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            limits: StoreLimitsBuilder::new()
+                .memory_size(self.config.memory_limit)
+                .build(),
         });
 
         // Pre-populate bytecode map for cross-contract calls
@@ -616,7 +629,10 @@ impl HsmcVm {
         }
 
         store.set_fuel(gas_budget).map_err(|e| VmError::HostError(e.to_string()))?;
-        store.limiter(|state| &mut StoreLimits::new(state, self.config.memory_limit));
+        // wasmtime 47: `StoreLimits::new(state, limit)` is gone; limits are built via
+        // `StoreLimitsBuilder`, stored in the store data, and attached with
+        // `Store::limiter` (enforced on every linear-memory growth for this store).
+        store.limiter(|state| &mut state.limits);
 
         let instance = linker
             .instantiate(&mut store, &module)
@@ -861,11 +877,16 @@ impl HsmcVm {
                         Ok(k) => k,
                         Err(_) => return -2, // deserialization error
                     };
-                    let sig = match Signature::from_bytes(&sig_bytes) {
+                    // ed25519 2.x: `Signature::from_bytes` is infallible on the
+                    // `ed25519` crate type; use the fallible `from_slice` to keep
+                    // the -2 deserialization-error path.
+                    let sig = match Signature::from_slice(&sig_bytes) {
                         Ok(s) => s,
                         Err(_) => return -2, // deserialization error
                     };
 
+                    // ed25519-dalek 2.x moved `verify` behind the `Verifier` trait
+                    // (imported above).
                     match vk.verify(&msg, &sig) {
                         Ok(()) => 0,   // valid signature
                         Err(_) => -1,  // invalid signature
@@ -922,7 +943,10 @@ impl HsmcVm {
                     let Ok(blinding_bytes): Result<[u8; 32], _> = data[40..72].try_into() else {
                         return -2; // data slice length mismatch (should be unreachable)
                     };
-                    let blinding = match Scalar::from_canonical_bytes(blinding_bytes) {
+                    // curve25519-dalek 4.x: `from_canonical_bytes` returns
+                    // `subtle::CtOption<Scalar>`; convert to `Option` to keep the
+                    // existing match.
+                    let blinding = match Option::<Scalar>::from(Scalar::from_canonical_bytes(blinding_bytes)) {
                         Some(s) => s,
                         None => return -2, // invalid scalar
                     };
@@ -976,7 +1000,7 @@ impl HsmcVm {
                     };
 
                     // Deserialize view key as scalar (view PRIVATE key)
-                    let view_scalar = match Scalar::from_canonical_bytes(view_key_bytes) {
+                    let view_scalar = match Option::<Scalar>::from(Scalar::from_canonical_bytes(view_key_bytes)) {
                         Some(s) => s,
                         None => return -1,
                     };
@@ -1231,6 +1255,7 @@ impl HsmcVm {
         //          -3 execution error, -4 call depth exceeded.
         let engine_cc = engine.clone();
         let ctx_cc = ctx.clone();
+        let memory_limit_cc = self.config.memory_limit;
         linker
             .func_wrap("env", "hsmc_call_contract", {
                 move |mut caller: Caller<'_, HostState>,
@@ -1318,9 +1343,13 @@ impl HsmcVm {
                         engine: engine_cc.clone(),
                         token_ledger: caller.data().token_ledger.clone(),
                         call_depth: caller.data().call_depth.clone(),
+                        limits: StoreLimitsBuilder::new()
+                            .memory_size(memory_limit_cc)
+                            .build(),
                     });
 
                     store.set_fuel(500_000).ok();
+                    store.limiter(|state| &mut state.limits);
 
                     let instance = match linker.instantiate(&mut store, &module) {
                         Ok(i) => i,
@@ -1348,10 +1377,10 @@ impl HsmcVm {
 
                     // Write args to target memory (use same offset pattern)
                     let target_args_ptr = 0x1000usize;
-                    if target_args_ptr + args.len() > target_memory.data_size(&store) as usize {
-                        let needed = (target_args_ptr + args.len()) as u64;
+                    if target_args_ptr + args.len() > target_memory.data_size(&store) {
+                        let needed = target_args_ptr + args.len();
                         let pages = ((needed - target_memory.data_size(&store)) + 65535) / 65536;
-                        target_memory.grow(&mut store, pages).ok();
+                        target_memory.grow(&mut store, pages as u64).ok();
                     }
                     target_memory.write(&mut store, target_args_ptr, &args).ok();
 
@@ -1511,23 +1540,23 @@ impl HsmcVm {
         memory: Memory,
         data: &[u8],
     ) -> VmResult<usize> {
-        let mem_size = memory.data_size(store);
+        let mem_size = memory.data_size(&mut *store);
         // Allocate at the end of current memory
         // Real contracts should use a proper allocator; we write to a fixed offset
         let ptr = 0x1000; // Fixed offset for argument passing (4KB)
-        if ptr + data.len() > mem_size as usize {
+        if ptr + data.len() > mem_size {
             // Need to grow memory
-            let needed = (ptr + data.len()) as u64;
+            let needed = ptr + data.len();
             let pages_needed = ((needed - mem_size) + 65535) / 65536;
             memory
-                .grow(store, pages_needed)
-                .map_err(|e| VmError::MemoryLimitExceeded {
-                    requested: needed as usize,
+                .grow(&mut *store, pages_needed as u64)
+                .map_err(|_| VmError::MemoryLimitExceeded {
+                    requested: needed,
                     max: self.config.memory_limit,
                 })?;
         }
         memory
-            .write(store, ptr, data)
+            .write(&mut *store, ptr, data)
             .map_err(|e| VmError::HostError(format!("memory write failed: {}", e)))?;
         Ok(ptr)
     }
@@ -1580,7 +1609,7 @@ fn write_mem(
     ptr: usize,
     data: &[u8],
 ) -> VmResult<()> {
-    let mem_size = memory.data_size(caller) as usize;
+    let mem_size = memory.data_size(&mut *caller) as usize;
     if ptr.checked_add(data.len()).map_or(true, |end| end > mem_size) {
         return Err(VmError::PointerOutOfBounds { ptr, mem_size });
     }
