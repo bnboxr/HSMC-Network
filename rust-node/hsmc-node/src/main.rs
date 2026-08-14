@@ -1,3 +1,5 @@
+use anyhow::Result;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 /// HSMC Node v2.0 — Full Production Orchestration
 ///
 /// Services launched:
@@ -11,65 +13,62 @@
 ///   ├── EIP-1559 fee market                    — base-fee auto-adjustment
 ///   ├── UTXO set manager                       — dual-indexed spend/balance
 ///   └── Graceful shutdown                      — SIGINT / SIGTERM
-
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{RwLock, Mutex, broadcast};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::time::sleep;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
-use anyhow::Result;
 
 use hsmc_core::{
-    Chain, Mempool,
-    governance::{GovernanceEngine, GovernanceState, ProposalStatus},
     fee::FeeMarket,
+    governance::{GovernanceEngine, GovernanceState, ProposalStatus},
     state::{StakingRegistry, StakingState},
+    Chain, Mempool,
 };
 use hsmc_p2p::{PeerRegistry, SyncService};
 use hsmc_rpc::server::start_rpc_server;
 use hsmc_starks::ShieldedPool;
+use hsmc_storage::{open_db, BlockStore, MempoolStore, StateStore, TxStore, UtxoStore};
 use hsmc_stratum::StratumServer;
-use hsmc_storage::{open_db, BlockStore, TxStore, MempoolStore, StateStore, UtxoStore};
 
 // ── Metrics counters (atomic, lock-free) ─────────────────────────────────────
 
 /// Global node metrics — updated atomically throughout runtime
 pub struct NodeMetrics {
-    pub blocks_mined:       AtomicU64,
-    pub txs_processed:      AtomicU64,
-    pub shares_submitted:   AtomicU64,
-    pub peer_count:         AtomicU64,
-    pub mempool_size:       AtomicU64,
-    pub chain_height:       AtomicU64,
-    pub total_hashrate_khs: AtomicU64,   // KH/s ×10 (1 decimal via integer)
-    pub governance_active:  AtomicU64,
-    pub staking_total:      AtomicU64,   // in atomic units (HSMC × 10^8)
-    pub utxo_count:         AtomicU64,
-    pub uptime_secs:        AtomicU64,
-    pub base_fee_satoshis:  AtomicU64,
-    pub rejected_txs:       AtomicU64,
-    pub fork_depth:         AtomicU64,
+    pub blocks_mined: AtomicU64,
+    pub txs_processed: AtomicU64,
+    pub shares_submitted: AtomicU64,
+    pub peer_count: AtomicU64,
+    pub mempool_size: AtomicU64,
+    pub chain_height: AtomicU64,
+    pub total_hashrate_khs: AtomicU64, // KH/s ×10 (1 decimal via integer)
+    pub governance_active: AtomicU64,
+    pub staking_total: AtomicU64, // in atomic units (HSMC × 10^8)
+    pub utxo_count: AtomicU64,
+    pub uptime_secs: AtomicU64,
+    pub base_fee_satoshis: AtomicU64,
+    pub rejected_txs: AtomicU64,
+    pub fork_depth: AtomicU64,
 }
 
 impl NodeMetrics {
     pub const fn new() -> Self {
         Self {
-            blocks_mined:       AtomicU64::new(0),
-            txs_processed:      AtomicU64::new(0),
-            shares_submitted:   AtomicU64::new(0),
-            peer_count:         AtomicU64::new(0),
-            mempool_size:       AtomicU64::new(0),
-            chain_height:       AtomicU64::new(0),
+            blocks_mined: AtomicU64::new(0),
+            txs_processed: AtomicU64::new(0),
+            shares_submitted: AtomicU64::new(0),
+            peer_count: AtomicU64::new(0),
+            mempool_size: AtomicU64::new(0),
+            chain_height: AtomicU64::new(0),
             total_hashrate_khs: AtomicU64::new(0),
-            governance_active:  AtomicU64::new(0),
-            staking_total:      AtomicU64::new(0),
-            utxo_count:         AtomicU64::new(0),
-            uptime_secs:        AtomicU64::new(0),
-            base_fee_satoshis:  AtomicU64::new(1000),
-            rejected_txs:       AtomicU64::new(0),
-            fork_depth:         AtomicU64::new(0),
+            governance_active: AtomicU64::new(0),
+            staking_total: AtomicU64::new(0),
+            utxo_count: AtomicU64::new(0),
+            uptime_secs: AtomicU64::new(0),
+            base_fee_satoshis: AtomicU64::new(1000),
+            rejected_txs: AtomicU64::new(0),
+            fork_depth: AtomicU64::new(0),
         }
     }
 
@@ -84,20 +83,76 @@ impl NodeMetrics {
                 ));
             };
         }
-        gauge!("chain_height",       "Current chain tip block number",         self.chain_height.load(Ordering::Relaxed));
-        gauge!("mempool_size",        "Pending transactions in mempool",        self.mempool_size.load(Ordering::Relaxed));
-        gauge!("peer_count",          "Connected P2P peers",                   self.peer_count.load(Ordering::Relaxed));
-        gauge!("blocks_mined_total",  "Blocks mined since node start",         self.blocks_mined.load(Ordering::Relaxed));
-        gauge!("txs_processed_total", "Transactions processed since start",    self.txs_processed.load(Ordering::Relaxed));
-        gauge!("shares_submitted",    "Mining shares submitted by workers",    self.shares_submitted.load(Ordering::Relaxed));
-        gauge!("hashrate_khs",        "Current node hashrate in KH/s (×10)",  self.total_hashrate_khs.load(Ordering::Relaxed));
-        gauge!("governance_active",   "Active on-chain governance proposals",  self.governance_active.load(Ordering::Relaxed));
-        gauge!("staking_total_units", "Total staked HSMC in atomic units",     self.staking_total.load(Ordering::Relaxed));
-        gauge!("utxo_count",          "Size of the UTXO set",                  self.utxo_count.load(Ordering::Relaxed));
-        gauge!("uptime_seconds",      "Node uptime in seconds",                self.uptime_secs.load(Ordering::Relaxed));
-        gauge!("base_fee_satoshis",   "EIP-1559 base fee in satoshis",         self.base_fee_satoshis.load(Ordering::Relaxed));
-        gauge!("rejected_txs_total",  "Rejected/invalid transactions",         self.rejected_txs.load(Ordering::Relaxed));
-        gauge!("fork_depth",          "Longest detected fork depth",           self.fork_depth.load(Ordering::Relaxed));
+        gauge!(
+            "chain_height",
+            "Current chain tip block number",
+            self.chain_height.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "mempool_size",
+            "Pending transactions in mempool",
+            self.mempool_size.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "peer_count",
+            "Connected P2P peers",
+            self.peer_count.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "blocks_mined_total",
+            "Blocks mined since node start",
+            self.blocks_mined.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "txs_processed_total",
+            "Transactions processed since start",
+            self.txs_processed.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "shares_submitted",
+            "Mining shares submitted by workers",
+            self.shares_submitted.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "hashrate_khs",
+            "Current node hashrate in KH/s (×10)",
+            self.total_hashrate_khs.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "governance_active",
+            "Active on-chain governance proposals",
+            self.governance_active.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "staking_total_units",
+            "Total staked HSMC in atomic units",
+            self.staking_total.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "utxo_count",
+            "Size of the UTXO set",
+            self.utxo_count.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "uptime_seconds",
+            "Node uptime in seconds",
+            self.uptime_secs.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "base_fee_satoshis",
+            "EIP-1559 base fee in satoshis",
+            self.base_fee_satoshis.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "rejected_txs_total",
+            "Rejected/invalid transactions",
+            self.rejected_txs.load(Ordering::Relaxed)
+        );
+        gauge!(
+            "fork_depth",
+            "Longest detected fork depth",
+            self.fork_depth.load(Ordering::Relaxed)
+        );
         out
     }
 }
@@ -107,33 +162,36 @@ static METRICS: NodeMetrics = NodeMetrics::new();
 // ── Config ───────────────────────────────────────────────────────────────────
 
 struct NodeConfig {
-    data_dir:      String,
-    rpc_port:      u16,
-    stratum_port:  u16,
-    metrics_port:  u16,
+    data_dir: String,
+    rpc_port: u16,
+    stratum_port: u16,
+    metrics_port: u16,
     miner_address: String,
-    chain_id:      u64,
-    network:       String,
-    log_level:     String,
-    max_peers:     usize,
-    block_time_ms: u64,   // target block time
-    max_mempool:   usize, // max pending txs
+    chain_id: u64,
+    network: String,
+    log_level: String,
+    max_peers: usize,
+    block_time_ms: u64, // target block time
+    max_mempool: usize, // max pending txs
 }
 
 impl NodeConfig {
     fn from_env() -> Self {
         Self {
-            data_dir:      env_str("HSMC_DATA_DIR",    "./hsmc-data"),
-            rpc_port:      env_u16("RPC_PORT",         8080),
-            stratum_port:  env_u16("STRATUM_PORT",     3333),
-            metrics_port:  env_u16("METRICS_PORT",     9090),
-            miner_address: env_str("MINER_ADDRESS",    "HSMC_NODE_MINER_000000000000000000000000000000000000000"),
-            chain_id:      env_u64("CHAIN_ID",         8888),
-            network:       env_str("HSMC_NETWORK",     "mainnet"),
-            log_level:     env_str("RUST_LOG",         "info"),
-            max_peers:     env_usize("MAX_PEERS",      64),
-            block_time_ms: env_u64("BLOCK_TIME_MS",    60_000),
-            max_mempool:   env_usize("MAX_MEMPOOL",    10_000),
+            data_dir: env_str("HSMC_DATA_DIR", "./hsmc-data"),
+            rpc_port: env_u16("RPC_PORT", 8080),
+            stratum_port: env_u16("STRATUM_PORT", 3333),
+            metrics_port: env_u16("METRICS_PORT", 9090),
+            miner_address: env_str(
+                "MINER_ADDRESS",
+                "HSMC_NODE_MINER_000000000000000000000000000000000000000",
+            ),
+            chain_id: env_u64("CHAIN_ID", 8888),
+            network: env_str("HSMC_NETWORK", "mainnet"),
+            log_level: env_str("RUST_LOG", "info"),
+            max_peers: env_usize("MAX_PEERS", 64),
+            block_time_ms: env_u64("BLOCK_TIME_MS", 60_000),
+            max_mempool: env_usize("MAX_MEMPOOL", 10_000),
         }
     }
 }
@@ -142,13 +200,22 @@ fn env_str(k: &str, default: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| default.to_string())
 }
 fn env_u16(k: &str, default: u16) -> u16 {
-    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 fn env_u64(k: &str, default: u64) -> u64 {
-    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 fn env_usize(k: &str, default: usize) -> usize {
-    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 // ── CLI: Shielded Pool commands ─────────────────────────────────────────────
@@ -181,20 +248,25 @@ fn run_shielded_cli() -> Result<()> {
                 eprintln!("Usage: hsmc-node shielded deposit <amount_satoshis>");
                 std::process::exit(1);
             }
-            let amount: u64 = args[3].parse().map_err(|_| anyhow::anyhow!("Invalid amount"))?;
+            let amount: u64 = args[3]
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid amount"))?;
             match pool.deposit(amount) {
                 Ok((note, proof)) => {
                     let proof_json = hsmc_starks::StarkProof(proof).to_json();
-                    println!("{}", serde_json::json!({
-                        "ok": true,
-                        "note": {
-                            "commitment": hex::encode(note.commitment),
-                            "amount": note.amount,
-                            "blinding": hex::encode(note.blinding),
-                            "leaf_index": note.leaf_index,
-                        },
-                        "proof": proof_json,
-                    }));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "ok": true,
+                            "note": {
+                                "commitment": hex::encode(note.commitment),
+                                "amount": note.amount,
+                                "blinding": hex::encode(note.blinding),
+                                "leaf_index": note.leaf_index,
+                            },
+                            "proof": proof_json,
+                        })
+                    );
                     // Persist
                     if let Ok(json_str) = serde_json::to_string(&pool) {
                         let _ = std::fs::write(&path, &json_str);
@@ -211,8 +283,8 @@ fn run_shielded_cli() -> Result<()> {
                 eprintln!("Usage: hsmc-node shielded withdraw <note_json> <secret_hex>");
                 std::process::exit(1);
             }
-            let note_json: serde_json::Value = serde_json::from_str(&args[3])
-                .map_err(|_| anyhow::anyhow!("Invalid note JSON"))?;
+            let note_json: serde_json::Value =
+                serde_json::from_str(&args[3]).map_err(|_| anyhow::anyhow!("Invalid note JSON"))?;
             let secret_hex = &args[4];
 
             let commitment_hex = note_json["commitment"].as_str().unwrap_or("");
@@ -223,21 +295,33 @@ fn run_shielded_cli() -> Result<()> {
             let mut commitment = [0u8; 32];
             let mut blinding = [0u8; 32];
             let mut secret = [0u8; 32];
-            hex::decode_to_slice(commitment_hex, &mut commitment).map_err(|_| anyhow::anyhow!("Invalid commitment"))?;
-            hex::decode_to_slice(blinding_hex, &mut blinding).map_err(|_| anyhow::anyhow!("Invalid blinding"))?;
-            hex::decode_to_slice(secret_hex, &mut secret).map_err(|_| anyhow::anyhow!("Invalid secret"))?;
+            hex::decode_to_slice(commitment_hex, &mut commitment)
+                .map_err(|_| anyhow::anyhow!("Invalid commitment"))?;
+            hex::decode_to_slice(blinding_hex, &mut blinding)
+                .map_err(|_| anyhow::anyhow!("Invalid blinding"))?;
+            hex::decode_to_slice(secret_hex, &mut secret)
+                .map_err(|_| anyhow::anyhow!("Invalid secret"))?;
 
-            let note = hsmc_starks::Note { commitment, amount, blinding, leaf_index };
+            let note = hsmc_starks::Note {
+                commitment,
+                amount,
+                blinding,
+                leaf_index,
+            };
             match pool.withdraw(&note, &secret) {
                 Ok((wd_amount, proof)) => {
-                    let nullifier = ShieldedPool::derive_nullifier(&commitment, &secret, leaf_index);
+                    let nullifier =
+                        ShieldedPool::derive_nullifier(&commitment, &secret, leaf_index);
                     let proof_json = hsmc_starks::StarkProof(proof).to_json();
-                    println!("{}", serde_json::json!({
-                        "ok": true,
-                        "amount": wd_amount,
-                        "nullifier": hex::encode(nullifier.0),
-                        "proof": proof_json,
-                    }));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "ok": true,
+                            "amount": wd_amount,
+                            "nullifier": hex::encode(nullifier.0),
+                            "proof": proof_json,
+                        })
+                    );
                     if let Ok(json_str) = serde_json::to_string(&pool) {
                         let _ = std::fs::write(&path, &json_str);
                     }
@@ -276,20 +360,29 @@ fn run_shielded_cli() -> Result<()> {
 
             match pool.verify_proof(&stark_proof.0, &pi) {
                 Ok(()) => println!("{}", serde_json::json!({"valid": true})),
-                Err(e) => println!("{}", serde_json::json!({"valid": false, "error": e.to_string()})),
+                Err(e) => println!(
+                    "{}",
+                    serde_json::json!({"valid": false, "error": e.to_string()})
+                ),
             }
         }
         "stats" => {
-            println!("{}", serde_json::json!({
-                "tvl": pool.total_value_locked,
-                "note_count": pool.notes.len(),
-                "root_hex": hex::encode(pool.tree.root()),
-                "depth": pool.depth,
-                "nullifier_count": pool.nullifier_set.len(),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "tvl": pool.total_value_locked,
+                    "note_count": pool.notes.len(),
+                    "root_hex": hex::encode(pool.tree.root()),
+                    "depth": pool.depth,
+                    "nullifier_count": pool.nullifier_set.len(),
+                })
+            );
         }
         cmd => {
-            eprintln!("Unknown shielded command: {}\nCommands: deposit, withdraw, verify, stats", cmd);
+            eprintln!(
+                "Unknown shielded command: {}\nCommands: deposit, withdraw, verify, stats",
+                cmd
+            );
             std::process::exit(1);
         }
     }
@@ -300,13 +393,13 @@ fn run_shielded_cli() -> Result<()> {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub chain:      Arc<RwLock<Chain>>,
-    pub mempool:    Arc<RwLock<Mempool>>,
-    pub peers:      Arc<PeerRegistry>,
+    pub chain: Arc<RwLock<Chain>>,
+    pub mempool: Arc<RwLock<Mempool>>,
+    pub peers: Arc<PeerRegistry>,
     pub governance: Arc<RwLock<GovernanceState>>,
     pub fee_market: Arc<RwLock<FeeMarket>>,
-    pub staking:    Arc<RwLock<StakingState>>,
-    pub metrics:    &'static NodeMetrics,
+    pub staking: Arc<RwLock<StakingState>>,
+    pub metrics: &'static NodeMetrics,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -321,8 +414,7 @@ async fn main() -> Result<()> {
     // ── Logging ──────────────────────────────────────────────────────────────
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(&cfg.log_level))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cfg.log_level)),
         )
         .with_target(false)
         .compact()
@@ -337,31 +429,31 @@ async fn main() -> Result<()> {
 
     // ── Open RocksDB ──────────────────────────────────────────────────────────
     info!("📦 Opening RocksDB at {}", cfg.data_dir);
-    let db           = Arc::new(open_db(&cfg.data_dir)?);
-    let block_store  = Arc::new(BlockStore::new(db.clone()));
-    let tx_store     = Arc::new(TxStore::new(db.clone()));
-    let mempool_store= Arc::new(MempoolStore::new(db.clone()));
-    let state_store  = Arc::new(StateStore::new(db.clone()));
-    let utxo_store   = Arc::new(UtxoStore::new(db.clone()));
+    let db = Arc::new(open_db(&cfg.data_dir)?);
+    let block_store = Arc::new(BlockStore::new(db.clone()));
+    let tx_store = Arc::new(TxStore::new(db.clone()));
+    let mempool_store = Arc::new(MempoolStore::new(db.clone()));
+    let state_store = Arc::new(StateStore::new(db.clone()));
+    let utxo_store = Arc::new(UtxoStore::new(db.clone()));
     info!("✅ RocksDB opened successfully");
 
     // ── In-memory shared state ────────────────────────────────────────────────
-    let chain      = Arc::new(RwLock::new(Chain::new()));
-    let mempool    = Arc::new(RwLock::new(Mempool::new()));
+    let chain = Arc::new(RwLock::new(Chain::new()));
+    let mempool = Arc::new(RwLock::new(Mempool::new()));
     let governance = Arc::new(RwLock::new(GovernanceState::new()));
     let fee_market = Arc::new(RwLock::new(FeeMarket::new()));
-    let staking    = Arc::new(RwLock::new(StakingState::new()));
-    let shielded   = Arc::new(RwLock::new(ShieldedPool::new(16)));
-    let peers      = Arc::new(PeerRegistry::new());
+    let staking = Arc::new(RwLock::new(StakingState::new()));
+    let shielded = Arc::new(RwLock::new(ShieldedPool::new(16)));
+    let peers = Arc::new(PeerRegistry::new());
 
     let app = AppState {
-        chain:      chain.clone(),
-        mempool:    mempool.clone(),
-        peers:      peers.clone(),
+        chain: chain.clone(),
+        mempool: mempool.clone(),
+        peers: peers.clone(),
         governance: governance.clone(),
         fee_market: fee_market.clone(),
-        staking:    staking.clone(),
-        metrics:    &METRICS,
+        staking: staking.clone(),
+        metrics: &METRICS,
     };
 
     // ── Restore chain from RocksDB ────────────────────────────────────────────
@@ -387,22 +479,47 @@ async fn main() -> Result<()> {
 
     spawn_uptime_ticker(node_start);
     spawn_metrics_updater(app.clone(), cfg.block_time_ms);
-    spawn_p2p_sync(peers.clone(), chain.clone(), cfg.max_peers, shutdown_flag.clone());
-    spawn_governance_processor(governance.clone(), state_store.clone(), shutdown_flag.clone());
-    spawn_staking_reward_distributor(staking.clone(), chain.clone(), state_store.clone(), shutdown_flag.clone());
+    spawn_p2p_sync(
+        peers.clone(),
+        chain.clone(),
+        cfg.max_peers,
+        shutdown_flag.clone(),
+    );
+    spawn_governance_processor(
+        governance.clone(),
+        state_store.clone(),
+        shutdown_flag.clone(),
+    );
+    spawn_staking_reward_distributor(
+        staking.clone(),
+        chain.clone(),
+        state_store.clone(),
+        shutdown_flag.clone(),
+    );
     spawn_fee_market_updater(fee_market.clone(), mempool.clone(), shutdown_flag.clone());
-    spawn_mempool_cleanup(mempool.clone(), mempool_store.clone(), cfg.max_mempool, shutdown_flag.clone());
+    spawn_mempool_cleanup(
+        mempool.clone(),
+        mempool_store.clone(),
+        cfg.max_mempool,
+        shutdown_flag.clone(),
+    );
     spawn_block_producer(
-        chain.clone(), mempool.clone(), mempool_store.clone(),
-        block_store.clone(), tx_store.clone(), utxo_store.clone(),
-        cfg.miner_address.clone(), cfg.block_time_ms, shutdown_flag.clone(),
+        chain.clone(),
+        mempool.clone(),
+        mempool_store.clone(),
+        block_store.clone(),
+        tx_store.clone(),
+        utxo_store.clone(),
+        cfg.miner_address.clone(),
+        cfg.block_time_ms,
+        shutdown_flag.clone(),
     );
 
     // ── Stratum V2 server ─────────────────────────────────────────────────────
     {
-        let stratum      = StratumServer::new(chain.clone(), mempool.clone());
+        let stratum = StratumServer::new(chain.clone(), mempool.clone());
         let stratum_port = cfg.stratum_port;
-        let mut rx       = shutdown_tx.subscribe();
+        let mut rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
             tokio::select! {
                 res = stratum.run(stratum_port) => {
@@ -416,7 +533,7 @@ async fn main() -> Result<()> {
     // ── Metrics HTTP server ───────────────────────────────────────────────────
     {
         let metrics_port = cfg.metrics_port;
-        let mut rx       = shutdown_tx.subscribe();
+        let mut rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
             tokio::select! {
                 res = run_metrics_server(metrics_port) => {
@@ -429,14 +546,14 @@ async fn main() -> Result<()> {
 
     // ── RPC HTTP server (blocking — main task) ────────────────────────────────
     info!("🚀 RPC server starting on port {}", cfg.rpc_port);
-    let rpc_chain     = chain.clone();
-    let rpc_mempool   = mempool.clone();
-    let rpc_peers     = peers.clone();
-    let rpc_gov       = governance.clone();
-    let rpc_staking   = staking.clone();
-    let rpc_shielded  = shielded.clone();
-    let rpc_port      = cfg.rpc_port;
-    let mut rx        = shutdown_tx.subscribe();
+    let rpc_chain = chain.clone();
+    let rpc_mempool = mempool.clone();
+    let rpc_peers = peers.clone();
+    let rpc_gov = governance.clone();
+    let rpc_staking = staking.clone();
+    let rpc_shielded = shielded.clone();
+    let rpc_port = cfg.rpc_port;
+    let mut rx = shutdown_tx.subscribe();
     tokio::select! {
         res = start_rpc_server(rpc_chain, rpc_mempool, rpc_peers, rpc_gov, rpc_staking, rpc_shielded, rpc_port) => {
             if let Err(e) = res { error!("RPC server error: {}", e); }
@@ -446,8 +563,17 @@ async fn main() -> Result<()> {
 
     // ── Flush RocksDB before exit ─────────────────────────────────────────────
     info!("💾 Flushing state to RocksDB...");
-    flush_state(&chain, &mempool, &staking, &governance, &shielded,
-                &block_store, &mempool_store, &state_store).await;
+    flush_state(
+        &chain,
+        &mempool,
+        &staking,
+        &governance,
+        &shielded,
+        &block_store,
+        &mempool_store,
+        &state_store,
+    )
+    .await;
     info!("✅ Node shutdown complete");
     Ok(())
 }
@@ -459,7 +585,7 @@ async fn install_signal_handlers(tx: broadcast::Sender<()>, flag: Arc<AtomicBool
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
-            let mut sigint  = signal(SignalKind::interrupt()).expect("SIGINT handler");
+            let mut sigint = signal(SignalKind::interrupt()).expect("SIGINT handler");
             let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
             tokio::select! {
                 _ = sigint.recv()  => { info!("🛑 SIGINT received — initiating graceful shutdown"); }
@@ -485,7 +611,7 @@ async fn restore_chain(chain: &Arc<RwLock<Chain>>, block_store: &Arc<BlockStore>
             METRICS.chain_height.store(tip as u64, Ordering::Relaxed);
             info!("🔗 Chain restored: {} blocks, tip #{}", loaded, tip);
         }
-        Ok(_)  => info!("🔗 No persisted blocks — starting from genesis"),
+        Ok(_) => info!("🔗 No persisted blocks — starting from genesis"),
         Err(e) => warn!("⚠️  Chain restore failed ({}), starting fresh", e),
     }
 }
@@ -495,7 +621,9 @@ async fn restore_mempool(mempool: &Arc<RwLock<Mempool>>, store: &Arc<MempoolStor
     match store.load_all() {
         Ok(pending) => {
             let count = pending.len();
-            for tx in pending { let _ = m.add(tx); }
+            for tx in pending {
+                let _ = m.add(tx);
+            }
             if count > 0 {
                 METRICS.mempool_size.store(count as u64, Ordering::Relaxed);
                 info!("📋 Mempool restored: {} pending transactions", count);
@@ -524,11 +652,13 @@ async fn restore_governance(gov: &Arc<RwLock<GovernanceState>>, state: &Arc<Stat
             g.engine.load_snapshot(snap);
             g.sync_from_engine();
             let active = g.engine.active_proposals().len();
-            METRICS.governance_active.store(active as u64, Ordering::Relaxed);
+            METRICS
+                .governance_active
+                .store(active as u64, Ordering::Relaxed);
             info!("🗳️  Governance restored: {} active proposals", active);
         }
         Ok(None) => info!("🗳️  Governance: no prior state found"),
-        Err(e)   => warn!("⚠️  Governance restore failed: {}", e),
+        Err(e) => warn!("⚠️  Governance restore failed: {}", e),
     }
 }
 
@@ -542,7 +672,7 @@ async fn restore_staking(staking: &Arc<RwLock<StakingState>>, state: &Arc<StateS
             info!("🥩 Staking restored: {} atomic units staked", total);
         }
         Ok(None) => info!("🥩 Staking registry: no prior state"),
-        Err(e)   => warn!("⚠️  Staking restore failed: {}", e),
+        Err(e) => warn!("⚠️  Staking restore failed: {}", e),
     }
 }
 
@@ -550,21 +680,22 @@ async fn restore_shielded_pool(shielded: &Arc<RwLock<ShieldedPool>>, data_dir: &
     let path = std::path::Path::new(data_dir).join("shielded_pool.json");
     if path.exists() {
         match std::fs::read_to_string(&path) {
-            Ok(json_str) => {
-                match serde_json::from_str::<ShieldedPool>(&json_str) {
-                    Ok(pool) => {
-                        let mut sp = shielded.write().await;
-                        sp.tree = pool.tree;
-                        sp.nullifier_set = pool.nullifier_set;
-                        sp.total_value_locked = pool.total_value_locked;
-                        sp.notes = pool.notes;
-                        sp.depth = pool.depth;
-                        info!("🔒 Shielded pool restored: {} notes, TVL={}",
-                            sp.notes.len(), sp.total_value_locked);
-                    }
-                    Err(e) => warn!("⚠️  Shielded pool deserialization failed: {}", e),
+            Ok(json_str) => match serde_json::from_str::<ShieldedPool>(&json_str) {
+                Ok(pool) => {
+                    let mut sp = shielded.write().await;
+                    sp.tree = pool.tree;
+                    sp.nullifier_set = pool.nullifier_set;
+                    sp.total_value_locked = pool.total_value_locked;
+                    sp.notes = pool.notes;
+                    sp.depth = pool.depth;
+                    info!(
+                        "🔒 Shielded pool restored: {} notes, TVL={}",
+                        sp.notes.len(),
+                        sp.total_value_locked
+                    );
                 }
-            }
+                Err(e) => warn!("⚠️  Shielded pool deserialization failed: {}", e),
+            },
             Err(e) => warn!("⚠️  Cannot read shielded pool state: {}", e),
         }
     } else {
@@ -579,7 +710,9 @@ fn spawn_uptime_ticker(start: Instant) {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
             interval.tick().await;
-            METRICS.uptime_secs.store(start.elapsed().as_secs(), Ordering::Relaxed);
+            METRICS
+                .uptime_secs
+                .store(start.elapsed().as_secs(), Ordering::Relaxed);
         }
     });
 }
@@ -596,13 +729,19 @@ fn spawn_metrics_updater(app: AppState, block_time_ms: u64) {
             METRICS.chain_height.store(height as u64, Ordering::Relaxed);
             // Mempool
             let mp_size = app.mempool.read().await.len();
-            METRICS.mempool_size.store(mp_size as u64, Ordering::Relaxed);
+            METRICS
+                .mempool_size
+                .store(mp_size as u64, Ordering::Relaxed);
             // Peers
             let peer_count = app.peers.count();
-            METRICS.peer_count.store(peer_count as u64, Ordering::Relaxed);
+            METRICS
+                .peer_count
+                .store(peer_count as u64, Ordering::Relaxed);
             // Governance
             let active_props = app.governance.read().await.engine.active_proposals().len();
-            METRICS.governance_active.store(active_props as u64, Ordering::Relaxed);
+            METRICS
+                .governance_active
+                .store(active_props as u64, Ordering::Relaxed);
             // Staking
             let total_staked = app.staking.read().await.total_staked();
             METRICS.staking_total.store(total_staked, Ordering::Relaxed);
@@ -625,14 +764,17 @@ fn spawn_p2p_sync(
         let sync = SyncService::new(peers);
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
-            if shutdown.load(Ordering::Relaxed) { break; }
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
             interval.tick().await;
 
             let local_height = chain.read().await.height();
             let behind = sync.blocks_behind(local_height).await;
             if behind > 0 {
                 info!(behind, local_height, "🔄 Syncing blocks from peers");
-                sync.sync_from(local_height, local_height + behind.min(500)).await;
+                sync.sync_from(local_height, local_height + behind.min(500))
+                    .await;
             }
         }
     });
@@ -648,7 +790,9 @@ fn spawn_governance_processor(
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
-            if shutdown.load(Ordering::Relaxed) { break; }
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
             interval.tick().await;
 
             let now = unix_now();
@@ -659,8 +803,8 @@ fn spawn_governance_processor(
             if !finalized.is_empty() {
                 for (id, status) in &finalized {
                     match status {
-                        ProposalStatus::Passed  => info!("✅ Governance proposal {} PASSED", id),
-                        ProposalStatus::Rejected=> info!("❌ Governance proposal {} REJECTED", id),
+                        ProposalStatus::Passed => info!("✅ Governance proposal {} PASSED", id),
+                        ProposalStatus::Rejected => info!("❌ Governance proposal {} REJECTED", id),
                         ProposalStatus::Expired => info!("⏰ Governance proposal {} EXPIRED", id),
                         _ => {}
                     }
@@ -684,7 +828,9 @@ fn spawn_governance_processor(
             }
 
             let active = g.engine.active_proposals().len();
-            METRICS.governance_active.store(active as u64, Ordering::Relaxed);
+            METRICS
+                .governance_active
+                .store(active as u64, Ordering::Relaxed);
         }
         info!("Governance processor stopped");
     });
@@ -702,25 +848,29 @@ fn spawn_staking_reward_distributor(
         // Distribute rewards every 600 seconds (~10 block epochs at 60s block time)
         let mut interval = tokio::time::interval(Duration::from_secs(600));
         loop {
-            if shutdown.load(Ordering::Relaxed) { break; }
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
             interval.tick().await;
 
             let block_height = chain.read().await.height();
-            let now          = unix_now();
-            let mut s        = staking.write().await;
+            let now = unix_now();
+            let mut s = staking.write().await;
 
             // Calculate epoch rewards based on chain height and total staked
-            let total_staked    = s.total_staked();
+            let total_staked = s.total_staked();
             let annual_rate_bps = 1200u64; // 12% APR in basis points
             let epoch_secs = 600u64;
-            let reward_units = (total_staked * annual_rate_bps * epoch_secs)
-                / (365 * 24 * 3600 * 10_000);
+            let reward_units =
+                (total_staked * annual_rate_bps * epoch_secs) / (365 * 24 * 3600 * 10_000);
 
             if reward_units > 0 {
                 let distributed = s.distribute_rewards(reward_units, block_height, now);
                 if distributed > 0 {
-                    debug!("🥩 Staking rewards distributed: {} units across {} validators",
-                           reward_units, distributed);
+                    debug!(
+                        "🥩 Staking rewards distributed: {} units across {} validators",
+                        reward_units, distributed
+                    );
                 }
             }
 
@@ -736,7 +886,9 @@ fn spawn_staking_reward_distributor(
                 warn!("⚡ Slashed {} inactive validator(s)", slashed);
             }
 
-            METRICS.staking_total.store(s.total_staked(), Ordering::Relaxed);
+            METRICS
+                .staking_total
+                .store(s.total_staked(), Ordering::Relaxed);
 
             // Persist
             if let Ok(snap) = s.to_snapshot() {
@@ -761,20 +913,28 @@ fn spawn_fee_market_updater(
         let target_gas_per_block = 15_000_000u64;
 
         loop {
-            if shutdown.load(Ordering::Relaxed) { break; }
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
             interval.tick().await;
 
             let gas_used = {
                 let mp = mempool.read().await;
                 let selected = mp.select_for_block(500);
-                selected.iter().map(|tx| tx.gas_limit.unwrap_or(21_000)).sum::<u64>()
+                selected
+                    .iter()
+                    .map(|tx| tx.gas_limit.unwrap_or(21_000))
+                    .sum::<u64>()
             };
 
             let mut fm = fee_market.write().await;
             fm.adjust_base_fee_public(gas_used, target_gas_per_block);
             let base_fee = fm.base_fee_satoshis();
             METRICS.base_fee_satoshis.store(base_fee, Ordering::Relaxed);
-            debug!("⛽ Fee market: base_fee={} sat, gas_used={}", base_fee, gas_used);
+            debug!(
+                "⛽ Fee market: base_fee={} sat, gas_used={}",
+                base_fee, gas_used
+            );
         }
     });
 }
@@ -790,7 +950,9 @@ fn spawn_mempool_cleanup(
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(120));
         loop {
-            if shutdown.load(Ordering::Relaxed) { break; }
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
             interval.tick().await;
 
             let now = unix_now();
@@ -815,7 +977,9 @@ fn spawn_mempool_cleanup(
                 debug!("🗑️  Evicted {} low-fee txs (mempool cap)", evicted.len());
             }
 
-            METRICS.mempool_size.store(m.len() as u64, Ordering::Relaxed);
+            METRICS
+                .mempool_size
+                .store(m.len() as u64, Ordering::Relaxed);
         }
     });
 }
@@ -828,7 +992,7 @@ fn spawn_block_producer(
     mempool_store: Arc<MempoolStore>,
     block_store: Arc<BlockStore>,
     tx_store: Arc<TxStore>,
-    utxo_store: Arc<UtxoStore>,
+    _utxo_store: Arc<UtxoStore>,
     miner_address: String,
     _target_block_time_ms: u64,
     shutdown: Arc<AtomicBool>,
@@ -839,7 +1003,9 @@ fn spawn_block_producer(
         info!("⛏️  Block producer started ({} CPU threads)", thread_count);
 
         loop {
-            if shutdown.load(Ordering::Relaxed) { break; }
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
 
             // Build block template
             let (block_number, prev_hash, difficulty) = {
@@ -848,27 +1014,25 @@ fn spawn_block_producer(
                 (tip.block_number + 1, tip.hash.clone(), c.difficulty)
             };
 
-            let tx_hashes: Vec<String> = {
+            // Snapshot complete transaction bodies once. The block commits to
+            // these bodies through their consensus hashes; hash-only templates
+            // are deliberately not mineable/acceptable.
+            let block_txs: Vec<hsmc_core::Transaction> = {
                 let m = mempool.read().await;
-                m.select_for_block(500).iter().map(|tx| tx.hash.clone()).collect()
+                m.select_for_block(500).into_iter().cloned().collect()
             };
+            let tx_hashes: Vec<String> = block_txs.iter().map(|tx| tx.hash.clone()).collect();
 
             // Build coinbase with reward + fee sum
             let block_reward = mining_reward(block_number);
-            let fee_sum: u64  = {
-                let m = mempool.read().await;
-                m.select_for_block(500)
-                    .iter()
-                    .map(|tx| tx.fee)
-                    .sum()
-            };
+            let fee_sum: f64 = block_txs.iter().map(|tx| tx.fee).sum();
 
-            let block = hsmc_core::Block::new(
+            let block = hsmc_core::Block::new_with_transactions(
                 block_number,
                 prev_hash,
                 miner_address.clone(),
                 difficulty,
-                tx_hashes.clone(),
+                block_txs,
             );
 
             let stop = Arc::new(AtomicBool::new(false));
@@ -892,40 +1056,46 @@ fn spawn_block_producer(
                         (block_reward + fee_sum) as f64 / 1e8,
                     );
 
-                    // Persist block to RocksDB
-                    if let Err(e) = block_store.put(&mined_block) {
-                        error!("❌ BlockStore::put failed: {}", e);
+                    // Validate and apply consensus state first. The Chain path
+                    // atomically spends inputs, creates outputs, and records each
+                    // transaction hash exactly once before any mempool eviction.
+                    let accepted = {
+                        let mut c = chain.write().await;
+                        match c.add_block(mined_block.clone()) {
+                            Ok(()) => {
+                                METRICS.blocks_mined.fetch_add(1, Ordering::Relaxed);
+                                METRICS
+                                    .chain_height
+                                    .store(mined_block.block_number, Ordering::Relaxed);
+                                METRICS
+                                    .txs_processed
+                                    .fetch_add(tx_hashes.len() as u64, Ordering::Relaxed);
+                                METRICS
+                                    .total_hashrate_khs
+                                    .store((hashrate_khs * 10.0) as u64, Ordering::Relaxed);
+                                true
+                            }
+                            Err(e) => {
+                                warn!("Chain::add_block failed: {}", e);
+                                METRICS.rejected_txs.fetch_add(1, Ordering::Relaxed);
+                                false
+                            }
+                        }
+                    };
+                    if !accepted {
                         continue;
                     }
 
-                    // Persist transactions
-                    {
-                        let m = mempool.read().await;
-                        for hash in &tx_hashes {
-                            if let Some(tx) = m.get_by_hash(hash) {
-                                if let Err(e) = tx_store.put(&tx, Some(mined_block.block_number)) {
-                                    warn!("TxStore::put failed for {}: {}", &hash[..12], e);
-                                }
-                                // Update UTXO set
-                                if let Err(e) = utxo_store.apply_transaction(&tx, mined_block.block_number) {
-                                    warn!("UtxoStore::apply failed for {}: {}", &hash[..12], e);
-                                }
-                            }
-                        }
+                    // Persist the same accepted block body and its transaction
+                    // bodies. `transaction_data` makes later replay validation
+                    // independent of a separate transaction lookup.
+                    if let Err(e) = block_store.put(&mined_block) {
+                        error!("BlockStore::put failed after acceptance: {}", e);
                     }
-
-                    // Commit to in-memory chain
+                    if let Err(e) = tx_store
+                        .put_block_txs(&mined_block.transaction_data, mined_block.block_number)
                     {
-                        let mut c = chain.write().await;
-                        if let Err(e) = c.add_block(mined_block.clone()) {
-                            warn!("Chain::add_block failed: {}", e);
-                            METRICS.rejected_txs.fetch_add(1, Ordering::Relaxed);
-                        } else {
-                            METRICS.blocks_mined.fetch_add(1, Ordering::Relaxed);
-                            METRICS.chain_height.store(mined_block.block_number as u64, Ordering::Relaxed);
-                            METRICS.txs_processed.fetch_add(tx_hashes.len() as u64, Ordering::Relaxed);
-                            METRICS.total_hashrate_khs.store((hashrate_khs * 10.0) as u64, Ordering::Relaxed);
-                        }
+                        error!("TxStore::put_block_txs failed after acceptance: {}", e);
                     }
 
                     // Evict mined txs from mempool
@@ -935,7 +1105,9 @@ fn spawn_block_producer(
                             m.remove(hash);
                             let _ = mempool_store.remove(hash);
                         }
-                        METRICS.mempool_size.store(m.len() as u64, Ordering::Relaxed);
+                        METRICS
+                            .mempool_size
+                            .store(m.len() as u64, Ordering::Relaxed);
                     }
 
                     // Update UTXO count metric
@@ -960,10 +1132,10 @@ fn spawn_block_producer(
 // ── Metrics HTTP server ───────────────────────────────────────────────────────
 
 async fn run_metrics_server(port: u16) -> Result<()> {
-    use tokio::net::TcpListener;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
-    let addr     = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await?;
     info!("📊 Metrics server on http://{}/metrics", addr);
 
@@ -980,7 +1152,8 @@ async fn run_metrics_server(port: u16) -> Result<()> {
                  Content-Length: {}\r\n\
                  Connection: close\r\n\
                  \r\n{}",
-                body.len(), body
+                body.len(),
+                body
             );
             let _ = socket.write_all(resp.as_bytes()).await;
         });
@@ -1014,7 +1187,9 @@ async fn flush_state(
         let pending = m.all_pending();
         let mut saved = 0usize;
         for tx in pending {
-            if mempool_store.put(&tx).is_ok() { saved += 1; }
+            if mempool_store.put(&tx).is_ok() {
+                saved += 1;
+            }
         }
         info!("  ✓ Mempool: {} transactions persisted", saved);
     }
@@ -1047,8 +1222,11 @@ async fn flush_state(
                 if let Err(e) = std::fs::write("shielded_pool.json", &json_str) {
                     warn!("Flush: shielded pool persist failed: {}", e);
                 } else {
-                    info!("  ✓ Shielded pool persisted ({} notes, TVL={})",
-                        sp.notes.len(), sp.total_value_locked);
+                    info!(
+                        "  ✓ Shielded pool persisted ({} notes, TVL={})",
+                        sp.notes.len(),
+                        sp.total_value_locked
+                    );
                 }
             }
             Err(e) => warn!("Flush: shielded pool serialization failed: {}", e),
@@ -1068,7 +1246,9 @@ fn unix_now() -> u64 {
 /// Block subsidy with halving every 210,000 blocks (in satoshis, 8 decimals)
 fn mining_reward(block_number: u64) -> u64 {
     let halvings = block_number / 210_000;
-    if halvings >= 64 { return 0; }
+    if halvings >= 64 {
+        return 0;
+    }
     let base: u64 = 50 * 100_000_000; // 50 HSMC in satoshis
     base >> halvings
 }
@@ -1089,12 +1269,24 @@ fn print_banner(cfg: &NodeConfig) {
     info!("╔══════════════════════════════════════════════════════════╗");
     info!("║       HSMC Node v2.0 — Production Edition         ║");
     info!("╠══════════════════════════════════════════════════════════╣");
-    info!("║  Chain ID  : {:5}  │  Network : {:10}              ║", cfg.chain_id, cfg.network);
-    info!("║  RPC port  : {:5}  │  Stratum : :{:5}  Metrics: :{:5} ║",
-          cfg.rpc_port, cfg.stratum_port, cfg.metrics_port);
+    info!(
+        "║  Chain ID  : {:5}  │  Network : {:10}              ║",
+        cfg.chain_id, cfg.network
+    );
+    info!(
+        "║  RPC port  : {:5}  │  Stratum : :{:5}  Metrics: :{:5} ║",
+        cfg.rpc_port, cfg.stratum_port, cfg.metrics_port
+    );
     info!("║  Data dir  : {:<45} ║", cfg.data_dir);
-    info!("║  Miner     : {:<45} ║", &cfg.miner_address[..cfg.miner_address.len().min(45)]);
-    info!("║  CPUs      : {:<4}   │  Timestamp: {}              ║", num_cpus_available(), ts);
+    info!(
+        "║  Miner     : {:<45} ║",
+        &cfg.miner_address[..cfg.miner_address.len().min(45)]
+    );
+    info!(
+        "║  CPUs      : {:<4}   │  Timestamp: {}              ║",
+        num_cpus_available(),
+        ts
+    );
     info!("╠══════════════════════════════════════════════════════════╣");
     info!("║  Services  : RPC · Stratum · P2P · Miner · Governance   ║");
     info!("║              Staking · FeeMarket · UTXO · Metrics       ║");

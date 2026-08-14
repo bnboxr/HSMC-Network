@@ -1,3 +1,5 @@
+use crate::Transaction;
+use chrono::Utc;
 /// ============================================================================
 /// HSMC Block — Production-Grade Block Structure & Validation
 /// ============================================================================
@@ -12,25 +14,22 @@
 /// Privacy protocol field tags all blocks with the active privacy scheme
 /// so light clients can decode transactions appropriately.
 /// ============================================================================
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use chrono::Utc;
-use uuid::Uuid;
 use std::fmt;
+use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Block version flags
-pub const BLOCK_VERSION_BASE:       u32 = 0x0001;
-pub const BLOCK_VERSION_RINGCT:     u32 = 0x0002;
-pub const BLOCK_VERSION_SEGWIT:     u32 = 0x0004;
-pub const BLOCK_VERSION_BULLETPROOF:u32 = 0x0008;
-pub const BLOCK_VERSION_CURRENT:    u32 = BLOCK_VERSION_BASE
-    | BLOCK_VERSION_RINGCT
-    | BLOCK_VERSION_BULLETPROOF;
+pub const BLOCK_VERSION_BASE: u32 = 0x0001;
+pub const BLOCK_VERSION_RINGCT: u32 = 0x0002;
+pub const BLOCK_VERSION_SEGWIT: u32 = 0x0004;
+pub const BLOCK_VERSION_BULLETPROOF: u32 = 0x0008;
+pub const BLOCK_VERSION_CURRENT: u32 =
+    BLOCK_VERSION_BASE | BLOCK_VERSION_RINGCT | BLOCK_VERSION_BULLETPROOF;
 
 /// Halving interval (same schedule as Bitcoin)
 pub const HALVING_INTERVAL: u64 = 210_000;
@@ -184,9 +183,9 @@ impl fmt::Display for PrivacyProtocol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Transparent => write!(f, "Transparent"),
-            Self::RingSig     => write!(f, "RingSig-v1"),
-            Self::RingCTv1    => write!(f, "RingCT-v1"),
-            Self::RingCTv2    => write!(f, "RingCT-v2"),
+            Self::RingSig => write!(f, "RingSig-v1"),
+            Self::RingCTv1 => write!(f, "RingCT-v1"),
+            Self::RingCTv2 => write!(f, "RingCT-v2"),
             Self::FullPrivacy => write!(f, "FullPrivacy-v1"),
         }
     }
@@ -196,10 +195,10 @@ impl PrivacyProtocol {
     /// Determine which protocol is active at a given block height
     pub fn for_height(height: u64) -> Self {
         match height {
-            0          => Self::Transparent,
-            1..=1000   => Self::RingSig,
-            1001..=5000=> Self::RingCTv1,
-            _          => Self::RingCTv2,
+            0 => Self::Transparent,
+            1..=1000 => Self::RingSig,
+            1001..=5000 => Self::RingCTv1,
+            _ => Self::RingCTv2,
         }
     }
 }
@@ -213,36 +212,44 @@ impl PrivacyProtocol {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     // ── Header fields (all hashed for PoW) ──────────────────────────────────
-    pub block_number:   u64,
-    pub hash:           String,   // double-SHA256 of the header (the PoW hash)
-    pub prev_hash:      String,
-    pub merkle_root:    String,
-    pub witness_root:   String,
-    pub miner_address:  String,
-    pub nonce:          u64,
-    pub extra_nonce:    u32,
-    pub difficulty:     u64,
-    pub timestamp:      i64,
-    pub version:        u32,
+    pub block_number: u64,
+    pub hash: String, // double-SHA256 of the header (the PoW hash)
+    pub prev_hash: String,
+    pub merkle_root: String,
+    pub witness_root: String,
+    pub miner_address: String,
+    pub nonce: u64,
+    pub extra_nonce: u32,
+    pub difficulty: u64,
+    pub timestamp: i64,
+    pub version: u32,
 
     // ── Body ────────────────────────────────────────────────────────────────
     /// Ordered list of tx hashes (first entry is always the coinbase tx hash)
-    pub transactions:        Vec<String>,
-    pub transactions_count:  u32,
+    pub transactions: Vec<String>,
+    pub transactions_count: u32,
+    /// Full user transaction bodies in the same order as `transactions[1..]`.
+    ///
+    /// The coinbase remains represented by `coinbase_data`; user transactions
+    /// must be present here before a validator can apply their inputs and outputs.
+    /// `#[serde(default)]` keeps old block records decodable, but validators fail
+    /// closed when an old-style block includes user transaction hashes only.
+    #[serde(default)]
+    pub transaction_data: Vec<Transaction>,
 
     // ── Metadata ────────────────────────────────────────────────────────────
     pub privacy_protocol: String,
-    pub reward:           f64,
+    pub reward: f64,
     /// Block size in bytes (approximate, for fee market calculations)
-    pub size_bytes:       u32,
+    pub size_bytes: u32,
     /// Cumulative chain work (sum of 2^256 / difficulty for each block)
-    pub chain_work:       String,
+    pub chain_work: String,
     /// Fee sum collected by the miner (beyond coinbase subsidy)
-    pub total_fees:       f64,
+    pub total_fees: f64,
     /// Coinbase data embedded by the miner
-    pub coinbase_data:    CoinbaseData,
+    pub coinbase_data: CoinbaseData,
     /// Block-level median timestamp (of previous 11 blocks) for timestamp validation
-    pub median_time:      i64,
+    pub median_time: i64,
 
     // ── PoS Hybrid Consensus Fields ───────────────────────────────────────
     /// PoS validator address that co-signed this block (empty for pre-PoS blocks)
@@ -316,6 +323,7 @@ impl Block {
             version: BLOCK_VERSION_CURRENT,
             transactions: all_txs,
             transactions_count,
+            transaction_data: vec![],
             privacy_protocol: privacy.to_string(),
             reward,
             size_bytes: 0,
@@ -330,18 +338,83 @@ impl Block {
         }
     }
 
+    /// Construct a block from complete, ordered user transaction bodies.
+    /// The block's Merkle leaves are derived from those bodies; callers cannot
+    /// supply unverifiable hashes separately.
+    pub fn new_with_transactions(
+        block_number: u64,
+        prev_hash: String,
+        miner_address: String,
+        difficulty: u64,
+        transactions: Vec<Transaction>,
+    ) -> Self {
+        let tx_hashes = transactions.iter().map(|tx| tx.hash.clone()).collect();
+        let mut block = Self::new(
+            block_number,
+            prev_hash,
+            miner_address,
+            difficulty,
+            tx_hashes,
+        );
+        block.transactions_count = (transactions.len() + 1) as u32;
+        block.total_fees = transactions.iter().map(|tx| tx.fee).sum();
+        block.transaction_data = transactions;
+        block
+    }
+
+    /// Validate the one-to-one transaction-body commitment. Legacy blocks with
+    /// only a coinbase remain decodable; any legacy user hash without a body is
+    /// rejected rather than trusted from an external store.
+    pub fn verify_transaction_data(&self) -> Result<(), BlockValidationError> {
+        if self.transactions_count != self.transactions.len() as u32 {
+            return Err(BlockValidationError::TransactionCountMismatch {
+                declared: self.transactions_count,
+                actual: self.transactions.len(),
+            });
+        }
+        let user_hashes = self.transactions.get(1..).unwrap_or_default();
+        if self.transaction_data.len() != user_hashes.len() {
+            return Err(BlockValidationError::MissingTransactionData {
+                expected: user_hashes.len(),
+                actual: self.transaction_data.len(),
+            });
+        }
+        for (index, (expected_hash, tx)) in
+            user_hashes.iter().zip(&self.transaction_data).enumerate()
+        {
+            if tx.is_coinbase() {
+                return Err(BlockValidationError::UnexpectedCoinbaseTransaction { index });
+            }
+            if &tx.hash != expected_hash || !tx.has_valid_consensus_hash() {
+                return Err(BlockValidationError::TransactionHashMismatch {
+                    index,
+                    expected: expected_hash.clone(),
+                    actual: tx.hash.clone(),
+                });
+            }
+        }
+        let fees: f64 = self.transaction_data.iter().map(|tx| tx.fee).sum();
+        if (fees - self.total_fees).abs() > 1e-9 {
+            return Err(BlockValidationError::FeeTotalMismatch {
+                declared: self.total_fees,
+                actual: fees,
+            });
+        }
+        Ok(())
+    }
+
     /// Build a `BlockHeader` from this block's current field values
     pub fn header(&self) -> BlockHeader {
         BlockHeader {
-            version:      self.version,
+            version: self.version,
             block_number: self.block_number,
-            prev_hash:    self.prev_hash.clone(),
-            merkle_root:  self.merkle_root.clone(),
+            prev_hash: self.prev_hash.clone(),
+            merkle_root: self.merkle_root.clone(),
             witness_root: self.witness_root.clone(),
-            timestamp:    self.timestamp,
-            difficulty:   self.difficulty,
-            nonce:        self.nonce,
-            extra_nonce:  self.extra_nonce,
+            timestamp: self.timestamp,
+            difficulty: self.difficulty,
+            nonce: self.nonce,
+            extra_nonce: self.extra_nonce,
         }
     }
 
@@ -394,10 +467,7 @@ impl Block {
         let leading = leading_zeros_in_hash(&self.hash);
         let required = difficulty_to_leading_zeros(difficulty);
         if leading < required {
-            return Err(BlockValidationError::InsufficientPoW {
-                leading,
-                required,
-            });
+            return Err(BlockValidationError::InsufficientPoW { leading, required });
         }
 
         // 5. Timestamp (must be > median of last 11 blocks and not too far in future)
@@ -425,6 +495,7 @@ impl Block {
         if !self.verify_merkle_root() {
             return Err(BlockValidationError::MerkleRootMismatch);
         }
+        self.verify_transaction_data()?;
 
         // 8. Block size limit
         if self.size_bytes > MAX_BLOCK_SIZE_BYTES {
@@ -450,14 +521,15 @@ impl Block {
             return Err(BlockValidationError::InvalidCoinbase);
         }
 
-        // 11. Reward check (within halving schedule)
-        let expected_reward = block_reward(self.block_number);
-        let fee_reward = self.reward - expected_reward;
-        if fee_reward < -1e-9 {
-            // reward cannot be less than subsidy (unless total_fees compensates)
+        // 11. Coinbase may claim at most the scheduled subsidy plus fees.
+        // Under-claiming is permitted (the subsidy is simply unclaimed), but an
+        // over-claim would inflate supply and must be rejected during live block
+        // acceptance, not merely by an offline chain-integrity scan.
+        let max_reward = block_reward(self.block_number) + self.total_fees;
+        if !self.reward.is_finite() || self.reward > max_reward + 1e-9 {
             return Err(BlockValidationError::InvalidReward {
                 claimed: self.reward,
-                max_allowed: expected_reward + self.total_fees,
+                max_allowed: max_reward,
             });
         }
 
@@ -466,15 +538,21 @@ impl Block {
 
     /// Simplified validation (backwards-compatible with existing callers)
     pub fn is_valid(&self, prev_hash: &str, difficulty: u64) -> bool {
-        if self.compute_hash() != self.hash { return false; }
-        if self.prev_hash != prev_hash { return false; }
+        if self.compute_hash() != self.hash {
+            return false;
+        }
+        if self.prev_hash != prev_hash {
+            return false;
+        }
         leading_zeros_in_hash(&self.hash) >= difficulty_to_leading_zeros(difficulty)
     }
 
     /// Accumulate chain work contribution of this block
     /// chain_work ≈ 2^256 / difficulty — approximated here as hex string
     pub fn compute_chain_work(&self) -> u128 {
-        if self.difficulty == 0 { return 0; }
+        if self.difficulty == 0 {
+            return 0;
+        }
         u128::MAX / self.difficulty as u128
     }
 
@@ -488,11 +566,7 @@ impl Block {
 
     /// Attach a PoS validator signature to the block.
     /// Called after PoW mining completes, before block submission.
-    pub fn attach_validator_signature(
-        &mut self,
-        validator_address: String,
-        signature: String,
-    ) {
+    pub fn attach_validator_signature(&mut self, validator_address: String, signature: String) {
         self.pos_validator_address = validator_address;
         self.pos_validator_signature = signature;
     }
@@ -520,50 +594,151 @@ impl Block {
 
 #[derive(Debug, Clone)]
 pub enum BlockValidationError {
-    HashMismatch              { computed: String, stored: String },
-    PrevHashMismatch          { expected: String, got: String },
-    BadHeight                 { expected: u64, got: u64 },
-    InsufficientPoW           { leading: u64, required: u64 },
-    TimestampTooOld           { block_ts: i64, median: i64 },
-    TimestampTooFarFuture     { block_ts: i64, max_allowed: i64 },
+    HashMismatch {
+        computed: String,
+        stored: String,
+    },
+    PrevHashMismatch {
+        expected: String,
+        got: String,
+    },
+    BadHeight {
+        expected: u64,
+        got: u64,
+    },
+    InsufficientPoW {
+        leading: u64,
+        required: u64,
+    },
+    TimestampTooOld {
+        block_ts: i64,
+        median: i64,
+    },
+    TimestampTooFarFuture {
+        block_ts: i64,
+        max_allowed: i64,
+    },
     EmptyMinerAddress,
     MerkleRootMismatch,
-    BlockTooLarge             { size: u32, max: u32 },
-    TooManyTransactions       { count: u32, max: u32 },
+    BlockTooLarge {
+        size: u32,
+        max: u32,
+    },
+    TooManyTransactions {
+        count: u32,
+        max: u32,
+    },
     MissingCoinbase,
     InvalidCoinbase,
-    InvalidReward             { claimed: f64, max_allowed: f64 },
+    TransactionCountMismatch {
+        declared: u32,
+        actual: usize,
+    },
+    MissingTransactionData {
+        expected: usize,
+        actual: usize,
+    },
+    TransactionHashMismatch {
+        index: usize,
+        expected: String,
+        actual: String,
+    },
+    UnexpectedCoinbaseTransaction {
+        index: usize,
+    },
+    FeeTotalMismatch {
+        declared: f64,
+        actual: f64,
+    },
+    InvalidReward {
+        claimed: f64,
+        max_allowed: f64,
+    },
 }
 
 impl fmt::Display for BlockValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::HashMismatch { computed, stored } =>
-                write!(f, "Hash mismatch: computed {}… ≠ stored {}…",
-                    &computed[..12.min(computed.len())],
-                    &stored[..12.min(stored.len())]),
-            Self::PrevHashMismatch { expected, got } =>
-                write!(f, "prev_hash mismatch: expected {}… got {}…",
-                    &expected[..12.min(expected.len())],
-                    &got[..12.min(got.len())]),
-            Self::BadHeight { expected, got } =>
-                write!(f, "Bad height: expected #{} got #{}", expected, got),
-            Self::InsufficientPoW { leading, required } =>
-                write!(f, "PoW too weak: {} leading zeros (need {})", leading, required),
-            Self::TimestampTooOld { block_ts, median } =>
-                write!(f, "Timestamp {} ≤ median time {}", block_ts, median),
-            Self::TimestampTooFarFuture { block_ts, max_allowed } =>
-                write!(f, "Timestamp {} far in future (max {})", block_ts, max_allowed),
-            Self::EmptyMinerAddress         => write!(f, "Empty miner address"),
-            Self::MerkleRootMismatch        => write!(f, "Merkle root mismatch"),
-            Self::BlockTooLarge { size, max } =>
-                write!(f, "Block too large: {} bytes (max {})", size, max),
-            Self::TooManyTransactions { count, max } =>
-                write!(f, "Too many transactions: {} (max {})", count, max),
-            Self::MissingCoinbase           => write!(f, "Missing coinbase transaction"),
-            Self::InvalidCoinbase           => write!(f, "Invalid coinbase hash"),
-            Self::InvalidReward { claimed, max_allowed } =>
-                write!(f, "Invalid reward: claimed {:.4} HSMC > max {:.4}", claimed, max_allowed),
+            Self::HashMismatch { computed, stored } => write!(
+                f,
+                "Hash mismatch: computed {}… ≠ stored {}…",
+                &computed[..12.min(computed.len())],
+                &stored[..12.min(stored.len())]
+            ),
+            Self::PrevHashMismatch { expected, got } => write!(
+                f,
+                "prev_hash mismatch: expected {}… got {}…",
+                &expected[..12.min(expected.len())],
+                &got[..12.min(got.len())]
+            ),
+            Self::BadHeight { expected, got } => {
+                write!(f, "Bad height: expected #{} got #{}", expected, got)
+            }
+            Self::InsufficientPoW { leading, required } => write!(
+                f,
+                "PoW too weak: {} leading zeros (need {})",
+                leading, required
+            ),
+            Self::TimestampTooOld { block_ts, median } => {
+                write!(f, "Timestamp {} ≤ median time {}", block_ts, median)
+            }
+            Self::TimestampTooFarFuture {
+                block_ts,
+                max_allowed,
+            } => write!(
+                f,
+                "Timestamp {} far in future (max {})",
+                block_ts, max_allowed
+            ),
+            Self::EmptyMinerAddress => write!(f, "Empty miner address"),
+            Self::MerkleRootMismatch => write!(f, "Merkle root mismatch"),
+            Self::BlockTooLarge { size, max } => {
+                write!(f, "Block too large: {} bytes (max {})", size, max)
+            }
+            Self::TooManyTransactions { count, max } => {
+                write!(f, "Too many transactions: {} (max {})", count, max)
+            }
+            Self::MissingCoinbase => write!(f, "Missing coinbase transaction"),
+            Self::InvalidCoinbase => write!(f, "Invalid coinbase hash"),
+            Self::TransactionCountMismatch { declared, actual } => write!(
+                f,
+                "Transaction count mismatch: declared {} actual {}",
+                declared, actual
+            ),
+            Self::MissingTransactionData { expected, actual } => write!(
+                f,
+                "Missing transaction bodies: expected {} actual {}",
+                expected, actual
+            ),
+            Self::TransactionHashMismatch {
+                index,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "Transaction body #{} does not match committed hash ({}… != {}…)",
+                index,
+                &expected[..12.min(expected.len())],
+                &actual[..12.min(actual.len())]
+            ),
+            Self::UnexpectedCoinbaseTransaction { index } => write!(
+                f,
+                "Unexpected coinbase transaction body at user index {}",
+                index
+            ),
+            Self::FeeTotalMismatch { declared, actual } => write!(
+                f,
+                "Block fee total mismatch: declared {:.8}, actual {:.8}",
+                declared, actual
+            ),
+            Self::InvalidReward {
+                claimed,
+                max_allowed,
+            } => write!(
+                f,
+                "Invalid reward: claimed {:.4} HSMC > max {:.4}",
+                claimed, max_allowed
+            ),
         }
     }
 }
@@ -654,11 +829,7 @@ pub fn merkle_proof(hashes: &[String], index: usize) -> Vec<(String, bool)> {
 }
 
 /// Verify a Merkle proof given a leaf hash, root, and proof path
-pub fn verify_merkle_proof(
-    leaf: &str,
-    root: &str,
-    proof: &[(String, bool)],
-) -> bool {
+pub fn verify_merkle_proof(leaf: &str, root: &str, proof: &[(String, bool)]) -> bool {
     let mut current = leaf.to_string();
     for (sibling, is_right) in proof {
         let combined = if *is_right {
@@ -677,7 +848,7 @@ pub fn verify_merkle_proof(
 
 /// Double-SHA256 (SHA256d) — Bitcoin-compatible block hash
 pub fn double_sha256(data: &[u8]) -> String {
-    let first  = Sha256::digest(data);
+    let first = Sha256::digest(data);
     let second = Sha256::digest(&first);
     hex::encode(second)
 }
@@ -714,7 +885,9 @@ pub fn leading_zeros_in_hash(hash: &str) -> u64 {
 pub fn target_to_difficulty(target: &str) -> u64 {
     let clean = target.trim_start_matches("0x");
     let leading = clean.chars().take_while(|&c| c == '0').count() as u64;
-    if leading == 0 { return 1; }
+    if leading == 0 {
+        return 1;
+    }
     16u64.pow(leading as u32)
 }
 
@@ -728,7 +901,9 @@ pub fn difficulty_to_target(difficulty: u64) -> String {
 /// Compact difficulty representation (like Bitcoin nBits) — encoded as:
 ///   high byte = number of leading zero bytes, remaining 3 bytes = mantissa
 pub fn compact_difficulty(difficulty: u64) -> u32 {
-    if difficulty == 0 { return 0; }
+    if difficulty == 0 {
+        return 0;
+    }
     let exponent = (difficulty as f64).log2().floor() as u32 / 8;
     let mantissa = (difficulty >> (exponent * 8)) as u32 & 0xFFFFFF;
     (exponent << 24) | mantissa
@@ -743,7 +918,9 @@ pub fn compact_difficulty(difficulty: u64) -> u32 {
 /// After 64 halvings the reward rounds down to 0.
 pub fn block_reward(block_number: u64) -> f64 {
     let halvings = block_number / HALVING_INTERVAL;
-    if halvings >= 64 { return 0.0; }
+    if halvings >= 64 {
+        return 0.0;
+    }
     INITIAL_REWARD / (2u64.pow(halvings as u32) as f64)
 }
 
@@ -751,7 +928,7 @@ pub fn block_reward(block_number: u64) -> f64 {
 pub fn mined_supply(block_number: u64) -> f64 {
     // Sum of geometric series for each halving epoch
     let full_epochs = block_number / HALVING_INTERVAL;
-    let remainder   = block_number % HALVING_INTERVAL;
+    let remainder = block_number % HALVING_INTERVAL;
     let mut total = 0.0f64;
     for epoch in 0..full_epochs.min(64) {
         let reward = INITIAL_REWARD / (2u64.pow(epoch as u32) as f64);
@@ -796,26 +973,27 @@ pub fn genesis_block() -> Block {
     let coinbase_hash = coinbase.hash();
 
     let mut b = Block {
-        block_number:       0,
-        hash:               String::new(),
-        prev_hash:          "0".repeat(64),
-        merkle_root:        merkle_root(&[coinbase_hash.clone()]),
-        witness_root:       "0".repeat(64),
-        miner_address:      "HSMC_GENESIS_0000000000000000000000000000000000000000".into(),
-        nonce:              2083236893, // homage to Bitcoin genesis nonce
-        extra_nonce:        0,
-        difficulty:         MIN_DIFFICULTY,
-        timestamp:          GENESIS_TIMESTAMP,
-        version:            BLOCK_VERSION_BASE,
-        transactions:       vec![coinbase_hash],
+        block_number: 0,
+        hash: String::new(),
+        prev_hash: "0".repeat(64),
+        merkle_root: merkle_root(&[coinbase_hash.clone()]),
+        witness_root: "0".repeat(64),
+        miner_address: "HSMC_GENESIS_0000000000000000000000000000000000000000".into(),
+        nonce: 2083236893, // homage to Bitcoin genesis nonce
+        extra_nonce: 0,
+        difficulty: MIN_DIFFICULTY,
+        timestamp: GENESIS_TIMESTAMP,
+        version: BLOCK_VERSION_BASE,
+        transactions: vec![coinbase_hash],
         transactions_count: 1,
-        privacy_protocol:   PrivacyProtocol::Transparent.to_string(),
-        reward:             INITIAL_REWARD,
-        size_bytes:         285,
-        chain_work:         "0".repeat(64),
-        total_fees:         0.0,
-        coinbase_data:      coinbase,
-        median_time:        GENESIS_TIMESTAMP,
+        transaction_data: vec![],
+        privacy_protocol: PrivacyProtocol::Transparent.to_string(),
+        reward: INITIAL_REWARD,
+        size_bytes: 285,
+        chain_work: "0".repeat(64),
+        total_fees: 0.0,
+        coinbase_data: coinbase,
+        median_time: GENESIS_TIMESTAMP,
         pos_validator_address: String::new(),
         pos_validator_signature: String::new(),
         pos_validator_reward: 0.0,
@@ -832,10 +1010,10 @@ pub fn genesis_block() -> Block {
 /// Result of a difficulty adjustment calculation
 #[derive(Debug, Clone)]
 pub struct DifficultyAdjustment {
-    pub old_difficulty:    u64,
-    pub new_difficulty:    u64,
-    pub actual_time_secs:  i64,
-    pub expected_time_secs:i64,
+    pub old_difficulty: u64,
+    pub new_difficulty: u64,
+    pub actual_time_secs: i64,
+    pub expected_time_secs: i64,
     pub adjustment_factor: f64,
 }
 
@@ -848,7 +1026,7 @@ pub fn compute_difficulty_adjustment(
     window_start_ts: i64,
     window_end_ts: i64,
 ) -> DifficultyAdjustment {
-    let actual_secs   = (window_end_ts - window_start_ts).max(1);
+    let actual_secs = (window_end_ts - window_start_ts).max(1);
     let expected_secs = (DIFFICULTY_ADJUSTMENT_WINDOW * TARGET_BLOCK_TIME_SECS) as i64;
 
     // ratio = actual / expected; clamp to [1/4, 4]
@@ -861,11 +1039,11 @@ pub fn compute_difficulty_adjustment(
         .max(MIN_DIFFICULTY as f64) as u64;
 
     DifficultyAdjustment {
-        old_difficulty:     current_difficulty,
+        old_difficulty: current_difficulty,
         new_difficulty,
-        actual_time_secs:   actual_secs,
+        actual_time_secs: actual_secs,
         expected_time_secs: expected_secs,
-        adjustment_factor:  1.0 / ratio,
+        adjustment_factor: 1.0 / ratio,
     }
 }
 
@@ -883,7 +1061,10 @@ mod tests {
         assert_eq!(g.block_number, 0);
         assert!(!g.hash.is_empty());
         assert_eq!(g.prev_hash, "0".repeat(64));
-        assert_eq!(g.transactions_count, 1, "genesis should have exactly 1 coinbase tx");
+        assert_eq!(
+            g.transactions_count, 1,
+            "genesis should have exactly 1 coinbase tx"
+        );
     }
 
     #[test]
@@ -895,7 +1076,7 @@ mod tests {
 
     #[test]
     fn test_merkle_root_single() {
-        let hashes = vec!["abc123".to_string()];
+        let hashes = vec!["ab".repeat(32)];
         let root = merkle_root(&hashes);
         assert_eq!(root.len(), 64);
     }
@@ -919,8 +1100,11 @@ mod tests {
         let root = merkle_root(&hashes);
         for i in 0..8 {
             let proof = merkle_proof(&hashes, i);
-            assert!(verify_merkle_proof(&hashes[i], &root, &proof),
-                "Merkle proof failed for index {}", i);
+            assert!(
+                verify_merkle_proof(&hashes[i], &root, &proof),
+                "Merkle proof failed for index {}",
+                i
+            );
         }
     }
 
@@ -945,11 +1129,11 @@ mod tests {
 
     #[test]
     fn test_difficulty_to_leading_zeros() {
-        assert_eq!(difficulty_to_leading_zeros(16),          1);
-        assert_eq!(difficulty_to_leading_zeros(256),         2);
-        assert_eq!(difficulty_to_leading_zeros(4096),        3);
-        assert_eq!(difficulty_to_leading_zeros(65536),       4);
-        assert_eq!(difficulty_to_leading_zeros(4_000_000),   5);
+        assert_eq!(difficulty_to_leading_zeros(16), 1);
+        assert_eq!(difficulty_to_leading_zeros(256), 2);
+        assert_eq!(difficulty_to_leading_zeros(4096), 3);
+        assert_eq!(difficulty_to_leading_zeros(65536), 4);
+        assert_eq!(difficulty_to_leading_zeros(4_000_000), 5);
     }
 
     #[test]
@@ -968,8 +1152,10 @@ mod tests {
             0,
             (DIFFICULTY_ADJUSTMENT_WINDOW * TARGET_BLOCK_TIME_SECS / 4) as i64,
         );
-        assert!(adj.new_difficulty > adj.old_difficulty,
-            "Fast blocks should raise difficulty");
+        assert!(
+            adj.new_difficulty > adj.old_difficulty,
+            "Fast blocks should raise difficulty"
+        );
         assert!(adj.new_difficulty <= adj.old_difficulty * 4 + 1);
     }
 
@@ -981,8 +1167,10 @@ mod tests {
             0,
             (DIFFICULTY_ADJUSTMENT_WINDOW * TARGET_BLOCK_TIME_SECS * 4) as i64,
         );
-        assert!(adj.new_difficulty < adj.old_difficulty,
-            "Slow blocks should lower difficulty");
+        assert!(
+            adj.new_difficulty < adj.old_difficulty,
+            "Slow blocks should lower difficulty"
+        );
         assert!(adj.new_difficulty >= adj.old_difficulty / 4);
     }
 
@@ -1017,11 +1205,11 @@ mod tests {
 
     #[test]
     fn test_halving_schedule() {
-        assert_eq!(next_halving_block(0),           210_000);
-        assert_eq!(next_halving_block(209_999),     210_000);
-        assert_eq!(next_halving_block(210_000),     420_000);
-        assert_eq!(blocks_until_halving(200_000),   10_000);
-        assert_eq!(halvings_count(420_001),         2);
+        assert_eq!(next_halving_block(0), 210_000);
+        assert_eq!(next_halving_block(209_999), 210_000);
+        assert_eq!(next_halving_block(210_000), 420_000);
+        assert_eq!(blocks_until_halving(200_000), 10_000);
+        assert_eq!(halvings_count(420_001), 2);
     }
 
     #[test]
@@ -1029,8 +1217,16 @@ mod tests {
         let total = 50.0;
         let pos = Block::compute_pos_reward(total);
         let pow = Block::compute_pow_reward(total);
-        assert!((pos - 25.0).abs() < 0.01, "PoS reward should be ~25.0, got {}", pos);
-        assert!((pow - 25.0).abs() < 0.01, "PoW reward should be ~25.0, got {}", pow);
+        assert!(
+            (pos - 25.0).abs() < 0.01,
+            "PoS reward should be ~25.0, got {}",
+            pos
+        );
+        assert!(
+            (pow - 25.0).abs() < 0.01,
+            "PoW reward should be ~25.0, got {}",
+            pow
+        );
         assert!(((pos + pow) - total).abs() < 0.01, "Sum should equal total");
     }
 
@@ -1043,7 +1239,10 @@ mod tests {
             MIN_DIFFICULTY,
             vec![],
         );
-        assert!(b.pos_validator_address.is_empty(), "PoS validator should be empty by default");
+        assert!(
+            b.pos_validator_address.is_empty(),
+            "PoS validator should be empty by default"
+        );
         assert!(b.pos_validator_signature.is_empty());
         assert!(b.pos_validator_reward > 0.0);
         assert!(b.pow_miner_reward > 0.0);
@@ -1060,8 +1259,10 @@ mod tests {
             vec![],
         );
         assert!(!b.has_pos_signature());
-        b.attach_validator_signature("HSMC_val_addr_000000000000000000000000000".into(),
-                                      "sig_hex_placeholder".into());
+        b.attach_validator_signature(
+            "HSMC_val_addr_000000000000000000000000000".into(),
+            "sig_hex_placeholder".into(),
+        );
         assert!(b.has_pos_signature());
     }
 }

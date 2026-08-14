@@ -149,7 +149,10 @@ impl StakingRegistry {
         let addresses: Vec<String> = self.stakes.keys().cloned().collect();
         for addr in addresses {
             if let Some(entry) = self.stakes.get_mut(&addr) {
-                let share = staker_reward * entry.amount / self.total_staked;
+                // Compute in u128: individual stake and reward amounts are u64 atomic
+                // units, so their product can overflow u64 before division.
+                let share = ((staker_reward as u128 * entry.amount as u128)
+                    / self.total_staked as u128) as u64;
                 entry.rewards_accumulated += share;
                 entry.last_reward_height = current_height;
             }
@@ -391,7 +394,8 @@ mod tests {
         let mut reg = StakingRegistry::new();
         let addr = "0xstaker1".to_string();
 
-        reg.stake(addr.clone(), 500 * 100_000_000, 100, 100, None)?;
+        reg.stake(addr.clone(), 500 * 100_000_000, 100, 100, None)
+            .map_err(anyhow::Error::msg)?;
         assert_eq!(reg.total_staked, 500 * 100_000_000);
 
         // Distribute reward
@@ -404,7 +408,8 @@ mod tests {
         assert!(result.is_err());
 
         // Can unstake after lock
-        reg.unstake(&addr, 100 * 100_000_000, 201)?;
+        reg.unstake(&addr, 100 * 100_000_000, 201)
+            .map_err(anyhow::Error::msg)?;
         assert_eq!(reg.total_staked, 400 * 100_000_000);
         Ok(())
     }
@@ -414,13 +419,15 @@ mod tests {
         let mut reg = StakingRegistry::new();
         reg.register_validator(
             "0xval1".into(), "pubkey".into(), 500, 10_000 * 100_000_000
-        )?;
+        )
+        .map_err(anyhow::Error::msg)?;
         reg.validators.get_mut("0xval1")
             .ok_or_else(|| anyhow::anyhow!("Validator 0xval1 not found after registration"))?
             .total_delegated = 100_000 * 100_000_000;
         reg.total_staked = 100_000 * 100_000_000;
 
-        let slashed = reg.slash_validator("0xval1", 5, 1000)?;
+        let slashed = reg.slash_validator("0xval1", 5, 1000)
+            .map_err(anyhow::Error::msg)?;
         assert_eq!(slashed, 5_000 * 100_000_000);
         assert_eq!(reg.validators["0xval1"].status, ValidatorStatus::Jailed);
         Ok(())
