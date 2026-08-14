@@ -39,7 +39,7 @@ export async function persistSeedToDb(
     .upsert(
       { user_id: userId, encrypted_seed: encryptedSeed, wallet_address: walletAddress },
       { onConflict: "user_id" },
-    ) as unknown as { data: WalletSeedRow | null; error: { message: string } | null });
+    ));
 
   if (error) {
     console.error('[SeedDB] Failed to persist seed to DB:', error instanceof Error ? error.message : String(error));

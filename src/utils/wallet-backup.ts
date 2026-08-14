@@ -75,9 +75,9 @@ async function deriveBackupPassphrase(
  * @param walletAddress — the user's HSMC wallet address
  */
 export async function backupWalletToCloud(
-  userPassword: string,
   userId: string,
-  walletAddress: string
+  walletAddress: string,
+  userPassword?: string | null
 ): Promise<void> {
   const encryptedSeed = localStorage.getItem(`hsmc_encrypted_seed_${userId}`);
   if (!encryptedSeed) return; // Nothing to back up
@@ -128,13 +128,14 @@ export async function backupWalletToCloud(
 /**
  * Restore the wallet from cloud backup.
  *
- * @param userPassword — the user's login password (must match the one used at backup time)
  * @param userId — the user's UUID
+ * @param userPassword — the user's login password (must match the one used at backup time).
+ *        Required for decryption; when omitted the restore fails fast and logs why.
  * @returns true if restore succeeded, false otherwise
  */
 export async function restoreWalletFromCloud(
-  userPassword: string,
-  userId: string
+  userId: string,
+  userPassword?: string | null
 ): Promise<boolean> {
   if (!userPassword || userPassword.length < 1) {
     console.error('[WalletBackup] Cannot restore: password is required (C1 fix)');

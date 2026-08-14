@@ -2,7 +2,7 @@
 import { writeFileSync } from "fs";
 import { resolve } from "path";
 
-const BASE_URL = "https://astranet-pulse.lovable.app";
+const BASE_URL = "https://hsmc-network.ctonew.app";
 
 interface SitemapEntry {
   path: string;

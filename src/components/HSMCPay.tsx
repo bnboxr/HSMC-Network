@@ -214,7 +214,7 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
       }
 
       await loadStripeJs();
-      const stripeClient = window.Stripe?.(data.stripe_publishable_key);
+      const stripeClient = window.Stripe?.(String(data.stripe_publishable_key));
       if (!stripeClient) throw new Error('Stripe.js unavailable.');
 
       const stripeElements = stripeClient.elements({ clientSecret: data.client_secret, appearance: { theme: 'night' } });
@@ -223,9 +223,9 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
       setStripe(stripeClient);
       setElements(stripeElements);
       setPaymentElement(element);
-      setSessionId(data.session_id);
-      setPaymentIntentId(data.payment_intent_id);
-      setClientSecret(data.client_secret);
+      setSessionId(String(data.session_id));
+      setPaymentIntentId(String(data.payment_intent_id));
+      setClientSecret(String(data.client_secret));
       setEstimatedHsmc(Number(data.amount_hsmc));
       setStep('stripe');
     } catch (err) {

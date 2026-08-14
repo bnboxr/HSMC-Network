@@ -1,6 +1,6 @@
 import { Helmet } from "react-helmet-async";
 
-const SITE = "https://astranet-pulse.lovable.app";
+const SITE = "https://hsmc-network.ctonew.app";
 
 interface SEOProps {
   title: string;

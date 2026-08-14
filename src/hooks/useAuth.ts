@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/db/client';
 // lovable integration removed — using local auth only
 import { restoreSeedFromDb } from '@/utils/wallet-seed-db';
+import type { LocalAuthUser as User, LocalAuthSession as Session } from '@/integrations/local-db/client';
 
 /** Maximum time (ms) to wait for auth before showing app anyway */
 const AUTH_TIMEOUT_MS = 5000;
