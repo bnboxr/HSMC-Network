@@ -229,7 +229,7 @@ impl StratumServer {
             let srv = self.clone();
             let wid = worker_id.clone();
             tokio::spawn(async move {
-                if let Err(e) = srv.handle_worker(stream, session, wid.clone()).await {
+                if let Err(e) = srv.clone().handle_worker(stream, session, wid.clone()).await {
                     warn!("Worker {} disconnected: {}", wid, e);
                 }
                 srv.workers.write().await.remove(&wid);
@@ -647,7 +647,7 @@ async fn submit_block_to_chain(
     let leading = count_leading_zero_bits(&hex_to_bytes(&hash));
     let needed  = hsmc_core::difficulty_to_leading_zeros(block.difficulty);
 
-    if (leading as u32) < needed {
+    if (leading as u64) < needed {
         return false;
     }
 
@@ -655,9 +655,9 @@ async fn submit_block_to_chain(
     let mut chain_w = chain.write().await;
     match chain_w.add_block(block) {
         Ok(_) => {
-            // Clear mined txs from mempool
+            // Clear mined txs from mempool (stratum blocks currently carry no txs)
             let mut m = mempool.write().await;
-            m.clear_mined();
+            m.remove_confirmed(&[]);
             true
         }
         Err(e) => {
