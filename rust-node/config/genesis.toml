@@ -1,13 +1,38 @@
 # ════════════════════════════════════════════════════════════════════════
-# HSMC Mainnet — Genesis Block Configuration
+# HSMC Mainnet — Genesis Block Configuration (DOCUMENTATION ONLY)
 # ════════════════════════════════════════════════════════════════════════
-# This file defines the genesis state for the HSMC L1 blockchain.
-# It is canonical — all nodes MUST start with the same genesis block.
-# Changing any value after mainnet launch creates a hard fork.
+# ⚠️ NON-AUTHORITATIVE. This file is NOT read by any code.
+#    There is no HSMC_GENESIS_CONFIG reader and no TOML genesis parser —
+#    the node hardcodes its genesis. Editing this file changes NOTHING at
+#    runtime. It is an aspirational record of the intended mainnet
+#    parameters, kept for planning until it is wired into NodeConfig or
+#    deleted before mainnet launch.
+#
+# ACTUAL SOURCE OF TRUTH (what the node really uses):
+#   • Genesis block : rust-node/hsmc-core/src/block.rs::genesis_block()
+#                     (timestamp 1_700_000_000, nonce 2083236893,
+#                      MIN_DIFFICULTY=256, INITIAL_REWARD=50.0,
+#                      coinbase message ends in "8888")
+#   • Chain ID      : numeric 8888, hardcoded in
+#                     - rust-node/hsmc-node/src/main.rs (NodeConfig,
+#                       override via CHAIN_ID env var, default 8888)
+#                     - rust-node/hsmc-core/src/chain.rs (Chain::new)
+#                     - rust-node/hsmc-rpc/src/server.rs and
+#                       hsmc-rpc/src/handlers.rs (GET /health reports
+#                       "chain_id": 8888)
+#   • Verify        : rust-node/config/verify-chain-identity.sh
+#
+# ⚠️ KNOWN MISMATCH: chain_id below ("hsmc-mainnet-1") differs from the
+#    hardcoded numeric 8888. This is intentional (this file is planning
+#    documentation); do not "fix" one to match the other until the file is
+#    actually wired into NodeConfig. All [[network.seed_nodes]] entries are
+#    PLACEHOLDERS — no live seed nodes exist yet. Never advertise them.
 # ════════════════════════════════════════════════════════════════════════
 
 [chain]
 # Chain identifier — unique across all HSMC networks
+# NOTE: documentation-only value. Code uses numeric chain_id 8888
+# (see rust-node/hsmc-node/src/main.rs, CHAIN_ID env var).
 chain_id = "hsmc-mainnet-1"
 # Human-readable network name
 network_name = "HSMC Mainnet"
@@ -92,7 +117,10 @@ max_inbound = 128
 # Minimum peer count before bootstrap
 min_peers = 8
 
-# ── Seed Nodes (placeholder — populated before mainnet launch) ──
+# ── Seed Nodes (PLACEHOLDERS — NOT LIVE, do not use) ──
+# ⚠️ No HSMC mainnet seed nodes exist yet. These entries are illustrative
+#    (ip = "0.0.0.0" is not a real address) and nothing reads this file.
+#    Operators must not attempt to connect to any address listed here.
 # Format: "/dns4/<hostname>/tcp/<port>/p2p/<peer_id>"
 # Seeds are the initial bootstrap peers for the network.
 # These must be geographically distributed, high-availability nodes.
@@ -132,7 +160,7 @@ ip = "0.0.0.0"
 p2p_port = 30303
 
 # ── Bootstrap peers (multiaddr format) ──
-# These are filled in when seed nodes are provisioned.
+# Empty: there are no live seeds. Filled in when seed nodes are provisioned.
 network_bootstrap_peers = []
 
 [governance]

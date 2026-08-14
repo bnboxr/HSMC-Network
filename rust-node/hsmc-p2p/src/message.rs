@@ -310,7 +310,8 @@ impl MessageEnvelope {
 // ─── Node Service Flags ───────────────────────────────────────────────────────
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    // serde impls come from bitflags' own `serde` feature (serializes as u64 bits)
+    #[derive(Debug, Clone, Copy)]
     pub struct NodeServices: u64 {
         const NETWORK        = 1 << 0;  // Full node
         const BLOOM          = 1 << 2;  // SPV bloom filters
