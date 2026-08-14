@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use tracing::{info, warn, debug};
 use ed25519_dalek::{SigningKey, VerifyingKey, Signature as Ed25519Signature, Signer, Verifier};
 use rand::rngs::OsRng;
+use rand::RngCore;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -735,8 +736,12 @@ impl ValidatorKey {
     /// Generate a new random Ed25519 keypair using OS CSPRNG.
     pub fn generate() -> Self {
         let mut rng = OsRng;
+        // ed25519-dalek 2.x removed `SigningKey::generate`; derive a random
+        // 32-byte seed from the CSPRNG and build the key from it instead.
+        let mut seed = [0u8; 32];
+        rng.fill_bytes(&mut seed);
         Self {
-            signing_key: SigningKey::generate(&mut rng),
+            signing_key: SigningKey::from_bytes(&seed),
         }
     }
 
@@ -778,7 +783,7 @@ pub struct ValidatorSignature {
     /// 32-byte Ed25519 public key (verifying key).
     pub public_key: [u8; 32],
     /// 64-byte Ed25519 signature.
-    pub signature: [u8; 64],
+    pub signature: Vec<u8>,
     pub block_height: u64,
     pub block_hash: String,
 }
@@ -805,7 +810,7 @@ impl ValidatorSignature {
         Self {
             validator_address,
             public_key,
-            signature: sig.to_bytes(),
+            signature: sig.to_bytes().to_vec(),
             block_height,
             block_hash,
         }
@@ -824,7 +829,7 @@ impl ValidatorSignature {
             Err(_) => return false,
         };
 
-        let sig = match Ed25519Signature::from_bytes(&self.signature) {
+        let sig = match Ed25519Signature::from_slice(&self.signature) {
             Ok(s) => s,
             Err(_) => return false,
         };
