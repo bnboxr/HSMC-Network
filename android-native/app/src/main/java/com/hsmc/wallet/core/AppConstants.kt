@@ -26,9 +26,12 @@ object AppConstants {
     /**
      * Placeholder default node the wallet is configured against (chain 8888). The app
      * does not dial it directly; it is shown in status copy and settings so the user
-     * knows which node the bridge should be talking to.
+     * knows which node the bridge should be talking to. 10.0.2.2 is the Android
+     * emulator's host-loopback address (the debug-only cleartext host, see the debug
+     * network security config); the release app always uses the HSMC API gateway over
+     * https and never an http node URL (N7, SettingsScreen.validateNodeUrl).
      */
-    const val DEFAULT_NODE_URL: String = "http://127.0.0.1:8080"
+    const val DEFAULT_NODE_URL: String = "http://10.0.2.2:8080"
 
     /**
      * Minimum fee the Rust node accepts for a transparent transaction
