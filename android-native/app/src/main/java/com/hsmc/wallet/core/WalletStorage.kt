@@ -14,7 +14,6 @@ import javax.crypto.Cipher
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
-import javax.security.auth.Destroyable
 import javax.crypto.SecretKeyFactory
 
 /**
