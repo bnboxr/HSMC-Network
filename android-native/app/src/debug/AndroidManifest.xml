@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest overlay. Merged into the debug variant only.
+
+  The main manifest permits NO cleartext traffic (the default for targetSdk >= 28).
+  Debug builds additionally allow cleartext HTTP to the local machine only
+  (10.0.2.2 = host loopback from the Android emulator, localhost = adb reverse /
+  physical device with a local proxy). This is for talking to a locally-running
+  HSMC node during development; production traffic always uses TLS.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>

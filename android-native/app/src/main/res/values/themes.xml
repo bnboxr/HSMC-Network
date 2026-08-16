@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Framework theme used before Compose takes over. It only needs to be
+      NoActionBar and dark — all real theming is done by HsmcTheme (Compose
+      Material 3, see ui/theme/Theme.kt).
+    -->
+    <style name="Theme.HSMC.Wallet" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/hsmc_window_background</item>
+    </style>
+</resources>

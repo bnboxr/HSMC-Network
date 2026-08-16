@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive launcher icon foreground: a simple hexagon outline with an "H"
+  monogram, drawn as pure vector paths (no image binaries fabricated).
+  Safe zone: viewport 108dp, content kept inside the central 66dp circle.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Hexagon outline centered at (54,54), radius 30, stroke 4. -->
+    <path
+        android:pathData="M54,30 L76.98,42 L76.98,66 L54,78 L31.02,66 L31.02,42 Z"
+        android:strokeColor="#3DD6C3"
+        android:strokeWidth="4"
+        android:fillColor="#00000000" />
+    <!-- Letter H monogram. -->
+    <path
+        android:pathData="M46,48 L46,60 M62,48 L62,60 M46,54 L62,54"
+        android:strokeColor="#3DD6C3"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>
