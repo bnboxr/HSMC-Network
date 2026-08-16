@@ -1,0 +1,12 @@
+# HSMC Network — native Android wallet (Phase 1) build outputs & local state.
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
