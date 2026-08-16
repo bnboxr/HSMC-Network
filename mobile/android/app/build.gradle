@@ -21,23 +21,18 @@ android {
         versionCode 1
         versionName "1.0.0"
     }
-    signingConfigs {
-        debug {
-            storeFile file('debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
-        }
-    }
+    // No custom signingConfigs block: the debug variant is automatically signed
+    // with AGP's default debug keystore (~/.android/debug.keystore), which AGP
+    // creates on first build. The upstream RN template ships an app/debug.keystore
+    // binary for the same purpose; relying on the AGP default avoids committing
+    // a keystore and works on any fresh machine.
     buildTypes {
         debug {
-            signingConfig signingConfigs.debug
+            // Signed automatically with the default debug keystore.
         }
         release {
-            // Caution: release builds sign with the debug keystore here so the
-            // owner can install the APK immediately. Replace with a real
-            // signingConfig before publishing to an app store.
-            signingConfig signingConfigs.debug
+            // Caution: to produce an installable release APK, add a real
+            // signingConfig here before publishing to an app store.
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
