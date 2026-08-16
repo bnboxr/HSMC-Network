@@ -256,6 +256,7 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             HsmcSecondaryButton(
                 text = "Export seed phrase — unavailable",
+                onClick = {},
                 enabled = false
             )
             Spacer(Modifier.height(4.dp))
