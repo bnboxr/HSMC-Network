@@ -48,7 +48,7 @@ fun TransactionDetailScreen(
             )
             Text(
                 text = "Status, amount, fee and confirmations for this transaction come from " +
-                    "the HSMC chain and require a node connection (Phase 2). No status — " +
+                    "the HSMC chain and require a node connection (Phase 3). No status — " +
                     "pending, confirmed or otherwise — is fabricated in this build.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

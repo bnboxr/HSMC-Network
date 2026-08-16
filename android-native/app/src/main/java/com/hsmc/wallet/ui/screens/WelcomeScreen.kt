@@ -65,7 +65,7 @@ fun WelcomeScreen(
 
         PhaseNote(
             "Phase 1 scope: wallet creation, real BIP39 keys, Android Keystore encryption and " +
-                "biometric unlock. Node sync, balances and transactions arrive in Phase 2 — " +
+                "biometric unlock. Node sync, balances and transactions arrive in Phase 3 — " +
                 "no balances or transaction statuses shown in this build are real yet."
         )
     }

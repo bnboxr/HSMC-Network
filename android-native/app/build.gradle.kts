@@ -64,6 +64,8 @@ kotlin {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // LocalLifecycleOwner for the auto-lock lifecycle observer.
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
@@ -74,5 +76,11 @@ dependencies {
     implementation(libs.androidx.biometric)
     // FragmentActivity is the host for BiometricPrompt on all API levels.
     implementation(libs.androidx.fragment.ktx)
+    // Real QR encoding for the Receive screen (pure-JVM, no camera dependency).
+    implementation(libs.zxing.core)
+    // Keccak-256 for the on-chain address derivation (same digest the Rust node uses).
+    implementation(libs.bouncycastle.bcprov)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    testImplementation(libs.junit)
 }

@@ -1,5 +1,6 @@
 package com.hsmc.wallet.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,9 +19,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
 import com.hsmc.wallet.core.Bip39Mnemonic
 import com.hsmc.wallet.core.PendingMnemonic
+import com.hsmc.wallet.core.Secrets.zeroize
 import com.hsmc.wallet.core.WalletStorage
 import com.hsmc.wallet.core.Wordlist
 import com.hsmc.wallet.ui.components.HsmcPrimaryButton
@@ -29,10 +35,12 @@ import com.hsmc.wallet.ui.components.PhaseNote
 import com.hsmc.wallet.ui.components.ScreenHeader
 
 /**
- * Import an existing wallet from a BIP39 seed phrase.
+ * Import an existing wallet from a BIP39 seed phrase (Phase 2).
  *
  * The phrase is validated with the real BIP39 algorithm ([Bip39Mnemonic.validate]:
  * word count, wordlist membership, SHA-256 checksum) before anything is persisted.
+ * Import uses the exact same persist path as creation: label + password (≥8, matched),
+ * seed encrypted under a Keystore-wrapped AES-GCM envelope (R1).
  */
 @Composable
 fun ImportWalletScreen(
@@ -43,12 +51,18 @@ fun ImportWalletScreen(
     val words = remember { Wordlist.load(context) }
 
     var input by remember { mutableStateOf("") }
+    var label by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     val normalized = Bip39Mnemonic.normalize(input)
     val validation = if (normalized.isEmpty()) null else Bip39Mnemonic.validate(normalized.joinToString(" "), words)
     val isValid = validation is Bip39Mnemonic.Validation.Valid
+    val credentialsOk = label.trim().isNotEmpty() &&
+        password.length >= 8 && password.isNotEmpty() && password == confirm
 
     Column(
         modifier = Modifier
@@ -107,6 +121,60 @@ fun ImportWalletScreen(
             null -> Unit
         }
 
+        OutlinedTextField(
+            value = label,
+            onValueChange = { label = it },
+            label = { Text("Wallet label") },
+            placeholder = { Text("e.g. My imported HSMC wallet") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Unlock password") },
+            supportingText = {
+                Text(
+                    if (password.length >= 8) "OK — 8+ characters"
+                    else "At least 8 characters",
+                    color = if (password.length >= 8) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            visualTransformation = if (passwordVisible) VisualTransformation.None
+            else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = {
+                Text(
+                    text = if (passwordVisible) "Hide" else "Show",
+                    modifier = Modifier
+                        .clickable { passwordVisible = !passwordVisible }
+                        .padding(8.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        )
+
+        OutlinedTextField(
+            value = confirm,
+            onValueChange = { confirm = it },
+            label = { Text("Confirm password") },
+            supportingText = {
+                if (confirm.isNotEmpty() && password != confirm) {
+                    Text("Passwords do not match", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            visualTransformation = if (passwordVisible) VisualTransformation.None
+            else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+        )
+
         error?.let {
             Text(
                 text = it,
@@ -117,17 +185,20 @@ fun ImportWalletScreen(
 
         HsmcPrimaryButton(
             text = if (busy) "Importing…" else "Import wallet",
-            enabled = isValid && !busy,
+            enabled = isValid && credentialsOk && !busy,
             onClick = {
                 busy = true
                 error = null
+                val passwordChars = password.toCharArray()
                 try {
-                    WalletStorage.saveWallet(context, input)
+                    WalletStorage.saveWallet(context, input, label, passwordChars)
                     PendingMnemonic.clear()
                     onImported()
                 } catch (e: Exception) {
                     error = "Import failed: ${e.message}"
                     busy = false
+                } finally {
+                    passwordChars.zeroize()
                 }
             }
         )

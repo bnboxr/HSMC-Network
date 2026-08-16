@@ -71,7 +71,7 @@ fun SendScreen(onBack: () -> Unit) {
             value = address,
             onValueChange = { address = it },
             label = { Text("Recipient address") },
-            placeholder = { Text("HSMC address (format validated in Phase 2)") },
+            placeholder = { Text("HSMC address (format validated in Phase 3)") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
@@ -115,7 +115,7 @@ fun SendScreen(onBack: () -> Unit) {
                 )
                 Text(
                     text = "Phase 1 has no node RPC client, so this build cannot broadcast. " +
-                        "Once node connectivity lands (Phase 2), the transaction will be " +
+                        "Once node connectivity lands (Phase 3), the transaction will be " +
                         "constructed, signed on-device and broadcast to the network. " +
                         "No transaction hash is fabricated here.",
                     style = MaterialTheme.typography.bodyMedium,

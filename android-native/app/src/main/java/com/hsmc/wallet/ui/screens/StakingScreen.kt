@@ -45,7 +45,7 @@ fun StakingScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "Staking activates with the mainnet node connection (Phase 2). The " +
+                text = "Staking activates with the mainnet node connection (Phase 3). The " +
                     "business plan targets Genesis 12.5% APR / Beta 18% APR reward tiers — " +
                     "these are plans, not earned rewards, and no stake is tracked here.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -54,7 +54,7 @@ fun StakingScreen(onBack: () -> Unit) {
         }
 
         PhaseNote(
-            "Phase 2: stake/unstake transactions, reward accrual and lock-period management " +
+            "Phase 3: stake/unstake transactions, reward accrual and lock-period management " +
                 "against the live chain."
         )
     }

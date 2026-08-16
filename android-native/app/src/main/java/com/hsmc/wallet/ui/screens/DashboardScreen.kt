@@ -17,21 +17,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hsmc.wallet.core.WalletStorage
-import com.hsmc.wallet.core.Wordlist
 import com.hsmc.wallet.ui.components.HsmcCard
 import com.hsmc.wallet.ui.components.HsmcPrimaryButton
 import com.hsmc.wallet.ui.components.HsmcSecondaryButton
 import com.hsmc.wallet.ui.components.PhaseNote
 import com.hsmc.wallet.ui.components.ScreenHeader
+import com.hsmc.wallet.ui.components.StatusRow
+import androidx.compose.ui.graphics.Color
 
 /**
- * Wallet dashboard (Phase 1 honest scaffold).
+ * Wallet dashboard (Phase 2 — real wallet identity, honest network state).
  *
- * The balance row deliberately shows "not connected" instead of a number: Phase 1 has no
- * node RPC client, so any balance would be fabricated. Balance, transactions and mining
- * arrive with node integration in Phase 2.
+ * The wallet label, derived address and locally recorded balance (0 until node sync)
+ * come from [WalletStorage]. The balance row states plainly that no node is connected,
+ * so "0" is not dressed up as a live on-chain balance. Block/TPS network cards are
+ * honest "unavailable until node integration (Phase 3)" — no fabricated numbers.
  */
 @Composable
 fun DashboardScreen(
@@ -45,7 +48,10 @@ fun DashboardScreen(
 ) {
     val context = LocalContext.current
     val walletCreated = remember { WalletStorage.walletExists(context) }
+    val label = remember { WalletStorage.label(context) }
+    val address = remember { WalletStorage.address(context) }
     val wordCount = remember { WalletStorage.wordCount(context) }
+    val balanceSats = remember { WalletStorage.balanceSats(context) }
 
     Column(
         modifier = Modifier
@@ -59,24 +65,57 @@ fun DashboardScreen(
 
         HsmcCard {
             Text(
-                text = if (walletCreated) {
-                    "Wallet: created on this device (${if (wordCount > 0) "$wordCount-word BIP39 seed" else "seed"})"
-                } else {
-                    "No wallet on this device yet."
-                },
+                text = label ?: "HSMC wallet",
                 style = MaterialTheme.typography.titleMedium
             )
+            if (address != null) {
+                Text(
+                    text = address,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "Balance: — HSMC (not connected to node)",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = "Balance: ${formatHsmc(balanceSats)} HSMC",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary
             )
             Text(
-                text = "Balances require a node connection, which lands in Phase 2. " +
-                    "No balance is shown rather than a fake one.",
+                text = "Not connected to a node — balance unavailable. This is the locally " +
+                    "recorded balance (0 until the wallet is reconciled with the chain); " +
+                    "no balance is fabricated. Node integration lands in Phase 3.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (wordCount > 0) {
+                Text(
+                    text = "${wordCount}-word BIP39 seed, encrypted on-device",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        HsmcCard {
+            Text("Network", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            StatusRow(
+                label = "Node",
+                status = "not connected",
+                dotColor = Color(0xFFFFB300)
+            )
+            StatusRow(
+                label = "Latest block",
+                status = "unavailable until node integration (Phase 3)",
+                dotColor = Color(0xFFB71C1C)
+            )
+            StatusRow(
+                label = "TPS",
+                status = "unavailable until node integration (Phase 3)",
+                dotColor = Color(0xFFB71C1C)
             )
         }
 
@@ -96,10 +135,20 @@ fun DashboardScreen(
         HsmcSecondaryButton(text = "Settings", onClick = onSettings)
 
         PhaseNote(
-            "Mining dashboard and HSMCPay merchant payments are planned for Phase 2 and are " +
-                "not shown as active here."
+            "Send, history, staking, privacy and hardware wallet arrive with node " +
+                "integration in Phase 3 and are not shown as active here."
         )
     }
+}
+
+/** 0.00000000-style formatting of satoshis (HSMC has 8 decimals). */
+private fun formatHsmc(sats: Long): String {
+    val negative = sats < 0
+    val abs = if (negative) -sats else sats
+    val whole = abs / 100_000_000L
+    val frac = abs % 100_000_000L
+    val fracStr = (100_000_000L + frac).toString().substring(1)
+    return (if (negative) "-" else "") + "$whole.$fracStr"
 }
 
 /** Simple 2-column grid of feature entries. */
