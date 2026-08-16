@@ -107,3 +107,154 @@ describe("POST /node-proxy", () => {
     expect(res.headers.get("access-control-allow-origin")).toBeTruthy();
   });
 });
+
+/**
+ * Read-only GET routes whitelisted for the native Android wallet v1
+ * (security review G6): balance + transaction history + chain info.
+ * Mirrors rust-node/hsmc-rpc/src/server.rs routes exactly.
+ */
+describe("POST /node-proxy — whitelisted read-only GET routes (mobile wallet v1)", () => {
+  const READ_ONLY_PATHS: string[] = [
+    "/health",
+    "/info",
+    "/stats",
+    "/fee/estimate",
+    "/utxo/0x0123456789abcdef0123456789abcdef01234567",
+    "/address/0x0123456789abcdef0123456789abcdef01234567/txs",
+    "/tx/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  ];
+
+  for (const path of READ_ONLY_PATHS) {
+    it(`forwards or gracefully reports offline for GET ${path}`, async () => {
+      const { status, data } = await postNodeProxy({ path, method: "GET" });
+      // Route itself must always answer 200 (offline is a graceful envelope).
+      expect(status).toBe(200);
+      expect(data).toHaveProperty("ok");
+      expect(data).toHaveProperty("node_online");
+      if (data.ok === true) {
+        expect(data.node_online).toBe(true);
+        expect(data).toHaveProperty("data");
+      } else {
+        expect(data.node_online).toBe(false);
+        expect(typeof data.error).toBe("string");
+        expect(data.hint).toBeString();
+      }
+    });
+  }
+
+  it("accepts GET /address/:address/txs with pagination query params (node route shape)", async () => {
+    const { status, data } = await postNodeProxy({
+      path: "/address/0x0123456789abcdef0123456789abcdef01234567/txs?limit=25&offset=50",
+      method: "GET",
+    });
+    // Whitelist must accept the node's real route shape (query string included);
+    // offline still yields the graceful envelope, not a 400.
+    expect(status).toBe(200);
+    expect(data).toHaveProperty("ok");
+    expect(data).toHaveProperty("node_online");
+    if (data.ok === true) {
+      expect(data).toHaveProperty("data");
+    }
+  });
+
+  it("forwards GET /tx/:hash (existing whitelist entry preserved)", async () => {
+    const { status, data } = await postNodeProxy({
+      path: "/tx/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      method: "GET",
+    });
+    expect(status).toBe(200);
+    expect(data).toHaveProperty("ok");
+  });
+});
+
+/**
+ * Method-checking: whitelist entries are method-exact. A GET-only route must
+ * reject POST (and vice versa) with the existing 400 envelope.
+ */
+describe("POST /node-proxy — method enforcement", () => {
+  it("rejects POST to a GET-only route (/info) with 400", async () => {
+    const { status, data } = await postNodeProxy({ path: "/info", method: "POST", data: {} });
+    expect(status).toBe(400);
+    expect(data.error).toContain("not allowed via /node-proxy");
+  });
+
+  it("rejects POST to a GET-only route (/stats) with 400", async () => {
+    const { status, data } = await postNodeProxy({ path: "/stats", method: "POST", data: {} });
+    expect(status).toBe(400);
+    expect(data.error).toContain("not allowed via /node-proxy");
+  });
+
+  it("rejects POST to a GET-only route (/fee/estimate) with 400", async () => {
+    const { status, data } = await postNodeProxy({ path: "/fee/estimate", method: "POST", data: {} });
+    expect(status).toBe(400);
+    expect(data.error).toContain("not allowed via /node-proxy");
+  });
+
+  it("rejects POST to /utxo/:address (GET-only) with 400", async () => {
+    const { status, data } = await postNodeProxy({
+      path: "/utxo/0x0123456789abcdef0123456789abcdef01234567",
+      method: "POST",
+      data: {},
+    });
+    expect(status).toBe(400);
+    expect(data.error).toContain("not allowed via /node-proxy");
+  });
+
+  it("rejects POST to /address/:address/txs (GET-only) with 400", async () => {
+    const { status, data } = await postNodeProxy({
+      path: "/address/0x0123456789abcdef0123456789abcdef01234567/txs",
+      method: "POST",
+      data: {},
+    });
+    expect(status).toBe(400);
+    expect(data.error).toContain("not allowed via /node-proxy");
+  });
+
+  it("rejects GET to a POST-only route (/crypto/ring-sign) with 400", async () => {
+    const { status, data } = await postNodeProxy({ path: "/crypto/ring-sign", method: "GET" });
+    expect(status).toBe(400);
+    expect(data.error).toContain("not allowed via /node-proxy");
+  });
+
+  it("rejects GET to a POST-only route (/crypto/stealth/generate) with 400", async () => {
+    const { status, data } = await postNodeProxy({ path: "/crypto/stealth/generate", method: "GET" });
+    expect(status).toBe(400);
+    expect(data.error).toContain("not allowed via /node-proxy");
+  });
+
+  // NOTE: GET /tx/submit is intentionally NOT in this list — the pre-existing
+  // GET /tx/:hash regex legitimately matches it as a tx-hash lookup (hash
+  // "submit"), which is harmless and read-only. The POST route /tx/submit is
+  // what actually submits transactions, and POST is what the clients use.
+});
+
+/**
+ * Non-whitelisted node routes must stay closed through /node-proxy
+ * (security review G6 — never whitelist secret-accepting routes).
+ */
+describe("POST /node-proxy — non-whitelisted routes stay rejected", () => {
+  const BLOCKED: Array<{ path: string; method: string; data?: unknown }> = [
+    { path: "/shielded/withdraw", method: "POST", data: { amount: 1, proof: "x" } },
+    { path: "/shielded/deposit", method: "POST", data: { amount: 1 } },
+    { path: "/shielded/state", method: "GET" },
+    { path: "/vm/execute", method: "POST", data: { code: "x" } },
+    { path: "/vm/deploy", method: "POST", data: { code: "x" } },
+    { path: "/rollup/commit", method: "POST", data: { batch: "x" } },
+    { path: "/rollup/verify", method: "POST", data: { batch: "x" } },
+    { path: "/stablecoin/create", method: "POST", data: { collateral: 1 } },
+    { path: "/stablecoin/mint", method: "POST", data: { amount: 1 } },
+    { path: "/staking/stake", method: "POST", data: { amount: 1 } },
+    { path: "/bridge/lock", method: "POST", data: { amount: 1 } },
+    { path: "/mining/submit", method: "POST", data: { block: "x" } },
+    { path: "/admin/wipe", method: "GET" },
+    { path: "/arbitrary/path", method: "GET" },
+  ];
+
+  for (const { path, method, data } of BLOCKED) {
+    it(`rejects ${method} ${path} with 400`, async () => {
+      const { status, data: body } = await postNodeProxy({ path, method, data });
+      expect(status).toBe(400);
+      expect(body.error).toContain("not allowed via /node-proxy");
+    });
+  }
+});
