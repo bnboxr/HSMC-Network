@@ -4,8 +4,10 @@
  * React Native's Hermes engine does not ship WebCrypto (crypto.subtle), so every
  * primitive used by the wallet (SHA-256, SHA-512, HMAC, PBKDF2, AES-256-GCM)
  * is implemented here in dependency-free TypeScript. All implementations follow
- * the public specifications (FIPS 180-4, RFC 2104, RFC 2898, NIST SP 800-38D)
- * and are verified against Node.js WebCrypto in the test suite.
+ * the public specifications (FIPS 180-4, RFC 2104, RFC 2898, NIST SP 800-38D).
+ * Cross-checked against Node.js WebCrypto during development; the mobile
+ * __tests__/ suite is currently empty, so add vector tests there before relying
+ * on this module for mainnet funds.
  *
  * No third-party crypto dependency is required — this runs anywhere.
  */

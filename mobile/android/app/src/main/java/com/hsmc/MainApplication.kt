@@ -11,7 +11,7 @@ import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.react.soloader.OpenSourceMergedSoMapping
 import com.facebook.soloader.SoLoader
-import com.hsmc.wallet.BuildConfig
+import com.hsmc.BuildConfig
 
 class MainApplication : Application(), ReactApplication {
 

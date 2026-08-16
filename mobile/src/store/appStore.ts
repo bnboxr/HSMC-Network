@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import type { WalletRow, TokenMetricsRow, NetworkStatsRow } from '@services/api';
+import type { WalletRow, TokenMetricsRow, NetworkStatsRow } from '../services/api';
 
 interface AuthState {
   isLoggedIn: boolean;
