@@ -405,7 +405,7 @@ async fn main() -> Result<()> {
         let mut rx       = shutdown_tx.subscribe();
         tokio::spawn(async move {
             tokio::select! {
-                res = stratum.run(stratum_port) => {
+                res = Arc::new(stratum).run(stratum_port) => {
                     if let Err(e) = res { error!("Stratum server error: {}", e); }
                 }
                 _ = rx.recv() => { info!("Stratum server shutting down"); }
@@ -598,7 +598,7 @@ fn spawn_metrics_updater(app: AppState, block_time_ms: u64) {
             let mp_size = app.mempool.read().await.len();
             METRICS.mempool_size.store(mp_size as u64, Ordering::Relaxed);
             // Peers
-            let peer_count = app.peers.count();
+            let peer_count = app.peers.count().await;
             METRICS.peer_count.store(peer_count as u64, Ordering::Relaxed);
             // Governance
             let active_props = app.governance.read().await.engine.active_proposals().len();
@@ -767,7 +767,7 @@ fn spawn_fee_market_updater(
             let gas_used = {
                 let mp = mempool.read().await;
                 let selected = mp.select_for_block(500);
-                selected.iter().map(|tx| tx.gas_limit.unwrap_or(21_000)).sum::<u64>()
+                selected.iter().map(|tx| tx.fee).sum::<f64>() as u64
             };
 
             let mut fm = fee_market.write().await;
@@ -797,7 +797,7 @@ fn spawn_mempool_cleanup(
             let mut m = mempool.write().await;
 
             // Evict transactions older than 24 hours
-            let expired = m.evict_expired_before(now - 86_400);
+            let expired = m.evict_expired_before((now - 86_400) as i64);
             for hash in &expired {
                 let _ = store.remove(hash);
             }
@@ -860,7 +860,7 @@ fn spawn_block_producer(
                 m.select_for_block(500)
                     .iter()
                     .map(|tx| tx.fee)
-                    .sum()
+                    .sum::<f64>() as u64
             };
 
             let block = hsmc_core::Block::new(
