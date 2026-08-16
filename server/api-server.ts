@@ -595,7 +595,10 @@ function checkApiKey(req: Request): boolean {
 }
 
 // ── Health check paths (no auth required) ────────────────────────────────────
-const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge", "/stripe/webhook", "/node-proxy"]);
+// NOTE: /node-proxy is intentionally NOT in PUBLIC_PATHS. It is reachable
+// anonymously only in dev mode (checkApiKey short-circuits on IS_DEV_MODE); in
+// production it requires x-api-key like every other non-public route (sec review G6).
+const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge", "/stripe/webhook"]);
 
 function isPublicPath(path: string): boolean {
   return PUBLIC_PATHS.has(path) || path === "/explorer/stats" || path === "/explorer/blocks" || path === "/explorer/transactions" || path === "/explorer/search" || path.startsWith("/explorer/block/") || path.startsWith("/explorer/transaction/");
@@ -3697,14 +3700,24 @@ async function handleShieldedProxy(req: Request, endpoint: string, method: strin
 }
 
 // ============================================================================
-// Node proxy - browser-facing RPC bridge to the HSMC Rust node (port 8080).
-// Frontend sends the envelope { path, method, data } (privacy-utils.ts /
-// node-tx.ts). Only whitelisted node endpoints are forwarded - no arbitrary
-// node proxying. Response envelope: { ok, node_online, data } exactly as
-// privacy-utils.ts:595-615 reads it.
+// Node proxy - browser/mobile-facing RPC bridge to the HSMC Rust node (port 8080).
+// Clients send the envelope { path, method, data } (privacy-utils.ts /
+// node-tx.ts / Android NodeClient). Only whitelisted node endpoints are
+// forwarded - no arbitrary node proxying. Response envelope: { ok, node_online,
+// data } exactly as privacy-utils.ts:595-615 reads it.
+// Entries are method-exact: GET routes are read-only (balance, history, chain
+// info); POST routes are the tx/crypto builders. Wrong-method requests resolve
+// to null and are rejected with the 400 envelope. The secret-accepting /
+// state-changing node routes (/shielded/withdraw, /vm/*, /rollup/*,
+// /stablecoin/*) are intentionally NOT whitelisted (security review G6).
 // ============================================================================
 const NODE_PROXY_WHITELIST: ReadonlyArray<{ path: string; method: "GET" | "POST" }> = [
+  // Read-only GET routes (mobile wallet v1: balance + history + chain info)
   { path: "/health", method: "GET" },
+  { path: "/info", method: "GET" },
+  { path: "/stats", method: "GET" },
+  { path: "/fee/estimate", method: "GET" },
+  // POST routes (transaction building / submission)
   { path: "/tx/submit", method: "POST" },
   { path: "/tx/broadcast", method: "POST" },
   { path: "/crypto/stealth/generate", method: "POST" },
@@ -3714,12 +3727,24 @@ const NODE_PROXY_WHITELIST: ReadonlyArray<{ path: string; method: "GET" | "POST"
 ];
 // GET /tx/:hash - any 1-128 char alphanumeric hash (real node hashes are 64 hex chars)
 const NODE_PROXY_TX_HASH_RE = /^\/tx\/[A-Za-z0-9]{1,128}$/;
+// GET /utxo/:address - single address path segment (HSMC addresses are 0x + 40 hex)
+const NODE_PROXY_UTXO_ADDRESS_RE = /^\/utxo\/[A-Za-z0-9]{1,128}$/;
+// GET /address/:address/txs - address segment + /txs suffix; the node accepts
+// optional ?limit=&offset= pagination query params (handlers.rs get_address_txs).
+const NODE_PROXY_ADDRESS_TXS_RE = /^\/address\/[A-Za-z0-9]{1,128}\/txs(\?[A-Za-z0-9=&._%-]{0,256})?$/;
 
 /** Resolve a { path, method } pair to a forwardable node endpoint, or null. */
 function resolveNodeProxyTarget(path: string, method: string): string | null {
   if (method !== "GET" && method !== "POST") return null;
+  // Method-exact match: GET /info works, POST /info does not, and vice versa.
   if (NODE_PROXY_WHITELIST.some((e) => e.path === path && e.method === method)) return path;
-  if (method === "GET" && NODE_PROXY_TX_HASH_RE.test(path)) return path;
+  // Parameterized GET routes (mirror rust-node/hsmc-rpc/src/server.rs):
+  // /tx/:hash, /utxo/:address, /address/:address/txs - GET only.
+  if (method === "GET") {
+    if (NODE_PROXY_TX_HASH_RE.test(path)) return path;
+    if (NODE_PROXY_UTXO_ADDRESS_RE.test(path)) return path;
+    if (NODE_PROXY_ADDRESS_TXS_RE.test(path)) return path;
+  }
   return null;
 }
 
