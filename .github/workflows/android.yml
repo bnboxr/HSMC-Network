@@ -1,0 +1,91 @@
+# Android CI - build debug APK on every PR touching the native wallet.
+# Key decisions: JDK 17 Temurin pinned (ubuntu-latest default JAVA_HOME floats), Gradle 8.10.2 pinned,
+# AGP <= 8.8.x (8.8 requires Gradle 8.10.2 exactly; 8.9+ needs 8.11.1+), memory capped at 2 workers + 2GiB heap.
+# The "Repair Gradle wrapper" step is idempotent insurance for fresh CI checkouts
+# (wrapper + gradle.properties are committed on this branch, so it is normally a no-op).
+
+name: Android CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'android-native/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'android-native/**'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.workers.max=2
+
+defaults:
+  run:
+    working-directory: android-native
+
+jobs:
+  build:
+    name: Assemble debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.10.2 (pinned)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Ensure Android SDK components (pinned)
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" >/dev/null
+
+      - name: Repair Gradle wrapper if incomplete
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
+            gradle wrapper --gradle-version 8.10.2 --distribution-type bin --no-daemon
+          fi
+
+      - name: Ensure gradle.properties (memory-safe defaults)
+        run: |
+          if [ ! -f gradle.properties ]; then
+            printf '%s\n' \
+              'org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m' \
+              'org.gradle.daemon=true' \
+              'org.gradle.parallel=true' \
+              'org.gradle.caching=true' \
+              'org.gradle.workers.max=2' \
+              'android.useAndroidX=true' > gradle.properties
+          fi
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Run Kotlin unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: hsmc-wallet-debug-apk
+          path: android-native/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
