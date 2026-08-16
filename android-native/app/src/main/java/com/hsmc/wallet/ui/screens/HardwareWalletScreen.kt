@@ -44,7 +44,7 @@ fun HardwareWalletScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "Phase 2 will add USB/BLE device discovery, seed validation and " +
+                text = "Phase 3 will add USB/BLE device discovery, seed validation and " +
                     "transaction signing on the device. Nothing is detected or connected in " +
                     "this build.",
                 style = MaterialTheme.typography.bodyMedium,

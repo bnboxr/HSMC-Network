@@ -8,3 +8,7 @@
 # Explicit keep for the Keystore-backed crypto helpers (they are referenced
 # only via the sealed WalletException hierarchy — kept as a safety net):
 -keep class com.hsmc.wallet.core.** { *; }
+
+# Keep the node-proxy client types (referenced only via the JSON parser +
+# sealed result classes; R8 would otherwise rename fields the unit tests use):
+-keep class com.hsmc.wallet.network.** { *; }

@@ -88,7 +88,7 @@ object AndroidKeyStoreWrapper {
      * Loads the existing key under [alias]. Throws if the key does not exist
      * or is permanently invalidated.
      */
-    private fun loadKey(alias: String): SecretKey {
+    fun loadKey(alias: String): SecretKey {
         if (!keyExists(alias)) {
             throw KeyMissingException(alias)
         }

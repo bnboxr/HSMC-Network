@@ -1,16 +1,17 @@
 package com.hsmc.wallet.ui.screens
 
-import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -20,9 +21,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.fragment.app.FragmentActivity
 import com.hsmc.wallet.core.BiometricPromptHelper
+import com.hsmc.wallet.core.Secrets.zeroize
 import com.hsmc.wallet.core.WalletStorage
 import com.hsmc.wallet.ui.components.HsmcCard
 import com.hsmc.wallet.ui.components.HsmcPrimaryButton
@@ -32,19 +38,17 @@ import com.hsmc.wallet.ui.components.ScreenHeader
 import com.hsmc.wallet.ui.components.StatusRow
 
 /**
- * Biometric protection setup (Phase 1).
+ * Biometric protection setup (Phase 2 — real, CryptoObject-bound).
  *
- * Real behavior — no alert theater:
- *  - Reads the device's actual biometric availability ([BiometricPromptHelper.canAuthenticate]).
- *  - Enabling runs the real BiometricPrompt first, then re-encrypts the wallet seed under a
- *    fresh, strong-biometric-bound Android Keystore key via [WalletStorage.setBiometricProtection].
- *  - Disabling runs the real BiometricPrompt too, because decrypting the currently
- *    biometric-bound seed requires a fresh authentication before re-encrypting under a plain key.
- *  - Every error (cancelled, failed, invalidated key) is reported as-is; the screen never
- *    claims protection was changed when it was not.
- *
- * Known Phase-2 follow-up: strict keystore timing ("auth token must be newer than key
- * creation") must be validated on-device for the enable path — see the QA parity report.
+ *  - Reads the device's actual strong-biometric availability.
+ *  - Requires the wallet password (the password factor unwraps the seed envelope).
+ *  - Enabling creates a fresh Keystore key with
+ *    `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)` (R2.1), re-encrypts
+ *    the seed envelope under it, and binds the wrapping operation to a real
+ *    BiometricPrompt CryptoObject. If the user cancels, the change is rolled back.
+ *  - Disabling deletes the biometric-bound key and re-wraps the seed envelope under a
+ *    plain Keystore key (also password-gated).
+ *  - The enabled state is persisted in SecurePrefs; every error is reported honestly.
  */
 @Composable
 fun BiometricSetupScreen(onBack: () -> Unit) {
@@ -55,45 +59,39 @@ fun BiometricSetupScreen(onBack: () -> Unit) {
     val walletExists = remember { WalletStorage.walletExists(context) }
     var biometricEnabled by remember { mutableStateOf(WalletStorage.isBiometricProtected(context)) }
 
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
     fun switchProtection(enable: Boolean) {
         if (busy) return
+        if (password.isEmpty()) {
+            message = "Enter your wallet password to ${if (enable) "enable" else "disable"} biometric protection."
+            return
+        }
         busy = true
         message = null
-        BiometricPromptHelper.authenticate(
+        val passwordChars = password.toCharArray()
+        WalletStorage.setBiometricProtection(
             activity = activity,
-            title = if (enable) "Enable biometric protection" else "Disable biometric protection",
-            subtitle = "Authenticate to ${if (enable) "bind your seed key to" else "unbind your seed key from"} this device's biometrics"
-        ) { result ->
-            when (result) {
-                is BiometricPromptHelper.Result.Success -> {
-                    try {
-                        WalletStorage.setBiometricProtection(context, enable)
-                        biometricEnabled = WalletStorage.isBiometricProtected(context)
-                        message = if (enable) {
-                            "Biometric protection enabled. Unlocking the wallet now requires your fingerprint or face."
-                        } else {
-                            "Biometric protection disabled. The seed key no longer requires authentication."
-                        }
-                    } catch (e: KeyPermanentlyInvalidatedException) {
-                        message = "Biometrics changed on this device, so the seed key was invalidated " +
-                            "and the seed can no longer be decrypted. Restore it from your backup " +
-                            "phrase with import (Phase 2)."
-                    } catch (e: Exception) {
-                        message = "Could not ${if (enable) "enable" else "disable"} biometric protection: ${e.message}"
-                    }
+            context = context,
+            password = passwordChars,
+            enable = enable
+        ) { success, failure ->
+            if (success) {
+                biometricEnabled = WalletStorage.isBiometricProtected(context)
+                message = if (enable) {
+                    "Biometric protection enabled. Unlocking now requires your fingerprint or face " +
+                        "(or the wallet password)."
+                } else {
+                    "Biometric protection disabled. The seed key no longer requires authentication."
                 }
-
-                is BiometricPromptHelper.Result.Cancelled -> {
-                    message = "Authentication cancelled — nothing was changed."
-                }
-
-                is BiometricPromptHelper.Result.Failed -> {
-                    message = "Authentication failed: ${result.message} — nothing was changed."
-                }
+            } else {
+                message = failure
             }
+            password = ""
+            passwordChars.zeroize()
             busy = false
         }
     }
@@ -108,7 +106,7 @@ fun BiometricSetupScreen(onBack: () -> Unit) {
     ) {
         ScreenHeader(
             title = "Biometric protection",
-            subtitle = "Bind your wallet seed to this device's biometrics.",
+            subtitle = "Bind your wallet seed key to this device's biometrics.",
             onBack = onBack
         )
 
@@ -149,17 +147,43 @@ fun BiometricSetupScreen(onBack: () -> Unit) {
             }
 
             else -> {
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Wallet password") },
+                    supportingText = { Text("Required to re-encrypt the seed envelope.") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    enabled = !busy,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        Text(
+                            text = if (passwordVisible) "Hide" else "Show",
+                            modifier = Modifier.padding(8.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                )
+
                 if (biometricEnabled) {
                     HsmcPrimaryButton(
-                        text = if (busy) "Waiting for biometrics…" else "Disable biometric protection",
+                        text = if (busy) "Working…" else "Disable biometric protection",
                         enabled = !busy,
                         onClick = { switchProtection(enable = false) }
                     )
                 } else {
                     HsmcPrimaryButton(
-                        text = if (busy) "Waiting for biometrics…" else "Enable biometric protection",
+                        text = if (busy) "Working…" else "Enable biometric protection",
                         enabled = !busy,
                         onClick = { switchProtection(enable = true) }
+                    )
+                    PhaseNote(
+                        "Enabling shows a biometric prompt once so the new seed key can be " +
+                            "bound to your fingerprint or face. Afterwards, every biometric " +
+                            "unlock requires a fresh prompt — there is no timeout."
                     )
                 }
             }
@@ -169,15 +193,17 @@ fun BiometricSetupScreen(onBack: () -> Unit) {
             Text(
                 text = it,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error
+                color = if (message?.startsWith("Biometric protection enabled") == true ||
+                    message?.startsWith("Biometric protection disabled") == true
+                ) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
             )
         }
 
         PhaseNote(
             "Switching protection re-encrypts your existing seed under a new Android Keystore " +
-                "key; the old key is deleted. When biometrics are enabled, every unlock and " +
-                "every future seed operation requires a fresh biometric prompt — there is no " +
-                "timeout."
+                "key; the old key is deleted. The wallet password always remains a valid " +
+                "unlock factor — biometrics add a second way to unlock, they do not replace " +
+                "the password."
         )
     }
 }

@@ -50,6 +50,11 @@ class SecurePrefs(context: Context) {
     fun getBoolean(key: String, default: Boolean): Boolean =
         getString(key)?.toBoolean() ?: default
 
+    fun putInt(key: String, value: Int) = putString(key, value.toString())
+
+    fun getInt(key: String, default: Int): Int =
+        getString(key)?.toIntOrNull() ?: default
+
     fun remove(key: String) {
         prefs.edit().remove(key).apply()
     }
@@ -60,5 +65,8 @@ class SecurePrefs(context: Context) {
         const val KEY_WALLET_CREATED: String = "wallet_created"
         const val KEY_BIOMETRIC_ENABLED: String = "biometric_enabled"
         const val KEY_THEME_MODE: String = "theme_mode" // "system" | "light" | "dark"
+        const val KEY_CURRENCY: String = "currency" // e.g. "USD" | "EUR" (display only until Phase 3)
+        const val KEY_AUTO_LOCK_SECONDS: String = "auto_lock_seconds" // 0 = never
+        const val KEY_NODE_URL: String = "node_url" // persisted, applied to networking in Phase 3
     }
 }

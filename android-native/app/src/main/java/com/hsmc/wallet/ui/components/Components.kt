@@ -92,6 +92,7 @@ fun HsmcSecondaryButton(
 @Composable
 fun HsmcCard(
     modifier: Modifier = Modifier,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
@@ -100,15 +101,15 @@ fun HsmcCard(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), horizontalAlignment = horizontalAlignment) {
             content()
         }
     }
 }
 
 /**
- * Honest "Phase 2" banner used wherever a feature would live but is not wired yet.
- * Never dresses up an unimplemented feature as working.
+ * Honest "not yet wired" banner used wherever a feature would live but is not
+ * implemented yet. Never dresses up an unimplemented feature as working.
  */
 @Composable
 fun PhaseNote(text: String, modifier: Modifier = Modifier) {

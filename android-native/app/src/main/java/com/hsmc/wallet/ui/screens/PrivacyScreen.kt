@@ -48,7 +48,7 @@ fun PrivacyScreen(onBack: () -> Unit) {
                 text = "HSMC transactions are private by default at the protocol level. " +
                     "Wallet-side integration of privacy key handling (stealth address " +
                     "scanning, view keys, ring-signature signing) is part of node " +
-                    "integration and lands in Phase 2.",
+                    "integration and lands in Phase 3.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -68,6 +68,6 @@ fun PrivacyScreen(onBack: () -> Unit) {
             )
         }
 
-        PhaseNote("Phase 2: stealth-address generation, view-key management and private-send flow.")
+        PhaseNote("Phase 3: stealth-address generation, view-key management and private-send flow.")
     }
 }
