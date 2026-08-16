@@ -1028,7 +1028,7 @@ impl Transaction {
 // Transaction Validation
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum TxValidationError {
     EmptyHash,
     EmptyFromAddress,

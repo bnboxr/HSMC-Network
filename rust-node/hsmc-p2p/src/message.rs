@@ -310,7 +310,9 @@ impl MessageEnvelope {
 // ─── Node Service Flags ───────────────────────────────────────────────────────
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    // The bitflags `serde` feature supports these derives on the public flag type.
+    // VersionMsg/PeerAddress retain their established numeric u64 wire fields below.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct NodeServices: u64 {
         const NETWORK        = 1 << 0;  // Full node
         const BLOOM          = 1 << 2;  // SPV bloom filters
@@ -320,5 +322,64 @@ bitflags::bitflags! {
         const RING_CT        = 1 << 20; // HSMC RingCT support
         const STRATUM        = 1 << 21; // Mining stratum
         const BRIDGE_RELAY   = 1 << 22; // wHSMC bridge relay
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_services_constructs_and_retains_protocol_bits() {
+        let services = NodeServices::NETWORK | NodeServices::RING_CT | NodeServices::STRATUM;
+
+        assert_eq!(services.bits(), (1 << 0) | (1 << 20) | (1 << 21));
+        assert!(services.contains(NodeServices::NETWORK));
+        assert!(services.contains(NodeServices::RING_CT));
+        assert!(services.contains(NodeServices::STRATUM));
+        assert_eq!(NodeServices::from_bits(services.bits()), Some(services));
+
+        // Regression: this requires bitflags' `serde` feature rather than a
+        // derive on the macro input (which targets its private representation).
+        let encoded = serde_json::to_string(&services).expect("NodeServices serializes");
+        let decoded: NodeServices =
+            serde_json::from_str(&encoded).expect("NodeServices deserializes");
+        assert_eq!(decoded, services);
+    }
+
+    #[test]
+    fn version_message_keeps_services_as_numeric_wire_flags() {
+        let services = NodeServices::NETWORK | NodeServices::RING_CT;
+        let version = VersionMsg {
+            version: PROTOCOL_VERSION,
+            services: services.bits(),
+            timestamp: 0,
+            addr_recv: PeerAddress {
+                services: services.bits(),
+                ip: "127.0.0.1".into(),
+                port: 18_080,
+                last_seen: 0,
+            },
+            addr_from: PeerAddress {
+                services: 0,
+                ip: "0.0.0.0".into(),
+                port: 0,
+                last_seen: 0,
+            },
+            nonce: 42,
+            user_agent: "/hsmc:test/".into(),
+            start_height: 0,
+            relay: true,
+            protocol_features: ProtocolFeatures::default(),
+        };
+
+        let wire = serde_json::to_value(&version).expect("version message serializes");
+        assert_eq!(wire["services"], serde_json::json!(services.bits()));
+        assert_eq!(wire["addr_recv"]["services"], serde_json::json!(services.bits()));
+
+        let decoded: VersionMsg =
+            serde_json::from_value(wire).expect("version message deserializes");
+        assert_eq!(decoded.services, services.bits());
+        assert_eq!(decoded.addr_recv.services, services.bits());
     }
 }

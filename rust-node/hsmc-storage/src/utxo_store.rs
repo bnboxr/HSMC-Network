@@ -1,9 +1,10 @@
 /// UTXO set storage — RocksDB-backed, indexed by (txid:vout) and address
 use std::sync::Arc;
-use rocksdb::{DB, WriteBatch};
+use rocksdb::{DB, WriteBatch, IteratorMode};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+use hsmc_core::Transaction;
 use crate::{CF_UTXOS, CF_UTXOS_BY_ADDR, CF_KEY_IMAGES};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,5 +116,38 @@ impl UtxoStore {
         let cf = self.db.cf_handle(CF_KEY_IMAGES)
             .ok_or_else(|| anyhow!("CF_KEY_IMAGES not found"))?;
         Ok(self.db.get_cf(cf, key_image.as_bytes())?.is_some())
+    }
+
+    /// Total number of unspent outputs in the UTXO set
+    pub fn count(&self) -> Result<u64> {
+        let cf = self.db.cf_handle(CF_UTXOS)
+            .ok_or_else(|| anyhow!("CF_UTXOS not found"))?;
+        Ok(self.db.iterator_cf(cf, IteratorMode::Start).count() as u64)
+    }
+
+    /// Apply a confirmed transaction to the UTXO set: spend the referenced
+    /// inputs (recording their key images to prevent double-spends) and
+    /// register each output as a new unspent entry at the given block height.
+    pub fn apply_transaction(&self, tx: &Transaction, block_height: u64) -> Result<()> {
+        for input in &tx.inputs {
+            let _ = self.remove(&input.prev_tx_hash, input.output_index)?;
+            if let Some(key_image) = &input.key_image {
+                self.add_key_image(key_image)?;
+            }
+        }
+        for (vout, output) in tx.outputs.iter().enumerate() {
+            self.put(&StoredUtxo {
+                txid:          tx.hash.clone(),
+                vout:          vout as u32,
+                address:       output.address.clone(),
+                amount:        output.amount as u64,
+                script_pubkey: output.lock_script.clone(),
+                block_height,
+                coinbase:      tx.payload.is_coinbase(),
+                commitment:    output.commitment.clone(),
+                confidential:  output.commitment.is_some(),
+            })?;
+        }
+        Ok(())
     }
 }

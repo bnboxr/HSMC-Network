@@ -241,7 +241,7 @@ impl L2Transaction {
             Err(_) => return false,
         };
 
-        let sig = match Ed25519Signature::from_bytes(&self.signature) {
+        let sig = match Ed25519Signature::from_slice(&self.signature) {
             Ok(s) => s,
             Err(_) => return false,
         };

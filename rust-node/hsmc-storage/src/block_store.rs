@@ -59,6 +59,17 @@ impl BlockStore {
         }
     }
 
+    /// Persist the chain tip metadata (block number) — writes the same `CF_META`
+    /// `"tip"` key that `put` maintains, so a shutdown flush can re-assert the
+    /// tip without re-writing the block itself. The hash is accepted for API
+    /// symmetry with `put`/`delete` but the on-disk tip record stores only the
+    /// block number (see `tip_number`).
+    pub fn save_tip_metadata(&self, block_number: u64, _hash: &str) -> Result<()> {
+        let cf = self.db.cf_handle(CF_META).ok_or_else(|| anyhow!("CF_META missing"))?;
+        self.db.put_cf(cf, b"tip", &block_number.to_be_bytes())?;
+        Ok(())
+    }
+
     pub fn count(&self) -> Result<u64> {
         let cf = self.db.cf_handle(CF_META).ok_or_else(|| anyhow!("CF_META missing"))?;
         match self.db.get_cf(cf, b"count")? {

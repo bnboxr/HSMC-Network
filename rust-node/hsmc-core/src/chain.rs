@@ -19,6 +19,7 @@
 /// ============================================================================
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use serde::Serialize;
 use crate::{
     Block, Transaction, PrivacyLevel, TxStatus, TxValidationError,
     genesis_block, block_reward, difficulty_to_leading_zeros, leading_zeros_in_hash,
@@ -47,7 +48,7 @@ pub const MAX_INLINE_BLOCKS: usize = 50_000;
 // ChainError
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum ChainError {
     InvalidBlock(String),
     DuplicateBlock { number: u64 },
