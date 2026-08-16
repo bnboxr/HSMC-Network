@@ -5,10 +5,10 @@
 use axum::{extract::{State, Path, Query}, Json};
 use std::{sync::Arc, collections::HashMap};
 use tracing::info;
+use sha2::Digest;
 use hsmc_core::{Block, Transaction, PrivacyLevel, TxStatus};
 use hsmc_core::governance::{RpcProposal, GovernanceState};
 use hsmc_crypto::{DualKeyWallet, StealthOutputSender, StealthAddress, RingPublicKey, RingPrivateKey, LsagSignature, ClsagSignature, select_decoys, PedersenCommitment, BulletproofRangeProof, RctOutput};
-use rand::rngs::OsRng;
 use crate::types::*;
 use crate::server::AppState;
 
@@ -103,11 +103,11 @@ pub async fn get_tx(State(state): State<Arc<AppState>>, Path(hash): Path<String>
             "tx": serde_json::to_value(tx).unwrap_or_default()
         }));
     }
-    // Search confirmed blocks
+    // Search confirmed blocks (only tx hashes are stored on-chain)
     let chain = state.chain.read().await;
     for block in chain.blocks.iter().rev() {
         for tx in &block.transactions {
-            if tx.hash == hash {
+            if tx == &hash {
                 return Json(serde_json::json!({
                     "found": true, "location": "confirmed",
                     "block_number": block.block_number,
@@ -181,16 +181,24 @@ pub async fn get_address_txs(
     let chain = state.chain.read().await;
     let mut txs: Vec<serde_json::Value> = Vec::new();
 
+    // Confirmed blocks only store tx hashes; associate them with the address
+    // via the chain UTXO set (address → "txhash:index").
+    let confirmed_keys: std::collections::HashSet<&str> = chain
+        .utxo_set
+        .by_address
+        .get(&address)
+        .map(|keys| keys.iter().filter_map(|k| k.split(':').next()).collect())
+        .unwrap_or_default();
+
     for block in chain.blocks.iter().rev() {
         for tx in &block.transactions {
-            if tx.from_address == address || tx.to_address == address {
-                let mut v = serde_json::to_value(tx).unwrap_or_default();
-                if let Some(obj) = v.as_object_mut() {
-                    obj.insert("block_number".into(), block.block_number.into());
-                    obj.insert("block_hash".into(), block.hash.clone().into());
-                    obj.insert("confirmed".into(), true.into());
-                }
-                txs.push(v);
+            if confirmed_keys.contains(tx.as_str()) {
+                txs.push(serde_json::json!({
+                    "tx_hash": tx,
+                    "block_number": block.block_number,
+                    "block_hash": block.hash,
+                    "confirmed": true,
+                }));
             }
         }
     }
@@ -221,39 +229,22 @@ pub async fn get_utxo_set(
     Path(address): Path<String>,
 ) -> Json<serde_json::Value> {
     let chain = state.chain.read().await;
-    let mut utxos: Vec<serde_json::Value> = Vec::new();
     let mut total_balance: f64 = 0.0;
-    let mut spent_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Collect all spent inputs across chain
-    for block in &chain.blocks {
-        for tx in &block.transactions {
-            if let Some(ref input_ref) = tx.stealth_address {
-                spent_hashes.insert(input_ref.clone());
-            }
-        }
-    }
-
-    // Find unspent outputs for address
-    for block in &chain.blocks {
-        for tx in &block.transactions {
-            if tx.to_address == address && !spent_hashes.contains(&tx.hash) {
-                total_balance += tx.amount;
-                utxos.push(serde_json::json!({
-                    "tx_hash": tx.hash,
-                    "vout": 0,
-                    "amount": tx.amount,
-                    "privacy_level": tx.privacy_level.to_string(),
-                    "stealth_address": tx.stealth_address,
-                    "commitment": tx.commitment,
-                    "block_number": block.block_number,
-                    "confirmations": chain.height().saturating_sub(block.block_number) + 1,
-                    "spendable": true,
-                    "coinbase": tx.from_address == "coinbase" || tx.from_address.is_empty(),
-                }));
-            }
-        }
-    }
+    // The chain UTXO set is the authoritative source of unspent outputs.
+    let utxos: Vec<serde_json::Value> = chain.utxo_set.utxos_for(&address).iter().map(|u| {
+        total_balance += u.amount;
+        serde_json::json!({
+            "tx_hash": u.tx_hash,
+            "vout": u.output_index,
+            "amount": u.amount,
+            "commitment": u.commitment,
+            "block_number": u.block_height,
+            "confirmations": chain.height().saturating_sub(u.block_height) + 1,
+            "spendable": true,
+            "coinbase": u.block_height == 0,
+        })
+    }).collect();
 
     Json(serde_json::json!({
         "address": address,
@@ -271,8 +262,9 @@ pub async fn get_utxo_proof(
     let chain = state.chain.read().await;
     for block in &chain.blocks {
         for tx in &block.transactions {
-            if tx.hash == tx_hash {
-                let merkle_proof = compute_merkle_proof(&tx_hash, &block.transactions.iter().map(|t| t.hash.clone()).collect::<Vec<_>>());
+            if tx == &tx_hash {
+                let merkle_proof = compute_merkle_proof(&tx_hash, &block.transactions);
+                let utxo = chain.utxo_set.utxos.get(&format!("{}:{}", tx_hash, vout));
                 return Json(serde_json::json!({
                     "tx_hash": tx_hash,
                     "vout": vout,
@@ -280,7 +272,7 @@ pub async fn get_utxo_proof(
                     "block_hash": block.hash,
                     "merkle_root": block.merkle_root,
                     "merkle_proof": merkle_proof,
-                    "amount": tx.amount,
+                    "amount": utxo.map(|u| u.amount).unwrap_or(0.0),
                     "valid": true,
                 }));
             }
@@ -369,9 +361,8 @@ pub async fn fee_estimate(State(state): State<Arc<AppState>>) -> Json<serde_json
         })
     };
 
-    let recent_fees: Vec<f64> = chain.blocks.iter().rev().take(10)
-        .flat_map(|b| b.transactions.iter().map(|t| t.fee))
-        .collect();
+    // Confirmed blocks only store tx hashes — fee data is available from the mempool
+    let recent_fees: Vec<f64> = mempool.select_for_block(200).iter().map(|t| t.fee).collect();
     let p10 = percentile(&recent_fees, 10);
     let p50 = percentile(&recent_fees, 50);
     let p90 = percentile(&recent_fees, 90);
@@ -784,9 +775,10 @@ pub async fn get_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::V
     let total_txs: u64 = chain.blocks.iter().map(|b| b.transactions_count as u64).sum();
     let hash_rate = compute_hashrate(chain.difficulty, &chain.blocks);
 
-    // Privacy stats
-    let privacy_counts = chain.blocks.iter().flat_map(|b| &b.transactions)
-        .fold((0u64, 0u64, 0u64, 0u64), |(t, r, s, f), tx| match tx.privacy_level {
+    // Privacy stats — confirmed blocks only store tx hashes, so the privacy
+    // breakdown reflects the pending (mempool) transactions.
+    let privacy_counts = mempool.select_for_block(200).iter()
+        .fold((0u64, 0u64, 0u64, 0u64), |(t, r, s, f), tx| match &tx.privacy_level {
             PrivacyLevel::Transparent => (t+1, r, s, f),
             PrivacyLevel::RingCt      => (t, r+1, s, f),
             PrivacyLevel::Stealth     => (t, r, s+1, f),
@@ -827,11 +819,11 @@ pub async fn get_supply(State(state): State<Arc<AppState>>) -> Json<serde_json::
     let next_halving = (halvings + 1) * 210_000;
     let circulating_pct = (mined / total) * 100.0;
 
-    // Burned/locked estimate
-    let locked_in_bridge: f64 = chain.blocks.iter()
-        .flat_map(|b| &b.transactions)
-        .filter(|tx| tx.to_address.starts_with("bridge:"))
-        .map(|tx| tx.amount)
+    // Burned/locked estimate — confirmed blocks only store tx hashes, so bridge
+    // locks are measured from UTXOs held by bridge addresses.
+    let locked_in_bridge: f64 = chain.utxo_set.utxos.values()
+        .filter(|u| u.address.starts_with("bridge:"))
+        .map(|u| u.amount)
         .sum();
 
     Json(serde_json::json!({
@@ -955,7 +947,8 @@ pub async fn generate_ring_signature(
         let pk = RingPublicKey::from_private(&sk);
         (sk, pk)
     } else {
-        RingPublicKey::generate()
+        let (pk, sk) = RingPublicKey::generate();
+        (sk, pk)
     };
 
     let ring_size = req.ring_size.unwrap_or(11).min(16).max(2);
@@ -1046,8 +1039,9 @@ pub async fn oracle_price(
 ) -> Json<serde_json::Value> {
     match state.oracle.get_price(&pair).await {
         Ok(price) => {
-            let cache = state.oracle.cache_ref().read();
-            let feeds_used = cache
+            let cache_arc = state.oracle.cache_ref();
+            let feeds_used = cache_arc
+                .read()
                 .get(&pair)
                 .map(|e| e.feeds_used)
                 .unwrap_or(state.oracle.feed_count());
@@ -1415,7 +1409,7 @@ pub async fn stablecoin_liquidate(
     };
     let liquidator = match req.get("liquidator").and_then(|v| v.as_str()) {
         Some(l) if !l.is_empty() => l.to_string(),
-        None => return Json(serde_json::json!({ "error": "liquidator address required" })),
+        _ => return Json(serde_json::json!({ "error": "liquidator address required" })),
     };
 
     let hsmc_price = match state.oracle.get_price("HSMC/USDT").await {
@@ -1593,11 +1587,11 @@ pub async fn stablecoin_transfer(
 ) -> Json<serde_json::Value> {
     let from = match req.get("from").and_then(|v| v.as_str()) {
         Some(a) if !a.is_empty() => a,
-        None => return Json(serde_json::json!({ "error": "from address required" })),
+        _ => return Json(serde_json::json!({ "error": "from address required" })),
     };
     let to = match req.get("to").and_then(|v| v.as_str()) {
         Some(a) if !a.is_empty() => a,
-        None => return Json(serde_json::json!({ "error": "to address required" })),
+        _ => return Json(serde_json::json!({ "error": "to address required" })),
     };
     let amount = match req.get("amount").and_then(|v| v.as_f64()) {
         Some(a) if a > 0.0 => (a * hsmc_stablecoin::STABLECOIN_ATOMIC as f64) as u64,
@@ -1931,13 +1925,15 @@ pub async fn rollup_submit_batch(
                     };
                     match rollup.generate_proof(committed) {
                         Ok(proof_bytes) => {
+                            let tx_count = committed.txs.len();
+                            let post_state_root = committed.post_state_root;
                             let _ = rollup.attach_proof(id, proof_bytes);
                             Json(serde_json::json!({
                                 "status": "committed",
                                 "batch_id": id,
-                                "tx_count": committed.txs.len(),
+                                "tx_count": tx_count,
                                 "pre_state_root": hex::encode(pre),
-                                "post_state_root": hex::encode(committed.post_state_root),
+                                "post_state_root": hex::encode(post_state_root),
                                 "proven": true,
                             }))
                         }

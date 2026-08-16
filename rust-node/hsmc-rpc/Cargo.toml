@@ -16,6 +16,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+rand = { workspace = true }
 hsmc-core   = { path = "../hsmc-core" }
 hsmc-p2p    = { path = "../hsmc-p2p" }
 hsmc-crypto = { path = "../hsmc-crypto" }

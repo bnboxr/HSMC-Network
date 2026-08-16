@@ -1500,6 +1500,7 @@ dependencies = [
  "hsmc-stablecoin",
  "hsmc-starks",
  "hsmc-vm",
+ "rand 0.8.7",
  "reqwest",
  "serde",
  "serde_json",

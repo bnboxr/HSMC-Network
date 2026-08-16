@@ -19,11 +19,11 @@
 
 use std::collections::{HashMap, HashSet, BTreeMap};
 use chrono::Utc;
+use serde::Serialize;
 use crate::{
     Transaction, TxStatus, PrivacyLevel, TxValidationError,
 };
 use crate::transaction::validate_tx;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
@@ -685,7 +685,7 @@ pub struct FeeEstimates {
 // MempoolError
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum MempoolError {
     InvalidTx(TxValidationError),
     Duplicate             { hash: String },
