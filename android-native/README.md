@@ -1,24 +1,24 @@
-# HSMC Network — Native Android Wallet (Phase 1)
-
+# HSMC Network — Native Android Wallet
 Privacy-first Layer 1 wallet for the HSMC Network, written in Kotlin with Jetpack Compose
 (Material 3, dark theme). This is a standalone Gradle project rooted at `android-native/`.
 
+**Status: Phase 3 step 1 (real node connectivity).** Phase 1 = wallet-key foundation,
+Phase 2 = real wallet lifecycle (create/import/unlock/biometric/settings/receive), Phase 3
+step 1 = real node connectivity: NodeClient through the API server's /node-proxy bridge,
+real balance fetch, real tx submission path, honest transaction history. Staking, mining,
+privacy proofs and hardware wallet remain scaffolds for later Phase 3 steps.
+
 ## Build
-
 Prerequisites:
-
 - **JDK 17+**
 - **Android SDK** with platform 35 and build-tools 35.0.0
   (AGP 8.7.3, compileSdk 35, minSdk 26, targetSdk 34)
 - Gradle 8.10.2 — supplied via the wrapper, no local Gradle install needed
-
 ```bash
 cd android-native
 ./gradlew assembleDebug
 ```
-
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
-
 Version pins (see `gradle/libs.versions.toml`):
 
 | Component | Version | Note |
@@ -28,14 +28,13 @@ Version pins (see `gradle/libs.versions.toml`):
 | Kotlin | 2.0.21 | with `org.jetbrains.kotlin.plugin.compose` 2.0.21 |
 | Compose BOM | 2024.12.01 | |
 | androidx.biometric | 1.1.0 | BiometricPrompt host |
+| kotlinx-coroutines-android | 1.8.1 | IO dispatcher for NodeClient |
 
 `gradle.properties` sets `-Xmx2g` and `org.gradle.workers.max=2` so the build stays within
 modest memory budgets.
 
-## What Phase 1 actually does (honest scope)
-
-Phase 1 is a **wallet-key foundation, not a live wallet**. Real and implemented:
-
+## What the app actually does (honest scope)
+Real and implemented across phases:
 - **Real BIP39** — entropy → mnemonic and mnemonic → seed use the actual BIP39 algorithm
   (SHA-256 checksum, PBKDF2-HMAC-SHA512, 2048-iteration standard salt), with the official
   2048-word English wordlist shipped as a raw resource. Validation recomputes the checksum;
@@ -49,40 +48,67 @@ Phase 1 is a **wallet-key foundation, not a live wallet**. Real and implemented:
   confirmation quiz, biometric setup, dashboard, send/receive/history/detail, staking,
   privacy, hardware wallet, settings.
 - **Settings** — theme mode persisted and applied; biometric status read from the real
-  key state; notification permission toggle (API 33+).
+  key state; notification permission toggle (API 33+); live node status row.
+- **NodeClient** (`app/src/main/java/com/hsmc/wallet/network/NodeClient.kt`) — real HTTP
+  client (HttpURLConnection; the only new runtime dep is kotlinx-coroutines for the IO
+  dispatcher) that talks to the HSMC Rust node EXCLUSIVELY through the API server's
+  `/node-proxy` bridge — the ONE sanctioned path (`server/api-server.ts`
+  `handleNodeProxy` + `NODE_PROXY_WHITELIST`). It mirrors the web frontend's
+  `src/utils/node-tx.ts` envelope semantics (`{ path, method, data }` → `{ ok,
+  node_online, data }`) and never fabricates a result.
+- **Dashboard** — fetches the REAL on-chain balance from the node (`GET /utxo/{address}`
+  through the bridge) and shows it only when the node answered; otherwise it shows
+  "Balance unavailable" with the real reason (node offline / endpoint not exposed). No
+  fabricated "0.00000000".
+- **Send** — builds a real `SubmitTxPayload` (field names mirror the Rust
+  `SubmitTxRequest`) and submits via `POST /tx/submit`. The node's actual response is
+  shown: a real tx_hash when accepted into the mempool (with a "Check status" path via
+  the whitelisted `GET /tx/{hash}`), or the node's real error string when rejected. No
+  hash is ever fabricated.
+- **Transaction history/detail** — lists only entries the node returns
+  (`GET /address/{address}/txs` through the bridge) and queries live status per tx
+  (`GET /tx/{hash}`); empty/error states are explicit and honest.
 
-Honestly **not** implemented (deliberately, Phase 2):
-
-- **No node RPC client** — no balances, no real transactions, no addresses are shown or
-  fabricated. Send/Receive/History/Detail show truthful "not available" states rather than
-  fake data. Nothing is ever broadcast.
+Honestly **not** implemented:
+- **Balance & history endpoints are not yet in the server whitelist.** The Rust node
+  exposes `GET /utxo/{address}` and `GET /address/{address}/txs`, but the API server's
+  `/node-proxy` whitelist does not include them yet (documented in the Phase 3 PR). The
+  app calls the real node paths through the bridge anyway, so it starts working the
+  moment the server adds them; until then it surfaces the server's real rejection as an
+  honest "unavailable — not exposed via /node-proxy" state. No fabricated zero balances
+  and no fabricated transaction rows are ever shown.
+- **RingCT/stealth/full privacy sends** — the app submits transparent transactions only
+  (the node's `validate_tx` accepts transparent txs without ring signatures). Privacy
+  sends require wallet-side RingCT construction, which lands in a later step.
+- **Staking, mining, HSMCPay, hardware wallet, notifications** — entry points remain
+  scaffolds; the underlying flows land in later Phase 3 steps.
 - **No fake crypto** — no fabricated transaction hashes, no HMAC "signatures", no
   theatrical hardware-wallet scanning, no simulated proofs. Marketing claims (RingCT,
   CLSAG, post-quantum) are not repeated as implemented features.
 - **No wallet deletion / seed reveal** — destructive actions are intentionally absent.
-- **Hardware wallet, staking, mining, HSMCPay** — entry points are scaffolds; the
-  underlying flows land with node integration in Phase 2.
 
 ## Security posture
-
 - `allowBackup=false` (see `AndroidManifest.xml` comment), no data-extraction backups.
 - Main manifest permits **no cleartext traffic**; debug builds allow cleartext only to
-  `10.0.2.2`/`localhost` for local node development.
+  `10.0.2.2`/`localhost` for local node development. The app only dials the API server
+  over TLS; the user-configured node URL is never dialed directly.
 - Seed never leaves the device unencrypted; mnemonic is never passed through navigation
   arguments (held in-memory in `PendingMnemonic`, cleared after persist).
+- The send flow uses only the public derived address (no seed access); request payloads
+  and addresses are never logged.
 - `BuildConfig.API_BASE_URL` points at the team's live host
   (`https://hsmc-network.ctonew.app`); no hardcoded secrets in source.
 
 ## Project layout
-
 ```
 app/src/main/java/com/hsmc/wallet/
   core/        BIP39, Keystore wrapper, BiometricPrompt helper, encrypted prefs,
                wallet storage, wordlist, in-memory pending mnemonic, constants
+  network/     NodeClient — /node-proxy bridge client (health, balance, submit, tx
+               lookup, address txs) + honest result types
   navigation/  AppNavGraph — all 15 destinations
   ui/          components (cards/buttons/status rows), screens (15), theme
 app/src/main/res/raw/words.txt   official BIP39 English wordlist (2048)
+app/src/test/  BIP39 KATs, HD-keys KATs, NodeClient JSON contract tests
 ```
-
-Compile verification runs on CI — the shared dev machine has no JDK/SDK, so this tree was
-verified by inspection (imports, routes, crypto primitives).
+Compile verification runs on CI (`./gradlew assembleDebug` + `./gradlew testDebugUnitTest`).

@@ -80,7 +80,12 @@ dependencies {
     implementation(libs.zxing.core)
     // Keccak-256 for the on-chain address derivation (same digest the Rust node uses).
     implementation(libs.bouncycastle.bcprov)
+    // IO dispatcher for the node-proxy HTTP client (NodeClient, Phase 3).
+    implementation(libs.kotlinx.coroutines.android)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    // Real org.json implementation for NodeClient JSON-parsing unit tests
+    // (the android.jar copy is stubbed/throws in local unit tests).
+    testImplementation(libs.orgjson)
 }

@@ -13,6 +13,8 @@ biometric = "1.1.0"
 fragment = "1.8.5"
 zxing = "3.5.3"
 bouncycastle = "1.78.1"
+coroutines = "1.8.1"
+orgjson = "20240303"
 junit = "4.13.2"
 
 [libraries]
@@ -31,6 +33,8 @@ androidx-biometric = { group = "androidx.biometric", name = "biometric", version
 androidx-fragment-ktx = { group = "androidx.fragment", name = "fragment-ktx", version.ref = "fragment" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+orgjson = { group = "org.json", name = "json", version.ref = "orgjson" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

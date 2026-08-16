@@ -175,7 +175,12 @@ fun AppNavGraph() {
             ReceiveScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.TRANSACTION_HISTORY) {
-            TransactionHistoryScreen(onBack = { navController.popBackStack() })
+            TransactionHistoryScreen(
+                onBack = { navController.popBackStack() },
+                onTxClick = { txId ->
+                    navController.navigate(Routes.transactionDetail(txId))
+                }
+            )
         }
         composable(
             route = Routes.TRANSACTION_DETAIL_WITH_ARG,

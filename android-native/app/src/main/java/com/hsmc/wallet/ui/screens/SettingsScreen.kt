@@ -41,11 +41,15 @@ import com.hsmc.wallet.core.BiometricPromptHelper
 import com.hsmc.wallet.core.SecurePrefs
 import com.hsmc.wallet.core.SessionState
 import com.hsmc.wallet.core.WalletStorage
+import com.hsmc.wallet.network.NodeClient
 import com.hsmc.wallet.ui.components.HsmcCard
 import com.hsmc.wallet.ui.components.HsmcSecondaryButton
 import com.hsmc.wallet.ui.components.PhaseNote
 import com.hsmc.wallet.ui.components.ScreenHeader
 import com.hsmc.wallet.ui.components.StatusRow
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * Settings (Phase 2 — real persistence).
@@ -54,8 +58,9 @@ import com.hsmc.wallet.ui.components.StatusRow
  * Keystore) and applied:
  *  - theme mode applies immediately;
  *  - the auto-lock timer is enforced by the app lifecycle (see [AppAutoLock]);
- *  - currency and node URL are persisted but only applied to displays/network in
- *    Phase 3 (stated honestly on the screen).
+ *  - currency is persisted for future display; the node URL setting identifies the
+ *    configured node, and the screen shows a LIVE status row (online/offline) checked
+ *    through the API server's /node-proxy bridge;
  *  - export seed stays explicitly disabled with honest copy (no fake reveal);
  *  - reset wallet deletes the wallet + key material after confirmation.
  */
@@ -68,6 +73,19 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val prefs = remember { SecurePrefs(context) }
+    val nodeClient = remember { NodeClient.create(context) }
+    val scope = rememberCoroutineScope()
+    var nodeOnline by remember { mutableStateOf<Boolean?>(null) }
+    var nodeStatusHint by remember { mutableStateOf<String?>(null) }
+    var checkingNode by remember { mutableStateOf(false) }
+    suspend fun recheckNode() {
+        checkingNode = true
+        val health = nodeClient.checkHealth()
+        nodeOnline = health.nodeOnline
+        nodeStatusHint = health.error
+        checkingNode = false
+    }
+    LaunchedEffect(Unit) { recheckNode() }
 
     var themeMode by remember { mutableStateOf(prefs.getString(SecurePrefs.KEY_THEME_MODE) ?: "system") }
     var currency by remember { mutableStateOf(prefs.getString(SecurePrefs.KEY_CURRENCY) ?: "USD") }
@@ -195,10 +213,33 @@ fun SettingsScreen(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Persisted, but not yet applied — node connections arrive in Phase 3. " +
-                    "The default node is 127.0.0.1:8080 (chain 8888).",
+                text = "This is the node the wallet is configured against (chain 8888). " +
+                    "The app reaches the node exclusively through the API server's " +
+                    "/node-proxy bridge (${BuildConfig.API_BASE_URL}); it never dials this " +
+                    "URL directly. The bridge reports honestly whether the node is online.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            StatusRow(
+                label = "Node status",
+                status = when {
+                    checkingNode -> "checking…"
+                    nodeOnline == true -> "online"
+                    nodeOnline == false -> "offline" + (nodeStatusHint?.let { " — $it" } ?: "")
+                    else -> "unknown"
+                },
+                dotColor = when {
+                    nodeOnline == true -> Color(0xFF2E7D32)
+                    nodeOnline == false -> Color(0xFFB71C1C)
+                    else -> Color(0xFFFFB300)
+                }
+            )
+            Spacer(Modifier.height(4.dp))
+            HsmcSecondaryButton(
+                text = if (checkingNode) "Checking…" else "Re-check connection",
+                enabled = !checkingNode,
+                onClick = { scope.launch { recheckNode() } }
             )
         }
 
