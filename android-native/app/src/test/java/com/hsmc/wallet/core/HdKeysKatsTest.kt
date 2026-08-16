@@ -62,9 +62,10 @@ class HdKeysKatsTest {
             0L to "3a4f3355f427131903a5b422f13ada4771fbf4b9ceb2f60cf8d0adeecc1fcd04"
         )
         for ((index, expectedSk) in steps) {
-            val (nsk, _) = HdKeys.deriveChild(sk, cc, index)
+            val (nsk, ncc) = HdKeys.deriveChild(sk, cc, index)
             assertEquals(expectedSk, nsk.hex())
             sk = nsk
+            cc = ncc
         }
         assertEquals(
             "16481690fc810181109345a9198da2c8431ff2728d77593f88d86d57f6940f5e",
@@ -95,9 +96,10 @@ class HdKeysKatsTest {
             0L to "f77e7d2dc5c380c63ea363b7bc5f6ab285425b5e61a34c8cd2b719aaa7448c00"
         )
         for ((index, expectedSk) in steps) {
-            val (nsk, _) = HdKeys.deriveChild(sk, cc, index)
+            val (nsk, ncc) = HdKeys.deriveChild(sk, cc, index)
             assertEquals(expectedSk, nsk.hex())
             sk = nsk
+            cc = ncc
         }
         assertEquals(
             "a448e79bc48d4b6fe8145f051d5e39ccda6b1f51585a4e573f99b143168ca511",
@@ -109,10 +111,13 @@ class HdKeysKatsTest {
     @Test
     fun `keccak256 matches the node digest`() {
         // keccak256("HSMC_ADDR_V2_" || m12_pubkey) — full 32 bytes from the reference.
+        // Independently verified: pure-Python Keccak-256 (validated against
+        // keccak256("") = c5d24601…) AND the Rust sha3 crate both produce
+        // a0af5f3a5cea58906e5523d4aaa55b44346e1b0eac9457b484f63c0ba7755cb3.
         val pubkey = hexToBytes("16481690fc810181109345a9198da2c8431ff2728d77593f88d86d57f6940f5e")
         val full = HdKeys.keccak256("HSMC_ADDR_V2_".toByteArray() + pubkey)
         assertEquals(
-            "028a0d952ab623e3a5437b13d604043a026fa6e96db68927ecf907ae82e00160",
+            "a0af5f3a5cea58906e5523d4aaa55b44346e1b0eac9457b484f63c0ba7755cb3",
             full.hex()
         )
         // And the address is exactly hex(full[12..32]).
