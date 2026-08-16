@@ -397,7 +397,7 @@ const CORS_ORIGIN = config.corsOrigin;
 const TLS_CERT = config.tlsCert;
 const TLS_KEY = config.tlsKey;
 const IS_DEV_MODE = config.isDevMode;
-const USING_TLS = config.usingTls;
+const USING_TLS = config.usingTls || config.trustTlsProxy;
 const JWT_EXPIRY_SECONDS = 3600; // 1 hour
 
 // ── Stripe Configuration ─────────────────────────────────────────────────────
@@ -3691,6 +3691,7 @@ async function handleShieldedProxy(req: Request, endpoint: string, method: strin
 // ── Start Server ──────────────────────────────────────────────────────────────
 const serverOptions: Record<string, unknown> = {
   port: PORT,
+  hostname: config.host,
   fetch: handleRequest,
 };
 
@@ -3735,7 +3736,7 @@ async function shutdown(signal: string): Promise<void> {
 process.on("SIGINT", () => { void shutdown("SIGINT"); });
 process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
 
-console.log(`🚀 HSMC Local API server running on ${protocol}://localhost:${PORT}`);
+console.log(`🚀 HSMC Local API server running on ${protocol}://${config.host}:${PORT}`);
 console.log(`   REST: ${protocol}://localhost:${PORT}/rest/v1/:table`);
 console.log(`   Health: ${protocol}://localhost:${PORT}/health`);
 console.log(`   Auth: ${protocol}://localhost:${PORT}/auth/login | /auth/register`);
