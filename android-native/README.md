@@ -2,11 +2,14 @@
 Privacy-first Layer 1 wallet for the HSMC Network, written in Kotlin with Jetpack Compose
 (Material 3, dark theme). This is a standalone Gradle project rooted at `android-native/`.
 
-**Status: Phase 3 step 1 (real node connectivity).** Phase 1 = wallet-key foundation,
+**Status: Phase 3 step 2 (security hygiene).** Phase 1 = wallet-key foundation,
 Phase 2 = real wallet lifecycle (create/import/unlock/biometric/settings/receive), Phase 3
 step 1 = real node connectivity: NodeClient through the API server's /node-proxy bridge,
-real balance fetch, real tx submission path, honest transaction history. Staking, mining,
-privacy proofs and hardware wallet remain scaffolds for later Phase 3 steps.
+real balance fetch, real tx submission path, honest transaction history. Phase 3 step 2 =
+security hardening from the Android security review: key-material zeroization (HdKeys,
+BIP39), crash-atomic biometric re-key, FLAG_SECURE on every address-bearing screen,
+https-only node URL validation, commit()-based wallet deletion, README refresh. Staking,
+mining, privacy proofs and hardware wallet remain scaffolds for later Phase 3 steps.
 
 ## Build
 Prerequisites:
@@ -58,8 +61,9 @@ Real and implemented across phases:
   node_online, data }`) and never fabricates a result.
 - **Dashboard** — fetches the REAL on-chain balance from the node (`GET /utxo/{address}`
   through the bridge) and shows it only when the node answered; otherwise it shows
-  "Balance unavailable" with the real reason (node offline / endpoint not exposed). No
-  fabricated "0.00000000".
+  "Balance unavailable" with the real reason (node offline / node error). No
+  fabricated "0.00000000". (The balance + history routes have been in the server's
+  `/node-proxy` whitelist since PR #16 — this works end-to-end when the node is online.)
 - **Send** — builds a real `SubmitTxPayload` (field names mirror the Rust
   `SubmitTxRequest`) and submits via `POST /tx/submit`. The node's actual response is
   shown: a real tx_hash when accepted into the mempool (with a "Check status" path via
@@ -70,13 +74,6 @@ Real and implemented across phases:
   (`GET /tx/{hash}`); empty/error states are explicit and honest.
 
 Honestly **not** implemented:
-- **Balance & history endpoints are not yet in the server whitelist.** The Rust node
-  exposes `GET /utxo/{address}` and `GET /address/{address}/txs`, but the API server's
-  `/node-proxy` whitelist does not include them yet (documented in the Phase 3 PR). The
-  app calls the real node paths through the bridge anyway, so it starts working the
-  moment the server adds them; until then it surfaces the server's real rejection as an
-  honest "unavailable — not exposed via /node-proxy" state. No fabricated zero balances
-  and no fabricated transaction rows are ever shown.
 - **RingCT/stealth/full privacy sends** — the app submits transparent transactions only
   (the node's `validate_tx` accepts transparent txs without ring signatures). Privacy
   sends require wallet-side RingCT construction, which lands in a later step.
@@ -85,13 +82,33 @@ Honestly **not** implemented:
 - **No fake crypto** — no fabricated transaction hashes, no HMAC "signatures", no
   theatrical hardware-wallet scanning, no simulated proofs. Marketing claims (RingCT,
   CLSAG, post-quantum) are not repeated as implemented features.
-- **No wallet deletion / seed reveal** — destructive actions are intentionally absent.
+- **No seed reveal** — seed export is intentionally disabled (a full security review is
+  required before it ships); no fake reveal is offered. Deleting the wallet on-device is
+  a real, confirmed destructive action (Settings → Danger zone).
 
 ## Security posture
 - `allowBackup=false` (see `AndroidManifest.xml` comment), no data-extraction backups.
 - Main manifest permits **no cleartext traffic**; debug builds allow cleartext only to
   `10.0.2.2`/`localhost` for local node development. The app only dials the API server
   over TLS; the user-configured node URL is never dialed directly.
+- **Phase 3 step 2 hardening** (from the Android security review):
+  - **Key-material zeroization** — HMAC intermediates in `HdKeys` (`masterFromSeed`'s
+    full output, `deriveChild`'s data/out/IL), BIP39 entropy in `generate`, and the
+    PBKDF2 password buffer in `toSeed` (`PBEKeySpec.clearPassword()`) are all cleared
+    in `finally` blocks; returned values are never cleared.
+  - **Crash-atomic biometric re-key** — enabling biometric protection creates the new
+    biometric-bound Keystore key under a second alias, wraps the DEK with it, commits
+    the new blob and the active-alias pointer, and only then retires the old key. A
+    process death at any step leaves password unlock working and the previous state
+    intact (no delete-before-create window).
+  - **FLAG_SECURE on every address-bearing screen** — Dashboard, Login, Receive,
+    Create and seed-phrase confirmation run under `SecureScreen` (no screenshots /
+    screen recording / app-switcher preview of wallet addresses).
+  - **https-only node URL validation** — Settings validates the node URL on save:
+    https for any host, http only for local debug hosts (`127.0.0.1`, `localhost`,
+    `10.0.2.2`); anything else is refused with an error and never persisted.
+  - **Destructive ops are synchronous** — wallet deletion uses `commit()` so a process
+    death right after "Delete wallet" cannot resurrect the wallet.
 - Seed never leaves the device unencrypted; mnemonic is never passed through navigation
   arguments (held in-memory in `PendingMnemonic`, cleared after persist).
 - The send flow uses only the public derived address (no seed access); request payloads

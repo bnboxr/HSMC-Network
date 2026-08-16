@@ -35,6 +35,7 @@ import com.hsmc.wallet.ui.components.HsmcPrimaryButton
 import com.hsmc.wallet.ui.components.HsmcSecondaryButton
 import com.hsmc.wallet.ui.components.PhaseNote
 import com.hsmc.wallet.ui.components.ScreenHeader
+import com.hsmc.wallet.ui.components.SecureScreen
 import com.hsmc.wallet.ui.components.StatusRow
 import androidx.compose.ui.graphics.Color
 
@@ -66,14 +67,22 @@ fun LoginScreen(
     var message by remember { mutableStateOf<String?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .systemBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    // N8 (security review): the wallet's HSMC address is displayed at unlock. For a
+    // privacy coin it must not be screenshotable, screen-recordable or visible in the
+    // app-switcher preview, so the whole unlock screen runs under FLAG_SECURE — the same
+    // treatment Receive/Create/Confirm/Dashboard already have. This does NOT break the
+    // unlock UX: the address stays visible on screen, only capture is blocked; password
+    // entry additionally benefits from not being screen-recordable. Decision documented
+    // in PR android/phase3-step2-hygiene.
+    SecureScreen {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
         ScreenHeader(
             title = "Unlock wallet",
             subtitle = "The seed is decrypted on-device; it is never transmitted."
@@ -192,6 +201,7 @@ fun LoginScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error
             )
+        }
         }
     }
 
