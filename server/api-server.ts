@@ -595,7 +595,7 @@ function checkApiKey(req: Request): boolean {
 }
 
 // ── Health check paths (no auth required) ────────────────────────────────────
-const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge", "/stripe/webhook"]);
+const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge", "/stripe/webhook", "/node-proxy"]);
 
 function isPublicPath(path: string): boolean {
   return PUBLIC_PATHS.has(path) || path === "/explorer/stats" || path === "/explorer/blocks" || path === "/explorer/transactions" || path === "/explorer/search" || path.startsWith("/explorer/block/") || path.startsWith("/explorer/transaction/");
@@ -3419,6 +3419,14 @@ async function handleRequestInner(req: Request): Promise<Response> {
     return handleShieldedProxy(req, "shielded/nullifier-check", "POST");
   }
 
+  // ── Node proxy (browser-facing RPC bridge to the HSMC Rust node) ──────────
+  // Frontend sends the envelope { path, method, data } (privacy-utils.ts /
+  // node-tx.ts). Only whitelisted node endpoints are forwarded — see
+  // NODE_PROXY_WHITELIST + resolveNodeProxyTarget below.
+  if (path === "/node-proxy" && req.method === "POST") {
+    return handleNodeProxy(req);
+  }
+
 
   // ── Card Issuance Endpoints (Feature #14) ─────────────────────────────────
   if (path === "/cardholders/create" && req.method === "POST") {
@@ -3687,6 +3695,75 @@ async function handleShieldedProxy(req: Request, endpoint: string, method: strin
   }
 }
 }
+
+// ============================================================================
+// Node proxy - browser-facing RPC bridge to the HSMC Rust node (port 8080).
+// Frontend sends the envelope { path, method, data } (privacy-utils.ts /
+// node-tx.ts). Only whitelisted node endpoints are forwarded - no arbitrary
+// node proxying. Response envelope: { ok, node_online, data } exactly as
+// privacy-utils.ts:595-615 reads it.
+// ============================================================================
+const NODE_PROXY_WHITELIST: ReadonlyArray<{ path: string; method: "GET" | "POST" }> = [
+  { path: "/health", method: "GET" },
+  { path: "/tx/submit", method: "POST" },
+  { path: "/tx/broadcast", method: "POST" },
+  { path: "/crypto/stealth/generate", method: "POST" },
+  { path: "/crypto/commitment", method: "POST" },
+  { path: "/crypto/ring-sign", method: "POST" },
+  { path: "/crypto/range-proof", method: "POST" },
+];
+// GET /tx/:hash - any 1-128 char alphanumeric hash (real node hashes are 64 hex chars)
+const NODE_PROXY_TX_HASH_RE = /^\/tx\/[A-Za-z0-9]{1,128}$/;
+
+/** Resolve a { path, method } pair to a forwardable node endpoint, or null. */
+function resolveNodeProxyTarget(path: string, method: string): string | null {
+  if (method !== "GET" && method !== "POST") return null;
+  if (NODE_PROXY_WHITELIST.some((e) => e.path === path && e.method === method)) return path;
+  if (method === "GET" && NODE_PROXY_TX_HASH_RE.test(path)) return path;
+  return null;
+}
+
+async function handleNodeProxy(req: Request): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return errorResponse("Body must be a JSON object", 400);
+  }
+  const { path, method, data } = body as { path?: unknown; method?: unknown; data?: unknown };
+  if (typeof path !== "string" || typeof method !== "string") {
+    return errorResponse('Body must include string fields "path" and "method"', 400);
+  }
+  const target = resolveNodeProxyTarget(path, method);
+  if (!target) {
+    return errorResponse(`Path ${method} ${path} is not allowed via /node-proxy`, 400);
+  }
+  try {
+    const url = `${NODE_RPC_URL}${target}`;
+    const fetchOpts: RequestInit = { method, headers: { "Content-Type": "application/json" } };
+    if (method !== "GET") {
+      fetchOpts.body = JSON.stringify(data ?? {});
+    }
+    const nodeResp = await fetch(url, fetchOpts);
+    const nodeData = await nodeResp.json().catch(() => ({ error: "Invalid JSON from node" }));
+    return jsonResponse({ ok: true, node_online: true, data: nodeData });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[Node Proxy] Error contacting node at ${NODE_RPC_URL}${target}:`, msg);
+    // Graceful envelope (HTTP 200) - privacy-utils.ts:607 expects ok:false /
+    // node_online:false rather than a 5xx so it can surface a friendly hint.
+    return jsonResponse({
+      ok: false,
+      node_online: false,
+      error: "HSMC node not connected",
+      hint: "Ensure the Rust node is running on port 8080 and reachable from the API server.",
+    });
+  }
+}
+
 
 // ── Start Server ──────────────────────────────────────────────────────────────
 const serverOptions: Record<string, unknown> = {
