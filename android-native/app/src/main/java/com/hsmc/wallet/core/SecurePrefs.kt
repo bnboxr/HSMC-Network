@@ -68,5 +68,13 @@ class SecurePrefs(context: Context) {
         const val KEY_CURRENCY: String = "currency" // e.g. "USD" | "EUR" (display only until Phase 3)
         const val KEY_AUTO_LOCK_SECONDS: String = "auto_lock_seconds" // 0 = never
         const val KEY_NODE_URL: String = "node_url" // persisted, applied to networking in Phase 3
+        /**
+         * The operator-supplied API key (x-api-key) for production /node-proxy access.
+         * Set once in Settings and stored here AES-256-GCM-encrypted (like every other
+         * SecurePrefs value), never on disk in plaintext. The release API server rejects
+         * /node-proxy calls without a valid x-api-key (server/api-server.ts checkApiKey),
+         * so the wallet needs this key to reach the node in production.
+         */
+        const val KEY_API_KEY: String = "api_key"
     }
 }

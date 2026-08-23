@@ -5,6 +5,16 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Operator API key (x-api-key) for production /node-proxy access. Read from the
+// HSMC_API_KEY Gradle property (set from gradle.properties / CI secret); empty by
+// default. A real key is NEVER hardcoded in source. Operators can also supply the key
+// at runtime via Settings (stored AES-256-GCM in SecurePrefs) — that takes precedence.
+val hsmcApiKey: String = providers.gradleProperty("HSMC_API_KEY")
+    .orElse("")
+    .get()
+    .trim()
+    .replace("\"", "\\\"")
+
 android {
     namespace = "com.hsmc.wallet"
     compileSdk = 35
@@ -20,6 +30,9 @@ android {
         // (https://hsmc-network.ctonew.app), NOT a fake placeholder domain.
         // Override per-environment by editing this field (buildConfig is enabled below).
         buildConfigField("String", "API_BASE_URL", "\"https://hsmc-network.ctonew.app\"")
+        // x-api-key for production /node-proxy auth. Empty unless HSMC_API_KEY is set
+        // at build time (gradle.properties / CI secret). Never a hardcoded real key.
+        buildConfigField("String", "HSMC_API_KEY", "\"$hsmcApiKey\"")
     }
 
     buildTypes {

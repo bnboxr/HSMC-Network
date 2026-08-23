@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.hsmc.wallet.BuildConfig
@@ -96,6 +97,15 @@ fun SettingsScreen(
     // keystroke anymore — only a validated value reaches disk.
     var nodeUrlError by remember { mutableStateOf<String?>(null) }
     var nodeUrlSaved by remember { mutableStateOf(false) }
+
+    // Operator API key (x-api-key) for production /node-proxy access. Entered once here
+    // and stored AES-256-GCM-encrypted in SecurePrefs; it is never written to disk in
+    // plaintext and never logged. Loaded once on entry so the current value is shown.
+    var apiKey by remember { mutableStateOf(prefs.getString(SecurePrefs.KEY_API_KEY) ?: "") }
+    var apiKeyError by remember { mutableStateOf<String?>(null) }
+    var apiKeySaved by remember { mutableStateOf(false) }
+    val hasApiKeyConfigured = apiKey.isNotBlank() ||
+        BuildConfig.HSMC_API_KEY.isNotBlank()
 
     val biometricAvailable = remember { BiometricPromptHelper.canAuthenticate(context) }
     var biometricEnabled by remember { mutableStateOf(WalletStorage.isBiometricProtected(context)) }
@@ -282,6 +292,65 @@ fun SettingsScreen(
                 text = if (checkingNode) "Checking…" else "Re-check connection",
                 enabled = !checkingNode,
                 onClick = { scope.launch { recheckNode() } }
+            )
+        }
+
+        HsmcCard {
+            Text("Production API key", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = {
+                    apiKey = it
+                    apiKeyError = null
+                    apiKeySaved = false
+                },
+                label = { Text("API key (x-api-key)") },
+                placeholder = { Text("Paste the operator API key") },
+                visualTransformation = PasswordVisualTransformation(),
+                isError = apiKeyError != null,
+                supportingText = apiKeyError?.let { { Text(it) } },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "The HSMC release API server authenticates every /node-proxy call " +
+                    "with an x-api-key header (server/api-server.ts checkApiKey). Without a " +
+                    "valid key the API refuses wallet requests with 401 and screens show " +
+                    "\"Unauthorized — configure API key\". Paste the operator's key here once " +
+                    "to unlock production node access. It is stored encrypted on-device " +
+                    "(Android Keystore, AES-256-GCM), never in plaintext and never logged.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            if (apiKeySaved) {
+                Text(
+                    text = "API key saved — wallet node requests will use it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF2E7D32)
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+            HsmcSecondaryButton(
+                text = "Save API key",
+                onClick = {
+                    val key = apiKey.trim()
+                    if (key.isBlank()) {
+                        // Allow clearing: an empty saved key means "no runtime key",
+                        // so the app falls back to BuildConfig (or sends no header).
+                        prefs.remove(SecurePrefs.KEY_API_KEY)
+                        apiKeyError = null
+                        apiKeySaved = true
+                        apiKey = ""
+                    } else {
+                        prefs.putString(SecurePrefs.KEY_API_KEY, key)
+                        apiKeyError = null
+                        apiKeySaved = true
+                        apiKey = key
+                    }
+                }
             )
         }
 

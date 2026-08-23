@@ -31,12 +31,12 @@ import com.hsmc.wallet.ui.components.PhaseNote
 import com.hsmc.wallet.ui.components.ScreenHeader
 
 /**
- * Transaction history (Phase 3, step 1 — real on-chain listing).
+ * Transaction history (Phase 3 — real on-chain listing).
  *
  * The screen asks the node (through the API server's /node-proxy bridge) for the
  * wallet address's transactions (GET /address/{address}/txs). ONLY entries the node
- * actually returns are listed; an unreachable node or a missing endpoint shows an
- * explicit honest reason — never fabricated rows.
+ * actually returns are listed; an unreachable node, an unauthorized request, or an
+ * error shows an explicit honest reason — never fabricated rows.
  */
 @Composable
 fun TransactionHistoryScreen(
@@ -117,7 +117,11 @@ fun TransactionHistoryScreen(
                             Spacer(Modifier.height(4.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text(
-                                    text = if (entry.confirmed) "Confirmed" else "In mempool",
+                                    text = when {
+                                        entry.location == "mempool" -> "In mempool"
+                                        entry.confirmed -> "Confirmed"
+                                        else -> "In mempool"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (entry.confirmed) {
                                         MaterialTheme.colorScheme.primary
