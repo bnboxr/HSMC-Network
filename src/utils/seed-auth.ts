@@ -8,20 +8,15 @@
  */
 import { supabase } from '@/integrations/db/client';
 import { deriveAddress, mnemonicToSeed, validateMnemonic, encryptMnemonic } from '@/utils/bip39-wallet';
+import { pbkdf2Sha256 } from '@/utils/webcrypto';
 import { persistSeedToDb } from '@/utils/wallet-seed-db';
 
 const AUTH_SALT = new TextEncoder().encode('hsmc-auth-v1');
 
 async function deriveAuthPassword(mnemonic: string): Promise<string> {
   const seed = await mnemonicToSeed(mnemonic);
-  const seedBuf = new Uint8Array(seed).buffer;
-  const baseKey = await crypto.subtle.importKey('raw', seedBuf, 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: AUTH_SALT, iterations: 200000, hash: 'SHA-256' },
-    baseKey,
-    256
-  );
-  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+  const bits = await pbkdf2Sha256(seed, AUTH_SALT, 200000, 32);
+  return Array.from(bits).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 export interface SeedAuthResult {

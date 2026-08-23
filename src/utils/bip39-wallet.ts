@@ -5,6 +5,8 @@
 // Import ONLY English wordlist — prevents loading Czech ("alub") and other wordlists
 import { generateMnemonic as bip39Generate, validateMnemonic as bip39Validate, mnemonicToSeed as bip39MnemonicToSeed, wordlists } from 'bip39';
 import { HDNodeWallet, Mnemonic } from 'ethers';
+// Crypto via helper: native WebCrypto when available, pure-JS @noble fallback otherwise
+import { sha256, sha512, hmacSha512, pbkdf2Sha256, aesGcmEncrypt, aesGcmDecrypt } from '@/utils/webcrypto';
 
 // English-only wordlist (explicit, prevents multi-language wordlist loading)
 const englishWordlist: string[] = wordlists.english;
@@ -58,8 +60,7 @@ export const mnemonicToSeed = async (mnemonic: string): Promise<Uint8Array> => {
 export const deriveAddress = async (mnemonic: string): Promise<string> => {
   const seed = await mnemonicToSeed(mnemonic);
   // Use first 20 bytes of seed hash as address (Ethereum-compatible)
-  const hashBuf = await crypto.subtle.digest('SHA-256', seed.buffer as ArrayBuffer);
-  const hashArr = new Uint8Array(hashBuf);
+  const hashArr = await sha256(seed.buffer as ArrayBuffer);
   const addr = '0x' + Array.from(hashArr.slice(0, 20))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
@@ -83,19 +84,11 @@ export interface DualKeyWallet {
  */
 export const deriveSpendKey = async (mnemonic: string): Promise<Uint8Array> => {
   const seed = await mnemonicToSeed(mnemonic);
-  const hmacKey = await crypto.subtle.importKey(
-    'raw',
+  const spendKeyRaw = await hmacSha512(
     seed,
-    { name: 'HMAC', hash: 'SHA-512' },
-    false,
-    ['sign']
-  );
-  const spendKeyRaw = await crypto.subtle.sign(
-    'HMAC',
-    hmacKey,
     new TextEncoder().encode('HSMC_SPEND_KEY_v1')
   );
-  return new Uint8Array(spendKeyRaw).slice(0, 32);
+  return spendKeyRaw.slice(0, 32);
 };
 
 /**
@@ -107,8 +100,8 @@ export const deriveViewKey = async (spendKey: Uint8Array): Promise<Uint8Array> =
   const input = new Uint8Array(prefix.length + spendKey.length);
   input.set(prefix, 0);
   input.set(spendKey, prefix.length);
-  const hash = await crypto.subtle.digest('SHA-512', input);
-  return new Uint8Array(hash).slice(0, 32);
+  const hash = await sha512(input);
+  return hash.slice(0, 32);
 };
 
 /**
@@ -119,8 +112,7 @@ const scalarMultBase = async (scalar: Uint8Array): Promise<Uint8Array> => {
   const input = new Uint8Array(scalar.length + 8);
   input.set(scalar, 0);
   new TextEncoder().encode('HSMC_PUB').forEach((b, i) => { input[scalar.length + i] = b; });
-  const hash = await crypto.subtle.digest('SHA-256', input);
-  return new Uint8Array(hash);
+  return sha256(input);
 };
 
 /**
@@ -164,41 +156,19 @@ export const encryptMnemonic = async (
   password: string
 ): Promise<string> => {
   const enc = new TextEncoder();
-  const passwordKey = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey']
-  );
-
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
 
-  const aesKey = await crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt,
-      iterations: 250000,
-      hash: 'SHA-256',
-    },
-    passwordKey,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt']
-  );
+  // PBKDF2-HMAC-SHA256 → 32-byte AES key (native WebCrypto or @noble fallback)
+  const aesKey = await pbkdf2Sha256(enc.encode(password), salt, 250000, 32);
 
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    aesKey,
-    enc.encode(mnemonic)
-  );
+  const ciphertext = await aesGcmEncrypt(aesKey, iv, enc.encode(mnemonic));
 
   // Combine: salt(16) + iv(12) + ciphertext
   const combined = new Uint8Array(16 + 12 + ciphertext.byteLength);
   combined.set(salt, 0);
   combined.set(iv, 16);
-  combined.set(new Uint8Array(ciphertext), 28);
+  combined.set(ciphertext, 28);
 
   return btoa(String.fromCharCode(...combined));
 };
@@ -216,32 +186,8 @@ export const decryptMnemonic = async (
   const iv = combined.slice(16, 28);
   const ciphertext = combined.slice(28);
 
-  const passwordKey = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey']
-  );
-
-  const aesKey = await crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt,
-      iterations: 250000,
-      hash: 'SHA-256',
-    },
-    passwordKey,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['decrypt']
-  );
-
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    aesKey,
-    ciphertext
-  );
+  const aesKey = await pbkdf2Sha256(enc.encode(password), salt, 250000, 32);
+  const plaintext = await aesGcmDecrypt(aesKey, iv, ciphertext);
 
   return dec.decode(plaintext);
 };
