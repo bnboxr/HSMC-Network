@@ -70,8 +70,17 @@ object HdKeys {
 
     /** Master key from the BIP39 seed: (masterSecret, masterChainCode). */
     fun masterFromSeed(seed: ByteArray): Pair<ByteArray, ByteArray> {
+        // N1 (security review): `out` holds the full HMAC-SHA512 output whose first half
+        // is the master IL — seed-equivalent key material. Copy the two halves into the
+        // return values, then zeroize the intermediate buffer in `finally` so a crash or
+        // GC snapshot cannot leave a seed-equivalent secret in memory. The returned
+        // copies are deliberately NOT cleared (callers own them).
         val out = hmacSha512(MAINNET_TAG, seed)
-        return out.copyOfRange(0, 32) to out.copyOfRange(32, 64)
+        try {
+            return out.copyOfRange(0, 32) to out.copyOfRange(32, 64)
+        } finally {
+            out.fill(0)
+        }
     }
 
     /**
@@ -94,11 +103,24 @@ object HdKeys {
         }
         data.write(indexBytes)
 
-        val out = hmacSha512(chainCode, data.toByteArray())
-        val il = out.copyOfRange(0, 32)
-        val ir = out.copyOfRange(32, 64)
-        val child = reduceScalar(il).add(reduceScalar(sk)).mod(Ristretto255.L)
-        return scalarToBytes(child) to ir
+        // N1 (security review): `data` contains the parent secret scalar for hardened
+        // steps, and `out`/`il` hold the HMAC output (child IL = child secret tweak).
+        // All three are zeroized in `finally`; only the returned values (child scalar
+        // and new chain code) survive, mirroring deriveAddress's pattern.
+        val dataBytes = data.toByteArray()
+        var out: ByteArray? = null
+        var il: ByteArray? = null
+        try {
+            out = hmacSha512(chainCode, dataBytes)
+            il = out.copyOfRange(0, 32)
+            val ir = out.copyOfRange(32, 64)
+            val child = reduceScalar(il).add(reduceScalar(sk)).mod(Ristretto255.L)
+            return scalarToBytes(child) to ir
+        } finally {
+            out?.fill(0)
+            il?.fill(0)
+            dataBytes.fill(0)
+        }
     }
 
     /** 32-byte compressed Ristretto public key for a secret scalar. */

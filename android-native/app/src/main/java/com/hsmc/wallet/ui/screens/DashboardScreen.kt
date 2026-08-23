@@ -35,6 +35,7 @@ import com.hsmc.wallet.ui.components.HsmcPrimaryButton
 import com.hsmc.wallet.ui.components.HsmcSecondaryButton
 import com.hsmc.wallet.ui.components.PhaseNote
 import com.hsmc.wallet.ui.components.ScreenHeader
+import com.hsmc.wallet.ui.components.SecureScreen
 import com.hsmc.wallet.ui.components.StatusRow
 import kotlinx.coroutines.launch
 
@@ -84,14 +85,20 @@ fun DashboardScreen(
 
     LaunchedEffect(address) { refresh() }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .systemBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    // N8 (security review): the derived HSMC address is displayed here (and on Login);
+    // for a privacy coin that address must not be screenshotable, screen-recordable or
+    // visible in the app-switcher preview, so the whole screen runs under FLAG_SECURE —
+    // the same treatment Receive/Create/Confirm already have. The address stays fully
+    // visible on screen; only capture is blocked.
+    SecureScreen {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
         ScreenHeader(title = "Dashboard", subtitle = "HSMC Wallet")
         HsmcCard {
             Text(
@@ -177,6 +184,7 @@ fun DashboardScreen(
                 "Phase 3 steps; only connectivity, balance, send submission and history " +
                 "are wired here."
         )
+        }
     }
 }
 

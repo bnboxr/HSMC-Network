@@ -58,6 +58,12 @@ fun SeedPhraseConfirmationScreen(
         if (mnemonic == null) emptyList()
         else {
             val normalized = Bip39Mnemonic.normalize(mnemonic)
+            // N3 (security review): Kotlin's `shuffled()` uses Random.Default — that is
+            // ACCEPTABLE here because the quiz is a UX check, not a security mechanism:
+            // the phrase itself is still the entropy source, the correct answer is
+            // visible on this very screen, and no secret is derived from the shuffle.
+            // Security note: Random.Default must NEVER be introduced anywhere near key
+            // generation or derivation — BIP39 entropy uses SecureRandom (R9).
             normalized.indices.shuffled().take(3).sorted().map { i ->
                 val correct = normalized[i]
                 val distractors = words.filter { it != correct }.shuffled().take(3)

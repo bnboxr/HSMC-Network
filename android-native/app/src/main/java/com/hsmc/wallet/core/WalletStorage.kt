@@ -52,6 +52,18 @@ object WalletStorage {
     private const val KEY_ADDRESS: String = "address"
     private const val KEY_BALANCE_SATS: String = "balance_sats"
 
+    /**
+     * N4 (security review): crash-atomic biometric re-key uses a SECOND Keystore alias.
+     * The re-key dance alternates between [AndroidKeyStoreWrapper.SEED_ALIAS] and
+     * [REKEY_ALIAS]: the new biometric-bound key is created under the *other* alias and
+     * the DEK is wrapped with it BEFORE the old key is touched, so a process death at any
+     * step leaves the stored [KEY_KEK_KS] blob and the key that encrypted it mutually
+     * consistent (password unlock always survives). [KEY_ACTIVE_KS_ALIAS] records which
+     * alias currently protects the DEK; it is cleared together with the vault on delete.
+     */
+    private const val REKEY_ALIAS: String = AndroidKeyStoreWrapper.SEED_ALIAS + "_rekey"
+    private const val KEY_ACTIVE_KS_ALIAS: String = "active_ks_alias"
+
     /** OWASP-recommended PBKDF2 iteration count (the security report flags 100k as weak). */
     const val KDF_ITERATIONS: Int = 600_000
 
@@ -61,6 +73,15 @@ object WalletStorage {
 
     private fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
+
+    /**
+     * Alias of the Android Keystore key that currently protects the DEK ([KEY_KEK_KS]).
+     * Defaults to [AndroidKeyStoreWrapper.SEED_ALIAS]; after a completed crash-atomic
+     * re-key it points at [REKEY_ALIAS] until the next re-key swaps it back (N4).
+     */
+    private fun activeKsAlias(context: Context): String =
+        prefs(context).getString(KEY_ACTIVE_KS_ALIAS, AndroidKeyStoreWrapper.SEED_ALIAS)
+            ?: AndroidKeyStoreWrapper.SEED_ALIAS
 
     /** True when a wallet exists in the current (Phase-2) vault format. */
     fun walletExists(context: Context): Boolean {
@@ -288,7 +309,7 @@ object WalletStorage {
         val ct = kekKs.copyOfRange(IV_BYTES, kekKs.size)
 
         val keystoreKey: SecretKey = try {
-            AndroidKeyStoreWrapper.loadKey(AndroidKeyStoreWrapper.SEED_ALIAS)
+            AndroidKeyStoreWrapper.loadKey(activeKsAlias(context))
         } catch (e: KeyPermanentlyInvalidatedException) {
             onResult(
                 BiometricUnlock.Failed(
@@ -415,17 +436,25 @@ object WalletStorage {
         dek: ByteArray,
         onResult: (Boolean, String?) -> Unit
     ) {
-        AndroidKeyStoreWrapper.deleteKey(AndroidKeyStoreWrapper.SEED_ALIAS)
-        AndroidKeyStoreWrapper.createKey(AndroidKeyStoreWrapper.SEED_ALIAS, biometricProtected = true)
-        val newKey = AndroidKeyStoreWrapper.loadKey(AndroidKeyStoreWrapper.SEED_ALIAS)
+        // N4 (security review): crash-atomic re-key. The NEW biometric-bound key is
+        // created under the alternate alias and the DEK is wrapped with it BEFORE the
+        // old key is touched. The old key + old blob stay mutually consistent until the
+        // swap commits, so a process death at any step leaves password unlock working
+        // and the previous biometric state intact. Only once the new blob is durably
+        // persisted (commit) and the active-alias pointer is swapped is the old key
+        // deleted. Cancel/failure never touches the old key: rollback only drops the
+        // fresh key and restores the flag.
+        val oldAlias = activeKsAlias(context)
+        val newAlias =
+            if (oldAlias == AndroidKeyStoreWrapper.SEED_ALIAS) REKEY_ALIAS
+            else AndroidKeyStoreWrapper.SEED_ALIAS
+        AndroidKeyStoreWrapper.deleteKey(newAlias) // clear any stale key from a crashed prior attempt
+        AndroidKeyStoreWrapper.createKey(newAlias, biometricProtected = true)
+        val newKey = AndroidKeyStoreWrapper.loadKey(newAlias)
 
         val rollback = {
-            AndroidKeyStoreWrapper.deleteKey(AndroidKeyStoreWrapper.SEED_ALIAS)
-            AndroidKeyStoreWrapper.createKey(AndroidKeyStoreWrapper.SEED_ALIAS, biometricProtected = false)
-            val plainKey = AndroidKeyStoreWrapper.loadKey(AndroidKeyStoreWrapper.SEED_ALIAS)
-            prefs(context).edit()
-                .putString(KEY_KEK_KS, encode(aesGcmEncrypt(plainKey, dek)))
-                .apply()
+            // The old key and old blob were never modified — just drop the new key.
+            AndroidKeyStoreWrapper.deleteKey(newAlias)
             SecurePrefs(context).putBoolean(SecurePrefs.KEY_BIOMETRIC_ENABLED, false)
         }
 
@@ -453,7 +482,14 @@ object WalletStorage {
                                 c2
                             }
                         val kekKs = authorizedCipher.doFinal(dek)
-                        prefs(context).edit().putString(KEY_KEK_KS, encode(kekKs)).apply()
+                        // 1. Persist the new blob (wrapped under the NEW key) durably.
+                        prefs(context).edit().putString(KEY_KEK_KS, encode(kekKs)).commit()
+                        // 2. Swap the active-alias pointer (durable) — the new key is now
+                        //    proven working; only then retire the old key (step 3).
+                        prefs(context).edit().putString(KEY_ACTIVE_KS_ALIAS, newAlias).commit()
+                        // 3. Retire the old key last; if the process dies before this, the
+                        //    orphaned old key simply decrypts nothing (no blob references it).
+                        AndroidKeyStoreWrapper.deleteKey(oldAlias)
                         SecurePrefs(context).putBoolean(SecurePrefs.KEY_BIOMETRIC_ENABLED, true)
                         onResult(true, null)
                     }
@@ -479,10 +515,20 @@ object WalletStorage {
         onResult: (Boolean, String?) -> Unit
     ) {
         try {
+            // N4 consistency: retire whichever key currently protects the DEK and re-wrap
+            // it under a fresh plain key at the canonical SEED_ALIAS, resetting the
+            // active-alias pointer. The re-wrap is committed durably (commit()).
+            AndroidKeyStoreWrapper.deleteKey(activeKsAlias(context))
+            // Also clear a possible orphaned SEED_ALIAS key left behind by a crash
+            // between a re-key's pointer swap and old-key retirement (N4), so the
+            // createKey below always generates a fresh key.
             AndroidKeyStoreWrapper.deleteKey(AndroidKeyStoreWrapper.SEED_ALIAS)
             AndroidKeyStoreWrapper.createKey(AndroidKeyStoreWrapper.SEED_ALIAS, biometricProtected = false)
             val plainKey = AndroidKeyStoreWrapper.loadKey(AndroidKeyStoreWrapper.SEED_ALIAS)
-            prefs(context).edit().putString(KEY_KEK_KS, encode(aesGcmEncrypt(plainKey, dek))).apply()
+            prefs(context).edit()
+                .putString(KEY_KEK_KS, encode(aesGcmEncrypt(plainKey, dek)))
+                .putString(KEY_ACTIVE_KS_ALIAS, AndroidKeyStoreWrapper.SEED_ALIAS)
+                .commit()
             SecurePrefs(context).putBoolean(SecurePrefs.KEY_BIOMETRIC_ENABLED, false)
             onResult(true, null)
         } catch (e: Exception) {
@@ -496,8 +542,14 @@ object WalletStorage {
 
     /** Removes the wallet and its key material from this device. */
     fun deleteWallet(context: Context) {
+        // N6 (security review): destructive ops use commit() (synchronous disk write) so
+        // a process death right after "Delete wallet" cannot resurrect the wallet on the
+        // next launch (apply() would still be in the in-memory queue). Both Keystore
+        // aliases are removed because the active alias may be the re-key alias (N4); the
+        // vault prefs (including KEY_ACTIVE_KS_ALIAS) are cleared atomically.
         AndroidKeyStoreWrapper.deleteKey(AndroidKeyStoreWrapper.SEED_ALIAS)
-        prefs(context).edit().clear().apply()
+        AndroidKeyStoreWrapper.deleteKey(REKEY_ALIAS)
+        prefs(context).edit().clear().commit()
         val securePrefs = SecurePrefs(context)
         securePrefs.remove(SecurePrefs.KEY_WALLET_CREATED)
         securePrefs.remove(SecurePrefs.KEY_BIOMETRIC_ENABLED)

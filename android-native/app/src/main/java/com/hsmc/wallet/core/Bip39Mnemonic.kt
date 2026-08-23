@@ -41,9 +41,15 @@ object Bip39Mnemonic {
         require(strengthBits in VALID_ENTROPY_BITS) {
             "Invalid BIP39 strength $strengthBits; valid: ${VALID_ENTROPY_BITS.joinToString()}"
         }
+        // N2 (security review): the entropy bytes ARE the mnemonic's secret; zeroize
+        // them as soon as the phrase has been derived, whatever happens in between.
         val entropy = ByteArray(strengthBits / 8)
-        SecureRandom().nextBytes(entropy)
-        return fromEntropy(entropy, words)
+        try {
+            SecureRandom().nextBytes(entropy)
+            return fromEntropy(entropy, words)
+        } finally {
+            entropy.fill(0)
+        }
     }
 
     /**
@@ -107,7 +113,13 @@ object Bip39Mnemonic {
             PBKDF2_ITERATIONS,
             512 // 64 bytes
         )
-        return SecretKeyFactory.getInstance(PBKDF2_ALGORITHM).generateSecret(spec).encoded
+        // N2 (security review): clear the PBKDF2 password buffer exactly like
+        // WalletStorage.derivePasswordKey does — the spec holds the mnemonic words.
+        try {
+            return SecretKeyFactory.getInstance(PBKDF2_ALGORITHM).generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
+        }
     }
 
     /** Outcome of [validate]. */

@@ -91,6 +91,11 @@ fun SettingsScreen(
     var currency by remember { mutableStateOf(prefs.getString(SecurePrefs.KEY_CURRENCY) ?: "USD") }
     var autoLockSeconds by remember { mutableStateOf(prefs.getInt(SecurePrefs.KEY_AUTO_LOCK_SECONDS, 300)) }
     var nodeUrl by remember { mutableStateOf(prefs.getString(SecurePrefs.KEY_NODE_URL) ?: "") }
+    // N7 (security review): the node URL is validated on Save and refused (with an error)
+    // unless https, or http to a local debug host. It is never persisted on every
+    // keystroke anymore — only a validated value reaches disk.
+    var nodeUrlError by remember { mutableStateOf<String?>(null) }
+    var nodeUrlSaved by remember { mutableStateOf(false) }
 
     val biometricAvailable = remember { BiometricPromptHelper.canAuthenticate(context) }
     var biometricEnabled by remember { mutableStateOf(WalletStorage.isBiometricProtected(context)) }
@@ -204,10 +209,15 @@ fun SettingsScreen(
                 value = nodeUrl,
                 onValueChange = {
                     nodeUrl = it
-                    prefs.putString(SecurePrefs.KEY_NODE_URL, it)
+                    nodeUrlError = null
+                    nodeUrlSaved = false
+                    // N7: nothing is persisted here — only a validated URL is saved
+                    // via the Save button below (https, or http to a local debug host).
                 },
                 label = { Text("Node RPC URL") },
-                placeholder = { Text("http://127.0.0.1:8080") },
+                placeholder = { Text("http://10.0.2.2:8080") },
+                isError = nodeUrlError != null,
+                supportingText = nodeUrlError?.let { { Text(it) } },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
@@ -219,6 +229,38 @@ fun SettingsScreen(
                     "URL directly. The bridge reports honestly whether the node is online.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "http is debug-only — a locally running node on an emulator " +
+                    "(10.0.2.2 = host loopback) or a device on localhost. The release app " +
+                    "always uses the HSMC API gateway over https; an http URL pointing " +
+                    "anywhere else is refused on save.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            if (nodeUrlSaved) {
+                Text(
+                    text = "Node URL saved.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF2E7D32)
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+            HsmcSecondaryButton(
+                text = "Save node URL",
+                onClick = {
+                    val error = validateNodeUrl(nodeUrl)
+                    if (error != null) {
+                        nodeUrlError = error
+                        nodeUrlSaved = false
+                    } else {
+                        nodeUrlError = null
+                        prefs.putString(SecurePrefs.KEY_NODE_URL, nodeUrl.trim())
+                        nodeUrlSaved = true
+                    }
+                }
             )
             Spacer(Modifier.height(8.dp))
             StatusRow(
@@ -364,8 +406,9 @@ fun SettingsScreen(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Notifications are not implemented yet; this toggle only manages the " +
-                    "Android runtime permission.",
+                text = "Notifications are not implemented yet and no notification code " +
+                    "exists in this build; this toggle only manages the Android runtime " +
+                    "permission, so granting it does nothing today.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -453,5 +496,36 @@ private fun AutoLockOption(label: String, selected: Boolean, onClick: () -> Unit
     ) {
         RadioButton(selected = selected, onClick = onClick)
         Text(label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** Local debug hosts that may be reached with plain http (debug builds only). */
+private val LOCAL_DEBUG_HOSTS: Set<String> = setOf("127.0.0.1", "localhost", "10.0.2.2")
+
+/**
+ * N7 (security review): validates a user-entered node URL BEFORE it is persisted.
+ * Only https is acceptable for arbitrary hosts; http is accepted solely for local
+ * debug hosts (emulator host loopback / localhost). Returns an error string, or null
+ * when the URL may be saved. This mirrors the debug-only cleartext policy in
+ * `app/src/debug/res/xml/network_security_config.xml` and keeps release builds
+ * https-only (the node URL itself is never dialed directly — see NodeClient).
+ */
+private fun validateNodeUrl(raw: String): String? {
+    val url = raw.trim()
+    if (url.isEmpty()) return "Enter a node URL before saving."
+    val parsed = try {
+        java.net.URI(url)
+    } catch (e: Exception) {
+        return "That is not a valid URL."
+    }
+    val scheme = parsed.scheme?.lowercase()
+    val host = parsed.host?.lowercase()?.trim()
+    if (host.isNullOrEmpty()) return "The node URL must include a host (e.g. https://node.hsmc.network)."
+    return when (scheme) {
+        "https" -> null
+        "http" ->
+            if (host in LOCAL_DEBUG_HOSTS) null
+            else "http is debug-only for local node hosts (127.0.0.1, localhost, 10.0.2.2) — use https elsewhere."
+        else -> "The node URL must use https (or http to a local debug host only)."
     }
 }
