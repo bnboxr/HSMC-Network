@@ -534,7 +534,7 @@ internal fun parseAddressTxsResult(body: JSONObject?, httpCode: Int = 200): Addr
                 txHash = hash,
                 confirmed = tx.optBoolean("confirmed", false),
                 location = tx.optStringOrNull("location"),
-                blockNumber = if (tx.has("block_number")) tx.optLong("block_number") else null,
+                blockNumber = if (!tx.isNull("block_number")) tx.optLong("block_number") else null,
                 blockHash = tx.optStringOrNull("block_hash"),
             )
         )
