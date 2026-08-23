@@ -27,6 +27,10 @@ concurrency:
 
 env:
   GRADLE_OPTS: -Dorg.gradle.workers.max=2
+  # Optional operator x-api-key, injected as a Gradle property so a release build can
+  # embed it via BuildConfig.HSMC_API_KEY. Leave unset for ordinary PRs (empty key);
+  # operators may also set the key at runtime in the app's Settings instead.
+  HSMC_API_KEY: ${{ secrets.HSMC_API_KEY }}
 
 defaults:
   run:
@@ -77,10 +81,10 @@ jobs:
           fi
 
       - name: Assemble debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace -PHSMC_API_KEY="$HSMC_API_KEY"
 
       - name: Run Kotlin unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
+        run: ./gradlew testDebugUnitTest --stacktrace -PHSMC_API_KEY="$HSMC_API_KEY"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

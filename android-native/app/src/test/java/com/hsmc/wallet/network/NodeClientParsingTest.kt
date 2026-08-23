@@ -143,13 +143,9 @@ class NodeClientParsingTest {
         assertTrue(result.reason!!.contains("node offline"))
     }
 
-    /**
-     * Today the server's /node-proxy whitelist does NOT include /utxo/:address, so the
-     * bridge answers HTTP 400 { error: "Path GET /utxo/... is not allowed via /node-proxy" }.
-     * The app must surface this honestly instead of inventing a balance.
-     */
+    /** A plain { error } server rejection is surfaced honestly instead of inventing a balance. */
     @Test
-    fun `balance with not-whitelisted rejection is unavailable with contract-gap reason`() {
+    fun `balance with server rejection is unavailable with reason`() {
         val body = JSONObject(
             """{ "error": "Path GET /utxo/HSMCaa is not allowed via /node-proxy" }""".trimIndent()
         )
@@ -263,9 +259,13 @@ class NodeClientParsingTest {
 
     // ── Address transaction listing shape ──────────────────────────────────────
 
-    /** Real shape from get_address_txs (handlers.rs): { address, total, limit, offset, transactions }.
-     *  Today this path is not in the server whitelist; when it is added, entries appear
-     *  only from the node — this test pins the parser to the real field names. */
+    /**
+     * Real shape from get_address_txs (rust-node/hsmc-rpc/src/handlers.rs):
+     * { address, total, limit, offset, transactions }. Confirmed entries carry `tx_hash`
+     * (+ block_number/block_hash/confirmed:true); mempool (pending) entries are the full
+     * Transaction struct whose consensus hash field is `hash` (transaction.rs :629) plus
+     * confirmed:false and location:"mempool". Both must render.
+     */
     @Test
     fun `address txs parses real node entries`() {
         val body = JSONObject(
@@ -279,7 +279,10 @@ class NodeClientParsingTest {
                 "offset": 0,
                 "transactions": [
                   { "tx_hash": "1111", "block_number": 42, "block_hash": "beef", "confirmed": true },
-                  { "tx_hash": "2222", "from_address": "HSMCaa", "to_address": "HSMCbb", "confirmed": false, "location": "mempool" }
+                  { "hash": "2222", "from_address": "HSMCaa", "to_address": "HSMCbb",
+                    "amount": 1.5, "fee": 0.0001, "status": "Pending", "created_at": 123,
+                    "confirmed_at": null, "block_number": null, "inputs": [], "outputs": [],
+                    "privacy_level": "transparent", "confirmed": false, "location": "mempool" }
                 ]
               }
             }
@@ -289,11 +292,69 @@ class NodeClientParsingTest {
         assertTrue(result.available)
         assertEquals(2, result.total)
         assertEquals(2, result.transactions.size)
+        // Confirmed entry rendered from tx_hash.
         assertEquals("1111", result.transactions[0].txHash)
         assertTrue(result.transactions[0].confirmed)
         assertEquals(42L, result.transactions[0].blockNumber)
         assertEquals("beef", result.transactions[0].blockHash)
+        // Pending (mempool) entry rendered from the Transaction struct's `hash` field.
+        assertEquals("2222", result.transactions[1].txHash)
         assertFalse(result.transactions[1].confirmed)
+        assertEquals("mempool", result.transactions[1].location)
+        assertNull(result.transactions[1].blockNumber)
+    }
+
+    /**
+     * Regression across the real node shape: a pending (mempool) entry serializes the
+     * Transaction struct with `hash` (NOT `tx_hash`). The parser must NOT drop it —
+     * this is the Blocker 2 fix (previously such entries silently vanished from History).
+     */
+    @Test
+    fun `address txs renders a pending mempool entry using its hash field`() {
+        val body = JSONObject(
+            """
+            {
+              "ok": true, "node_online": true,
+              "data": {
+                "address": "HSMCaa",
+                "total": 1,
+                "limit": 50,
+                "offset": 0,
+                "transactions": [
+                  { "id": "uuid-1", "hash": "abc123", "version": 1,
+                    "from_address": "HSMCaa", "to_address": "HSMCbb",
+                    "amount": 0.5, "fee": 0.0001, "status": "Pending", "created_at": 999,
+                    "confirmed_at": null, "block_number": null,
+                    "inputs": [], "outputs": [], "privacy_level": "transparent",
+                    "confirmed": false, "location": "mempool" }
+                ]
+              }
+            }
+            """.trimIndent()
+        )
+        val result = parseAddressTxsResult(body)
+        assertTrue(result.available)
+        assertEquals(1, result.transactions.size)
+        assertEquals("abc123", result.transactions[0].txHash)
+        assertFalse(result.transactions[0].confirmed)
+        assertEquals("mempool", result.transactions[0].location)
+    }
+
+    /** A transaction with neither tx_hash nor hash is skipped — never fabricated. */
+    @Test
+    fun `address txs skips entries missing both hash fields`() {
+        val body = JSONObject(
+            """
+            {
+              "ok": true, "node_online": true,
+              "data": { "address": "HSMCaa", "total": 1, "limit": 50, "offset": 0,
+                "transactions": [ { "amount": 1.0, "confirmed": true } ] }
+            }
+            """.trimIndent()
+        )
+        val result = parseAddressTxsResult(body)
+        assertTrue(result.available)
+        assertEquals(0, result.transactions.size)
     }
 
     @Test
@@ -305,12 +366,99 @@ class NodeClientParsingTest {
         assertTrue(result.reason!!.contains("node offline"))
     }
 
+    /** A plain { error } rejection (e.g. "Path ... is not allowed via /node-proxy") is surfaced honestly. */
     @Test
-    fun `address txs not-whitelisted is unavailable with contract-gap reason`() {
+    fun `address txs server rejection is unavailable with reason`() {
         val body = JSONObject("""{ "error": "Path GET /address/HSMCaa/txs is not allowed via /node-proxy" }""".trimIndent())
         val result = parseAddressTxsResult(body)
         assertFalse(result.available)
         assertTrue(result.reason!!.contains("node offline"))
+    }
+
+    // ── x-api-key (production /node-proxy auth) ───────────────────────────────
+
+    @Test
+    fun `proxy headers include x-api-key when a key is configured`() {
+        val headers = buildProxyHeaders("super-secret-operator-key")
+        assertEquals("super-secret-operator-key", headers["x-api-key"])
+    }
+
+    @Test
+    fun `proxy headers omit x-api-key when no key is configured`() {
+        val headers = buildProxyHeaders(null)
+        assertFalse(headers.containsKey("x-api-key"))
+        val blank = buildProxyHeaders("   ")
+        assertFalse(blank.containsKey("x-api-key"))
+    }
+
+    @Test
+    fun `proxy headers keep content-type and accept on every request`() {
+        val headers = buildProxyHeaders(null)
+        assertEquals("application/json", headers["Content-Type"])
+        assertEquals("application/json", headers["Accept"])
+    }
+
+    /**
+     * Production server rejects a missing/wrong x-api-key with HTTP 401
+     * { error: "Unauthorized" } (server/api-server.ts:3256-3260). The parser must
+     * surface the honest "Unauthorized — configure API key" reason, never a misleading
+     * "node offline".
+     */
+    @Test
+    fun `401 envelope parses to honest unauthorized reason for balance`() {
+        val body = JSONObject("""{ "error": "Unauthorized" }""".trimIndent())
+        val result = parseBalanceResult(body, httpCode = 401)
+        assertFalse(result.available)
+        assertNull(result.balanceHsmc)
+        assertTrue(result.reason!!.contains("Unauthorized — configure API key"))
+        assertFalse(result.reason!!.contains("node offline"))
+    }
+
+    @Test
+    fun `401 envelope parses to honest unauthorized reason for history`() {
+        val body = JSONObject("""{ "error": "Unauthorized" }""".trimIndent())
+        val result = parseAddressTxsResult(body, httpCode = 401)
+        assertFalse(result.available)
+        assertTrue(result.transactions.isEmpty())
+        assertTrue(result.reason!!.contains("Unauthorized — configure API key"))
+        assertFalse(result.reason!!.contains("node offline"))
+    }
+
+    @Test
+    fun `401 envelope parses to honest unauthorized reason for submit`() {
+        val body = JSONObject("""{ "error": "Unauthorized" }""".trimIndent())
+        val result = parseSubmitResult(body, httpCode = 401)
+        assertNull(result.txHash)
+        assertTrue(result.error!!.contains("Unauthorized — configure API key"))
+    }
+
+    @Test
+    fun `401 envelope surfaces unauthorized on health`() {
+        val body = JSONObject("""{ "error": "Unauthorized" }""".trimIndent())
+        val health = parseHealthEnvelope(body, httpCode = 401)
+        assertFalse(health.nodeOnline)
+        assertTrue(health.error!!.contains("Unauthorized — configure API key"))
+    }
+
+    /** Defensive: even without the 401 status code, an "Unauthorized" error is caught. */
+    @Test
+    fun `Unauthorized error string alone is detected without 401 status`() {
+        val body = JSONObject("""{ "error": "Unauthorized" }""".trimIndent())
+        val result = parseBalanceResult(body, httpCode = 200)
+        assertFalse(result.available)
+        assertTrue(result.reason!!.contains("Unauthorized — configure API key"))
+    }
+
+    /** A 200 envelope that is NOT unauthorized must not be mislabelled as auth failure. */
+    @Test
+    fun `non-401 node offline is not mislabelled as unauthorized`() {
+        val body = JSONObject(
+            """{ "ok": false, "node_online": false, "error": "HSMC node not connected" }""".trimIndent()
+        )
+        val result = parseBalanceResult(body, httpCode = 200)
+        assertFalse(result.available)
+        assertTrue(result.reason!!.contains("node offline"))
+        assertFalse(result.reason!!.contains("Unauthorized"))
     }
 
     // ── SubmitTxPayload JSON shape (must match Rust SubmitTxRequest field names) ─

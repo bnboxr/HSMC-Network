@@ -40,13 +40,13 @@ import com.hsmc.wallet.ui.components.StatusRow
 import kotlinx.coroutines.launch
 
 /**
- * Wallet dashboard (Phase 3, step 1 — real node connectivity, honest balance).
+ * Wallet dashboard (Phase 3 — real node connectivity, honest balance).
  *
  * The wallet label and derived address come from [WalletStorage]. The balance is fetched
  * from the HSMC node through the API server's /node-proxy bridge: when the node is
- * online and answers, the REAL on-chain balance is shown; when the node is offline or
- * the endpoint is not (yet) exposed by the bridge, the screen says so explicitly and
- * NEVER prints a fabricated "0.00000000".
+ * online and answers, the REAL on-chain balance is shown; when the node is offline,
+ * the request is unauthorized (missing/invalid production API key), or an error occurs,
+ * the screen says so explicitly and NEVER prints a fabricated "0.00000000".
  */
 @Composable
 fun DashboardScreen(
