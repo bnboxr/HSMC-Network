@@ -165,7 +165,9 @@ pub async fn start_rpc_server(
         .layer(cors)
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", port);
+    // Bind host configurable via RPC_HOST (default 0.0.0.0) — mirrors CORS_ORIGIN env style.
+    let host     = std::env::var("RPC_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let addr     = format!("{}:{}", host, port);
     info!("╔══════════════════════════════════════════════════════════╗");
     info!("║  HSMC RPC Node v0.3.0 — http://{}               ║", addr);
     info!("╠══════════════════════════════════════════════════════════╣");
