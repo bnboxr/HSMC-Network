@@ -53,3 +53,37 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
         continue-on-error: true
+
+  # Build ONLY the hsmc-node binary and upload it as an artifact.
+  # Purpose: the sandbox (3.9GB RAM, no swap) OOM-kills rustc on
+  # cranelift-codegen even at opt-level=0; CI runners have >=7GB RAM.
+  node-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies (RocksDB / clang)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev cmake pkg-config libssl-dev
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-node/target
+          key: ${{ runner.os }}-nodebin-${{ hashFiles('rust-node/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-nodebin-
+            ${{ runner.os }}-cargo-
+      - name: Build hsmc-node (release)
+        run: cargo build -p hsmc-node --bin hsmc-node --release
+      - name: Upload hsmc-node binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: hsmc-node-linux-x64
+          path: rust-node/target/release/hsmc-node
+          retention-days: 7
+          if-no-files-found: error
