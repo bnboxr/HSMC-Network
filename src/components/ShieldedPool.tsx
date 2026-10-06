@@ -6,17 +6,22 @@ import {
   Copy, RefreshCw, AlertTriangle, Database,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { localDb } from '@/integrations/local-db/client';
 
 // ═══════════════════════════════════════════════════════════════
 // API helpers
 // ═══════════════════════════════════════════════════════════════
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-const API_KEY = import.meta.env.VITE_API_KEY || '';
 
 async function apiCall(endpoint: string, method: string, body?: unknown) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (API_KEY) headers['x-api-key'] = API_KEY;
+  // SECURITY P0-1: the SPA authenticates with JWT only — no API key is ever
+  // shipped in the bundle. Attach the logged-in user's session token (the
+  // local-db auth stores the JWT issued by /auth/login|register) when present.
+  const { data } = await localDb.auth.getSession();
+  const token = data.session?.access_token;
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const resp = await fetch(`${API_BASE}/${endpoint}`, {
     method,
     headers,

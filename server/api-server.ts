@@ -710,13 +710,105 @@ function buildSelectSQL(p: ParsedQuery): { sql: string; params: any[] } {
 }
 
 // ── HTTP Server ──────────────────────────────────────────────────────────────
-const ALLOWED_TABLES = new Set<string>();
+// SECURITY P0-1: explicit per-table allow-list for /rest/v1/* — only the
+// tables the SPA (and integration tests) actually use. Tables are NOT
+// auto-discovered from sqlite_master, so any future table stays locked out
+// until deliberately added here. Sensitive tables (users, wallet_seeds,
+// totp_secrets, payment_sessions, audit_log, smart_contracts,
+// contract_interactions, settings_schema, cardholders, cards, ...) are never
+// served through the REST API — they have dedicated endpoints or none.
+const ALLOWED_TABLES: ReadonlySet<string> = new Set([
+  "blocks",
+  "card_transactions",
+  "deployment_status",
+  "governance_proposals",
+  "governance_votes",
+  "internal_transfers",
+  "liquidity_pools",
+  "lp_positions",
+  "network_peers",
+  "network_stats",
+  "newsletter_subscribers",
+  "notifications",
+  "payment_links",
+  "platform_config",
+  "platform_stats",
+  "price_history",
+  "profiles",
+  "referral_codes",
+  "referral_uses",
+  "staking_pools",
+  "stakes",
+  "swap_rates",
+  "token_metrics",
+  "token_swaps",
+  "transactions",
+  "treasury_transactions",
+  "user_roles",
+  "user_settings",
+  "wallets",
+  "webauthn_credentials",
+]);
 
-// Collect table names from schema
-const tables = db
-  .query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-  .all() as { name: string }[];
-for (const t of tables) ALLOWED_TABLES.add(t.name);
+// SECURITY P0-1: per-user scoping — rows of these tables are owned by a user;
+// the owner column (`user_id`) is bound to the authenticated JWT subject
+// server-side and is NEVER taken from the request query or body.
+const REST_OWNED_TABLES: ReadonlyMap<string, string> = new Map([
+  ["governance_proposals", "user_id"],
+  ["governance_votes", "user_id"],
+  ["internal_transfers", "user_id"],
+  ["lp_positions", "user_id"],
+  ["notifications", "user_id"],
+  ["payment_links", "user_id"],
+  ["profiles", "user_id"],
+  ["referral_codes", "user_id"],
+  ["stakes", "user_id"],
+  ["token_swaps", "user_id"],
+  ["treasury_transactions", "user_id"],
+  ["user_roles", "user_id"],
+  ["user_settings", "user_id"],
+  ["wallets", "user_id"],
+  ["webauthn_credentials", "user_id"],
+]);
+
+// SECURITY P0-1: column-level denylist (defense-in-depth). Password hashes,
+// wallet seeds, TOTP secrets, OTP codes and Stripe client secrets are never
+// selectable / filterable / writable through /rest/v1/* — their tables are
+// also excluded from ALLOWED_TABLES entirely, so the columns are unreachable.
+const REST_BLOCKED_COLUMNS: ReadonlySet<string> = new Set([
+  "password_hash",
+  "encrypted_seed",
+  "secret",
+  "backup_codes",
+  "otp_code",
+  "stripe_client_secret",
+  "totp_secret",
+]);
+
+/** Bind an owner-column query filter to the JWT subject (GET/PATCH/DELETE). */
+function bindOwnerFilter(parsed: ParsedQuery, ownerCol: string, subject: string): string | null {
+  const existing = parsed.filters[ownerCol];
+  if (existing) {
+    if (existing.op !== "eq") {
+      return `Filter on "${ownerCol}" must use eq`;
+    }
+    if (existing.val !== subject) {
+      return `You may only access your own rows (${ownerCol} is bound to your account)`;
+    }
+  }
+  parsed.filters[ownerCol] = { op: "eq", val: subject };
+  return null;
+}
+
+/** Bind the owner column of an inserted/updated row to the JWT subject. */
+function bindOwnerValue(row: Record<string, unknown>, ownerCol: string, subject: string): string | null {
+  const val = row[ownerCol];
+  if (val !== undefined && val !== null && String(val) !== subject) {
+    return `You may only create rows owned by your account (${ownerCol} is bound to your account)`;
+  }
+  row[ownerCol] = subject;
+  return null;
+}
 
 // ── Transparent column encryption for REST API ────────────────────────────────
 /** Encrypt sensitive columns in a row object before INSERT/UPDATE */
@@ -729,15 +821,10 @@ async function encryptSensitiveColumns(table: string, row: Record<string, unknow
   }
 }
 
-/** Decrypt sensitive columns in a row object after SELECT */
-async function decryptSensitiveColumns(table: string, row: Record<string, unknown>): Promise<void> {
-  if (!isEncryptionAvailable()) return;
-  for (const [col, val] of Object.entries(row)) {
-    if (isEncryptedColumn(table, col) && typeof val === "string" && val.length > 0) {
-      row[col] = await decryptField(val);
-    }
-  }
-}
+// SECURITY P0-1: decrypt-on-GET was removed. DB_ENCRYPTION_KEY-protected
+// columns (totp_secrets, payment_sessions) belong to tables excluded from
+// ALLOWED_TABLES, so no REST path can ever retrieve their plaintext.
+// encryptSensitiveColumns above remains for those tables' write paths.
 
 // ── Rate Limiting (Token Bucket, tiered per-path) ────────────────────────────
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute window
@@ -3254,7 +3341,13 @@ async function handleRequestInner(req: Request): Promise<Response> {
 
   // ── Authentication ────────────────────────────────────────────────────────
   if (!isPublicPath(path)) {
-    if (!checkApiKey(req)) {
+    // SECURITY P0-1: accept either a server-to-server API key (x-api-key /
+    // `Authorization: Bearer <key>`) OR a SPA JWT (`Authorization: Bearer
+    // <token>`). The API key is never shipped in the frontend bundle — the SPA
+    // authenticates with JWT only. checkApiKey short-circuits in dev mode.
+    const apiKeyOk = checkApiKey(req);
+    const jwtOk = apiKeyOk ? false : (await extractJWTUser(req)) !== null;
+    if (!apiKeyOk && !jwtOk) {
       return jsonResponse({ error: "Unauthorized" }, 401);
     }
   }
@@ -3473,7 +3566,18 @@ async function handleRequestInner(req: Request): Promise<Response> {
   if (path.startsWith("/rest/v1/")) {
     const parsed = parseUrl(req.url);
 
-    // Validate table name
+    // SECURITY P0-1: /rest/v1/* is the SPA's data surface and authenticates
+    // with JWT only. x-api-key (server-to-server) is intentionally NOT accepted
+    // here — the API key is no longer shipped to browsers. In production a
+    // missing/invalid JWT is rejected; dev mode (no operator key — integration
+    // tests) keeps its historical anonymous behaviour, but still applies the
+    // per-table allow-list and column denylist below.
+    const subject = await extractJWTUser(req);
+    if (!subject && !IS_DEV_MODE) {
+      return errorResponse("Authentication required — valid JWT token needed", 401);
+    }
+
+    // Validate table name against the explicit allow-list
     if (!isValidTableName(parsed.table)) {
       return errorResponse(`Table "${parsed.table}" not found`, 404);
     }
@@ -3501,14 +3605,35 @@ async function handleRequestInner(req: Request): Promise<Response> {
       return errorResponse(`Invalid order column: "${parsed.order.col}"`, 400);
     }
 
+    // SECURITY P0-1: column denylist — never selectable or filterable.
+    if (parsed.columns.length > 0 && parsed.columns[0] !== "*") {
+      for (const col of parsed.columns) {
+        if (REST_BLOCKED_COLUMNS.has(col)) {
+          return errorResponse(`Column "${col}" is not exposed via the REST API`, 400);
+        }
+      }
+    }
+    for (const col of Object.keys(parsed.filters)) {
+      if (REST_BLOCKED_COLUMNS.has(col)) {
+        return errorResponse(`Column "${col}" is not exposed via the REST API`, 400);
+      }
+    }
+
+    // SECURITY P0-1: per-user scoping — when a JWT is presented, the owner
+    // column (user_id) is bound to the JWT subject for every GET/PATCH/DELETE.
+    // POST bodies are bound inside the POST branch below.
+    const ownerColForTable = REST_OWNED_TABLES.get(parsed.table);
+    if (ownerColForTable && subject) {
+      const ownerErr = bindOwnerFilter(parsed, ownerColForTable, subject);
+      if (ownerErr) return errorResponse(ownerErr, 403);
+    }
+
     try {
       if (req.method === "GET") {
         const { sql, params } = buildSelectSQL(parsed);
         const rows = db.query(sql).all(...params) as Record<string, unknown>[];
-        // Decrypt sensitive columns before returning
-        for (const row of rows) {
-          await decryptSensitiveColumns(parsed.table, row);
-        }
+        // SECURITY P0-1: no decrypt-on-GET. Encrypted secret columns belong to
+        // tables excluded from the allow-list and are never served.
         return jsonResponse(rows);
       }
 
@@ -3542,16 +3667,27 @@ async function handleRequestInner(req: Request): Promise<Response> {
           if (!rowObj.id) rowObj.id = randomUUID();
           if (!rowObj.created_at) rowObj.created_at = new Date().toISOString();
 
-          // Encrypt sensitive columns before storing
-          await encryptSensitiveColumns(parsed.table, rowObj);
-
-          // Validate column names in the row
-          const cols = Object.keys(rowObj);
-          for (const col of cols) {
+          // SECURITY P0-1: validate column names and reject blocked columns
+          // before any write; when authenticated, bind the owner column to the
+          // JWT subject (never trust a user_id supplied in the body).
+          for (const col of Object.keys(rowObj)) {
             if (!isValidColumnName(col)) {
               return errorResponse(`Invalid column name in body: "${col}"`, 400);
             }
+            if (REST_BLOCKED_COLUMNS.has(col)) {
+              return errorResponse(`Column "${col}" is not exposed via the REST API`, 400);
+            }
           }
+          if (ownerColForTable && subject) {
+            const ownerErr = bindOwnerValue(rowObj, ownerColForTable, subject);
+            if (ownerErr) return errorResponse(ownerErr, 403);
+          }
+
+          // Re-read columns AFTER owner binding so the bound user_id is written.
+          const cols = Object.keys(rowObj);
+
+          // Encrypt sensitive columns before storing
+          await encryptSensitiveColumns(parsed.table, rowObj);
 
           const placeholders = cols.map(() => "?");
           const values = cols.map((c) => rowObj[c]);
@@ -3578,11 +3714,22 @@ async function handleRequestInner(req: Request): Promise<Response> {
 
         const bodyObj = body as Record<string, unknown>;
 
-        // Validate body column names
+        // SECURITY P0-1: reject blocked columns, and never let a client
+        // re-assign ownership — the owner column stays bound to the JWT subject
+        // (the bound filter below also scopes the UPDATE's WHERE clause).
         for (const col of Object.keys(bodyObj)) {
           if (!isValidColumnName(col)) {
             return errorResponse(`Invalid column name in body: "${col}"`, 400);
           }
+          if (REST_BLOCKED_COLUMNS.has(col)) {
+            return errorResponse(`Column "${col}" is not exposed via the REST API`, 400);
+          }
+        }
+        if (ownerColForTable && subject) {
+          if (bodyObj[ownerColForTable] !== undefined && String(bodyObj[ownerColForTable]) !== subject) {
+            return errorResponse(`You may only update rows owned by your account`, 403);
+          }
+          bodyObj[ownerColForTable] = subject;
         }
 
         // Encrypt sensitive columns before updating

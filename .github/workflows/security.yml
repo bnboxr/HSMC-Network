@@ -1,0 +1,44 @@
+name: Security
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'index.html'
+      - 'vite.config.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/security.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'index.html'
+      - 'vite.config.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/security.yml'
+
+jobs:
+  secret-scan-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build SPA
+        run: bun run build
+      - name: Scan built bundle for leaked API keys / secret-shaped strings
+        run: |
+          set -euo pipefail
+          # SECURITY P0-1: the SPA must never ship an API key. The frontend
+          # authenticates with JWT only; x-api-key is server-to-server (the
+          # /node-proxy path) and lives only in server-side .env (HSMC_API_KEY).
+          # Any of these patterns in dist/ means a key leaked into the bundle.
+          if grep -rniE "VITE_API_KEY|HSMC_API_KEY|x-api-key[:= ]*[A-Za-z0-9_-]{16,}" dist; then
+            echo "::error::Secret-shaped string found in dist/ — API keys must never ship to the browser."
+            exit 1
+          fi
+          echo "OK: no API key material in built bundle"
