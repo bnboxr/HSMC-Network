@@ -82,7 +82,6 @@ export const useNotifications = () => {
               headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${session.access_token}`,
-                apikey: import.meta.env.VITE_API_KEY,
               },
               body: JSON.stringify({ type: 'tx_confirmed', data: { tx_hash: tx.hash, user_id: user.id, amount: tx.amount, to_address: tx.to_address } }),
             }).catch(console.error);
@@ -99,7 +98,7 @@ export const useNotifications = () => {
       if (!session) return;
       fetch(`https://${projectId}.hsmc.network/functions/v1/advanced-notifications`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, apikey: import.meta.env.VITE_API_KEY },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ type: 'check_staking_rewards', data: {} }),
       }).catch(console.error);
     }, 10 * 60 * 1000);
@@ -115,7 +114,7 @@ export const useNotifications = () => {
           if (!session) return;
           fetch(`https://${projectId}.hsmc.network/functions/v1/advanced-notifications`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, apikey: import.meta.env.VITE_API_KEY },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
             body: JSON.stringify({ type: 'consensus_change', data: { old_state: oldState, new_state: newState } }),
           }).catch(console.error);
         }
