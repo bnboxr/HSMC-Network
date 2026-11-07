@@ -7,7 +7,7 @@ network fees and bridge operations only.
 
 HSMC is operated by independent nodes worldwide. The reference
 implementation is published under [LICENSE] at
-https://github.com/XMC-OXR/astranet-network-hub.
+https://github.com/bnboxr/HSMC-Network.
 
 This software is provided "AS IS" without warranty. Users are
 solely responsible for compliance with their local laws regarding

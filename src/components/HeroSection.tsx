@@ -129,7 +129,7 @@ export const HeroSection = () => {
           >
             {[
               { icon: Shield, text: 'RingCT Privacy' },
-              { icon: Zap, text: '~60s Blocks' },
+              { icon: Zap, text: '~120s Blocks' },
               { icon: Globe, text: '3 Chains' },
               { icon: Lock, text: 'AES-256 Wallet' },
               { icon: Cpu, text: 'SHA-256d PoW' },

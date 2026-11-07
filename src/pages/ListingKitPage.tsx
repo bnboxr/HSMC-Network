@@ -148,16 +148,18 @@ const EXCHANGES = [
 const LISTING_MATERIALS = [
   { label: 'Token Name', value: 'HSMC' },
   { label: 'Symbol', value: 'HSMC' },
-  { label: 'Decimals', value: '18' },
-  { label: 'Total Supply', value: '1,000,000,000,000 HSMC' },
+  { label: 'Decimals', value: '8' },
+  { label: 'Max Supply (hard cap)', value: '500,000,000 HSMC' },
+  { label: 'Effective Mined Supply', value: '~21,000,000 HSMC' },
+  { label: 'Premine', value: '0 (fair launch via PoW)' },
   { label: 'Chain (primary)', value: 'HSMC Mainnet (custom)' },
   { label: 'Wrapped Token', value: 'wHSMC (BEP-20 on BSC)' },
   { label: 'Contract Standard', value: 'ERC-20 / BEP-20 compatible' },
   { label: 'Consensus', value: 'SHA-256d PoW' },
   { label: 'Privacy Protocol', value: 'RingCT v2 + Ring Signatures' },
   { label: 'Block Time', value: '~120 seconds' },
-  { label: 'Whitepaper URL', value: 'your-domain.com/whitepaper' },
-  { label: 'GitHub', value: 'github.com/hsmc/node' },
+  { label: 'Whitepaper URL', value: 'TBD' },
+  { label: 'GitHub', value: 'https://github.com/bnboxr/HSMC-Network' },
 ];
 
 const BRIDGE_RUST_CODE = `// crates/hsmc-rpc/src/bridge.rs — Bridge relayer integration
@@ -359,7 +361,7 @@ export default function ListingKitPage() {
                     <Shield className="w-8 h-8 text-primary mx-auto mb-2" />
                     <div className="font-bold text-sm">HSMC Mainnet</div>
                     <div className="text-xs text-muted-foreground">Rust node</div>
-                    <div className="text-xs font-mono text-primary mt-1">Chain ID: 7777</div>
+                    <div className="text-xs font-mono text-primary mt-1">Chain ID: 8888</div>
                   </div>
                   {/* Relayer */}
                   <div className="flex flex-col items-center gap-2">

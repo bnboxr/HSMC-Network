@@ -125,7 +125,8 @@ function calculateNextDifficulty(currentDifficulty: number, lastNBlockTimes: num
   const times = lastNBlockTimes.slice(-10);
   if (times.length < 2) return currentDifficulty;
   const avgBlockTime = (times[times.length - 1] - times[0]) / (times.length - 1);
-  const ratio = avgBlockTime / 60_000;
+  const TARGET_BLOCK_TIME_MS = 120_000; // rust-node: TARGET_BLOCK_TIME_SECS = 120
+  const ratio = avgBlockTime / TARGET_BLOCK_TIME_MS;
   if (ratio < 0.75) return Math.min(32, currentDifficulty + 1);
   if (ratio > 1.5)  return Math.max(1, currentDifficulty - 1);
   return currentDifficulty;

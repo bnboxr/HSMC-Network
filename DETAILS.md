@@ -266,7 +266,7 @@ Token ERC-20/BEP-20 cu:
 - **ERC20Burnable** — bridge burn
 - **AccessControl** — MINTER_ROLE, PAUSER_ROLE
 - **Pausable** — emergency stops
-- **MAX_SUPPLY** = 1,000,000,000,000 (1 trilion) HSMC
+- **MAX_SUPPLY** = 500,000,000 HSMC (hard cap; wHSMC wraps HSMC so it shares the same cap)
 
 #### 4.2.2 BridgeMinter.sol — Bridge Validator
 
@@ -464,7 +464,7 @@ Toate operațiile criptografice sunt delegate către **Rust node** prin JSON-RPC
 
 - **Algorithm**: SHA-256d (double SHA-256, Bitcoin-compatible)
 - **RandomX**: planned ca upgrade path (ASIC-resistant), dar neimplementat încă
-- **Block time**: 60 secunde (configurabil)
+- **Block time**: 120 secunde (2 minute, configurabil)
 - **Difficulty adjustment**: Bitcoin-style compact target
 - **Block reward**: 50 HSMC inițial, halving la fiecare 210,000 blocuri
 
@@ -576,7 +576,9 @@ Webhook Handler (auto-settlement)
 | Parametru | Valoare |
 |----------|--------|
 | **Ticker** | HSMC (nativ), wHSMC (wrapped) |
-| **Max Supply** | 1,000,000,000,000 (1 trilion) HSMC |
+| **Max Supply** | 500,000,000 HSMC (hard cap) |
+| **Effective mined supply** | ~21,000,000 HSMC (asimptota seriei de halving) |
+| **Premine** | 0 — fair launch prin PoW |
 | **Decimals** | 8 |
 | **Consensus** | PoW SHA-256d |
 | **Block reward** | 50 HSMC (halving la 210,000 blocuri) |

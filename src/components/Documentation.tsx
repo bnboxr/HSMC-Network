@@ -32,7 +32,7 @@ Key Features:
 • Dandelion++ pentru IP obfuscation
 • SHA-256d Proof-of-Work mining
 • Staking pools cu recompense din Treasury
-• ~60 second block time (PoW)
+• ~120 second block time (PoW)
 • TPS: 850–2500 tranzacții/secundă`,
       },
       {

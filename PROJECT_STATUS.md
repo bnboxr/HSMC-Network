@@ -1,12 +1,9 @@
 # HSMC — Inventar complet al proiectului
 
 > Ultima actualizare: 2026-05-07
-> Repo țintă (după redenumire pe GitHub): https://github.com/XMC-OXR/HSMC-network-hub
+> Repo: https://github.com/bnboxr/HSMC-Network
 >
-> **Cum se redenumește repo-ul** (Lovable nu poate face asta în locul tău):
-> 1. GitHub → repo `astranet-network-hub` → Settings → General → Rename → `HSMC-network-hub`
-> 2. Update remote local: `git remote set-url origin https://github.com/XMC-OXR/HSMC-network-hub.git`
-> 3. În Lovable → Connectors → GitHub → reconectează repo-ul nou.
+> Remote: `git remote set-url origin https://github.com/bnboxr/HSMC-Network.git`
 > Toate referințele din cod (README, workflow, edge functions) folosesc deja `HSMC`.
 
 ## Legenda statusului

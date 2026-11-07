@@ -4,7 +4,7 @@
 # ════════════════════════════════════════════════════════════════════
 # Requirements:
 #   - WEB3_STORAGE_TOKEN env var (free at https://web3.storage)
-#   - GH_PAGES_REPO env var (e.g. "XMC-OXR/hsmc-whitepaper")
+#   - GH_PAGES_REPO env var (e.g. "bnboxr/HSMC-Network")
 #   - gh CLI authenticated (`gh auth login`)
 #   - Whitepaper PDFs in /mnt/documents/
 #
@@ -38,7 +38,7 @@ cat > "$WORK/whitepaper/index.html" <<'HTML'
   <li><a href="Liquidity_Mechanism.pdf">Liquidity Mechanism (PDF)</a></li>
   <li><a href="Rust_Audit.pdf">Rust Code Audit (PDF)</a></li>
 </ul>
-<p>Source: <a href="https://github.com/XMC-OXR/astranet-network-hub">github.com/XMC-OXR/astranet-network-hub</a></p>
+<p>Source: <a href="https://github.com/bnboxr/HSMC-Network">github.com/bnboxr/HSMC-Network</a></p>
 </body></html>
 HTML
 

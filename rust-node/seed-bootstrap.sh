@@ -6,7 +6,7 @@
 # ════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-REPO="${REPO:-https://github.com/XMC-OXR/astranet-network-hub.git}"
+REPO="${REPO:-https://github.com/bnboxr/HSMC-Network.git}"
 DATA_DIR="/var/hsmc"
 USER_NAME="hsmc"
 

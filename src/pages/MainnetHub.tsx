@@ -27,10 +27,10 @@ interface GenesisConfig {
 }
 
 const DEFAULT_GENESIS: GenesisConfig = {
-  chainId: 7777,
+  chainId: 8888,
   networkName: 'HSMC Mainnet',
   symbol: 'HSMC',
-  totalSupply: 1_000_000_000_000,
+  totalSupply: 500_000_000,
   blockTime: 120,
   initialDifficulty: 4,
   halvingInterval: 210_000,
@@ -303,7 +303,7 @@ export default function MainnetHub() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
           {[
             { icon: Network, label: 'Chain ID', value: genesis.chainId.toString() },
-            { icon: Coins, label: 'Total Supply', value: '1T HSMC' },
+            { icon: Coins, label: 'Max Supply', value: '500M HSMC' },
             { icon: Server, label: 'Block Time', value: `${genesis.blockTime}s` },
             { icon: Shield, label: 'Privacy', value: genesis.privacyProtocol },
           ].map(({ icon: Icon, label, value }) => (
@@ -455,7 +455,7 @@ export default function MainnetHub() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               {[
                 { label: 'Standard', value: 'ERC-20 / BEP-20' },
-                { label: 'Max Supply', value: '1,000,000,000,000 wHSMC' },
+                { label: 'Max Supply', value: '500,000,000 wHSMC' },
                 { label: 'Mechanism', value: 'Mint/Burn Bridge' },
               ].map(({ label, value }) => (
                 <div key={label} className="p-4 bg-muted/30 rounded-xl border border-border text-center">

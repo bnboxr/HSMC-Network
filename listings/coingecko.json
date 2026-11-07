@@ -10,22 +10,22 @@
     "polygon-pos":         "TBD: wHSMC ERC-20 address"
   },
   "links": {
-    "homepage":          "https://hsmc.network",
-    "whitepaper":        "https://hsmc.network/whitepaper",
-    "blockchain_site":   ["https://explorer.hsmc.network"],
+    "homepage":          "TBD",
+    "whitepaper":        "TBD",
+    "blockchain_site":   ["TBD"],
     "official_forum":    "TBD",
     "chat_url":          ["TBD: discord/telegram"],
     "announcement_url":  ["TBD"],
     "twitter_screen_name": "TBD",
-    "github":            ["https://github.com/XMC-OXR/astranet-network-hub"]
+    "github":            ["https://github.com/bnboxr/HSMC-Network"]
   },
-  "image_url": "https://hsmc.network/hsmc-logo.png",
+  "image_url": "TBD",
   "country_origin": "Romania (founder jurisdiction)",
   "genesis_date":   "TBD",
-  "max_supply":     1000000000000,
+  "max_supply":     500000000,
   "ticker_pair_examples": [
     {"target": "USDT", "exchange": "TBD",         "url": "TBD"},
     {"target": "BNB",  "exchange": "PancakeSwap", "url": "TBD: pair URL after createPancakePool.ts"}
   ],
-  "additional_notes": "Privacy chain (RingCT/CLSAG). Wrapped token on EVM allows DEX listings while native chain handles confidential transfers."
+  "additional_notes": "Privacy-focused L1: RingCT, CLSAG and stealth-address libraries ship in the node, while consensus-level verification of those proofs is on the roadmap and the current wallet sends transparent transactions. Hard cap 500,000,000 HSMC with 0 premine; emitted supply follows a 50 HSMC/block halving schedule (asymptote ~21,000,000 HSMC). The wHSMC wrapper on EVM enables DEX listings while the native chain handles mining and settlement."
 }

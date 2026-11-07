@@ -612,8 +612,8 @@ describe("WHSMC + BridgeMinter", () => {
       const { admin, bridge } = await deployFixture(3, 2);
       const token = await ethers.getContractAt("WHSMC", await bridge.token());
 
-      // MAX_SUPPLY is 1 trillion with 8 decimals
-      const maxSupply = ethers.parseUnits("1000000000000", 8);
+      // MAX_SUPPLY is the HSMC hard cap: 500,000,000 with 8 decimals
+      const maxSupply = ethers.parseUnits("500000000", 8);
       expect(await token.MAX_SUPPLY()).to.equal(maxSupply);
     });
   });

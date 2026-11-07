@@ -26,7 +26,8 @@
 - Beta Validator: 18% APR, min_stake=500 HSMC, 3.5% commission
 
 ### token_metrics (2 rows)
-- circulating_supply=65,000,000, total_supply=1,000,000,000,000 (1 trillion)
+- circulating_supply=65,000,000, total_supply=500,000,000 (hard cap; 0 premine, effective mined supply ~21,000,000 from the halving schedule)
+  - NOTE: the legacy seeded row carried a 1-trillion-token total_supply — that value is wrong and must not be used for listings.
 - token_holders=4, price=$0
 
 ### price_history (4+ rows)

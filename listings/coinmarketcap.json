@@ -4,30 +4,30 @@
   "ticker_symbol": "HSMC",
   "wrapped_ticker": "wHSMC",
   "category": "Privacy / Layer 1 / PoW",
-  "description": "HSMC is a privacy-first Layer-1 blockchain implementing Monero-inspired RingCT, stealth addresses, and CLSAG ring signatures, secured by a parallel SHA3 PoW with Stratum V2. Built in Rust, with a hybrid AMM bridge to BSC/ETH/Polygon via the wHSMC ERC-20 wrapper.",
-  "official_website": "https://hsmc.network",
-  "whitepaper_url": "https://hsmc.network/whitepaper",
+  "description": "HSMC is a privacy-focused Layer-1 blockchain written in Rust. Consensus is SHA-256d (double SHA-256) Proof of Work with Stratum V2 mining. The node ships Monero-inspired privacy primitives \u2014 RingCT confidential amounts, stealth addresses and CLSAG ring signatures \u2014 as implemented libraries; consensus-level verification of those proofs is on the roadmap, and the current wallet sends transparent transactions. A wrapped wHSMC ERC-20 token provides an AMM bridge to BSC/ETH/Polygon.",
+  "official_website": "TBD",
+  "whitepaper_url": "TBD",
   "block_explorer_urls": [
-    "https://explorer.hsmc.network",
+    "TBD",
     "TBD: backup explorer (e.g. mempool-style)"
   ],
-  "source_code": "https://github.com/XMC-OXR/astranet-network-hub",
-  "technical_doc": "https://hsmc.network/whitepaper#technical",
+  "source_code": "https://github.com/bnboxr/HSMC-Network",
+  "technical_doc": "TBD",
   "contract_addresses": {
     "BSC":      "TBD: 0x… (deploy via contracts/scripts/deploy.ts)",
     "Ethereum": "TBD: 0x…",
     "Polygon":  "TBD: 0x…"
   },
   "supply": {
-    "max_supply":         "1000000000000",
-    "total_supply":       "TBD: query token_metrics.total_supply",
-    "circulating_supply": "TBD: query token_metrics.circulating_supply",
-    "circulating_supply_proof_url": "https://hsmc.network/api/supply"
+    "max_supply":         "500000000",
+    "total_supply":       "TBD: query token_metrics.total_supply (hard cap 500,000,000 HSMC; 0 premine)",
+    "circulating_supply": "TBD: query token_metrics.circulating_supply (emitted supply follows the 50 HSMC/block halving schedule; asymptote ~21,000,000 HSMC)",
+    "circulating_supply_proof_url": "TBD"
   },
   "launch_date_utc": "TBD: mainnet genesis timestamp",
   "ico_status": "No public ICO. Fair-launch via PoW mining.",
-  "consensus": "Proof of Work (SHA3 + Bulletproofs aggregation)",
-  "block_time_seconds": 60,
+  "consensus": "Proof of Work (SHA-256d / double SHA-256)",
+  "block_time_seconds": 120,
   "premine": "0",
   "founder": "Ifrim George (OXR.org)",
   "team_kyc": "TBD: upload signed KYC PDF (CMC requirement)",
@@ -35,7 +35,7 @@
     "twitter":   "TBD",
     "telegram":  "TBD",
     "discord":   "TBD",
-    "github":    "https://github.com/XMC-OXR/astranet-network-hub",
+    "github":    "https://github.com/bnboxr/HSMC-Network",
     "reddit":    "TBD"
   },
   "exchanges_listed": [],
@@ -44,5 +44,5 @@
     "TBD: Certik report URL"
   ],
   "tags": ["Privacy", "Layer 1", "PoW", "Mineable", "Bridge", "DEX"],
-  "self_reported_market_data_endpoint": "https://hsmc.network/api/market"
+  "self_reported_market_data_endpoint": "TBD"
 }

@@ -20,7 +20,7 @@ import { SEO } from '@/components/SEO';
 // ─── Features ─────────────────────────────────────────────────────────────────
 const FEATURES = [
   { icon: Shield, title: 'Ring Signature Privacy', desc: 'Monero-style ring signatures obfuscate transaction origins across ring sizes of 11–16.', color: 'hsl(var(--primary))' },
-  { icon: Zap, title: '~60 Second Block Time', desc: 'Privacy-preserving SHA-256d PoW mining targeting ~60 second block times.', color: 'hsl(var(--secondary))' },
+  { icon: Zap, title: '~120 Second Block Time', desc: 'SHA-256d (double SHA-256) PoW mining targeting ~120 second block times.', color: 'hsl(var(--secondary))' },
   { icon: Globe, title: 'Multi-Chain Bridge', desc: 'wHSMC wrapped tokens on BSC, Ethereum and Polygon — lock on HSMC, spend on-chain elsewhere.', color: 'hsl(var(--accent))' },
   { icon: Lock, title: 'AES-256 Wallet Security', desc: 'BIP39 25-word seed phrase with AES-256-GCM encryption. Industry-standard wallet security with no custodial risk.', color: 'hsl(var(--accent))' },
   { icon: Coins, title: 'Staking Rewards', desc: 'Stake HSMC in on-chain pools with competitive APR (12%+). Rewards paid by the Treasury buyback engine.', color: 'hsl(var(--primary))' },
@@ -151,7 +151,7 @@ export const LandingPage = () => {
               className="flex flex-wrap justify-center gap-3 mb-10">
               {[
                 { icon: Shield, text: 'RingCT Privacy' },
-                { icon: Zap, text: '~60s Blocks' },
+                { icon: Zap, text: '~120s Blocks' },
                 { icon: Globe, text: '3 Chains' },
                 { icon: Lock, text: 'AES-256 Wallet' },
                 { icon: Cpu, text: 'SHA-256d PoW' },

@@ -8,7 +8,7 @@ HTTPS, systemd auto-restart, log rotation.
 
 ```bash
 # As root, on a fresh Ubuntu 22.04
-curl -fsSL https://raw.githubusercontent.com/XMC-OXR/astranet-network-hub/main/rust-node/seed-bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/bnboxr/HSMC-Network/main/rust-node/seed-bootstrap.sh | sudo bash
 ```
 
 The script:

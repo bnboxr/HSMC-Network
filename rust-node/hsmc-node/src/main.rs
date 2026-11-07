@@ -132,7 +132,7 @@ impl NodeConfig {
             network:       env_str("HSMC_NETWORK",     "mainnet"),
             log_level:     env_str("RUST_LOG",         "info"),
             max_peers:     env_usize("MAX_PEERS",      64),
-            block_time_ms: env_u64("BLOCK_TIME_MS",    60_000),
+            block_time_ms: env_u64("BLOCK_TIME_MS",   120_000),
             max_mempool:   env_usize("MAX_MEMPOOL",    10_000),
         }
     }
@@ -699,7 +699,7 @@ fn spawn_staking_reward_distributor(
     shutdown: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
-        // Distribute rewards every 600 seconds (~10 block epochs at 60s block time)
+        // Distribute rewards every 600 seconds (~5 block epochs at 120s block time)
         let mut interval = tokio::time::interval(Duration::from_secs(600));
         loop {
             if shutdown.load(Ordering::Relaxed) { break; }
