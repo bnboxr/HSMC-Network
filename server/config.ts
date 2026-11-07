@@ -159,6 +159,19 @@ export const config = {
     return sk.startsWith("sk_live_") ? ("live" as const) : ("test" as const);
   })(),
 
+  /**
+   * HSMCPay SELL (payout) flow — OFF unless explicitly enabled.
+   * Owner decision 2026-11-07: the flow does not verify the on-chain HSMC
+   * deposit and has no payout rail that pays the user, so /stripe/payout
+   * returns 410 and the payout webhook settles nothing while this is false.
+   */
+  hsmcpaySellEnabled: process.env.HSMCPAY_SELL_ENABLED === "true",
+  /**
+   * Treasury buyback & burn — OFF. There is no treasury contract and no
+   * on-chain buyback; /treasury/buyback returns 410 while this is false.
+   */
+  treasuryBuybackEnabled: process.env.TREASURY_BUYBACK_ENABLED === "true",
+
   // ── Misc services ─────────────────────────────────────────────────────────
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
   whatsappPhoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || "",

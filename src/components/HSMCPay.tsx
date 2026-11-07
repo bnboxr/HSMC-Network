@@ -42,6 +42,14 @@ declare global {
 
 const STRIPE_JS_ID = 'stripe-js-sdk';
 
+/**
+ * The SELL (HSMC → fiat) flow is switched off by the server while
+ * HSMCPAY_SELL_ENABLED is false: `POST /stripe/payout` answers 410 Gone.
+ * The UI therefore never offers a sell control that errors on click.
+ */
+const SELL_DISABLED_NOTICE =
+  'Selling HSMC for fiat is disabled: HSMCPay does not yet verify your on-chain HSMC deposit and has no payout rail that pays you, so the sell flow stays off until both exist. Nothing is charged and no balance is touched.';
+
 async function loadStripeJs(): Promise<void> {
   if (window.Stripe) return;
   await new Promise<void>((resolve, reject) => {
@@ -74,7 +82,7 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
   const [stripe, setStripe] = useState<StripeLike | null>(null);
   const [elements, setElements] = useState<StripeElementsLike | null>(null);
   const [paymentElement, setPaymentElement] = useState<StripePaymentElementLike | null>(null);
-  const [result, setResult] = useState<{ txHash: string; amountHsmc: string; paymentId: string } | null>(null);
+  const [result, setResult] = useState<{ reference: string; amountHsmc: string; paymentId: string } | null>(null);
   const [failure, setFailure] = useState('');
   // Sell-specific state
   const [sellDepositAddress, setSellDepositAddress] = useState('');
@@ -283,7 +291,13 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
       if (!settleData) throw new Error('No response from settlement service');
       if (settleData.error) throw new Error(String(settleData.error));
 
-      setResult({ txHash: settleData.tx_hash as string, amountHsmc: settleData.amount_hsmc as string, paymentId: settleData.payment_id as string });
+      // `reference` is the real Stripe PaymentIntent id. There is no on-chain
+      // transaction behind a card purchase, so none is displayed.
+      setResult({
+        reference: String(settleData.reference ?? paymentIntentId ?? ''),
+        amountHsmc: settleData.amount_hsmc as string,
+        paymentId: settleData.payment_id as string,
+      });
       setStep('success');
       setTimeout(() => window.dispatchEvent(new CustomEvent('hsmc-wallet-refresh')), 800);
     } catch (err) {
@@ -312,7 +326,8 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
       }
 
       setResult({
-        txHash: data.tx_hash as string,
+        // Real Stripe payout id — the server no longer returns a `tx_hash`.
+        reference: String(data.stripe_payout_id ?? data.reference ?? ''),
         amountHsmc: sellAmountRequired.toFixed(6),
         paymentId: sellPayoutSessionId,
       });
@@ -329,6 +344,56 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
   };
 
   if (!isOpen) return null;
+
+  // ── SELL FLOW DISABLED (owner decision 2026-11-07) ─────────────────────────
+  // The server refuses /stripe/payout with 410 while HSMCPAY_SELL_ENABLED is
+  // false, so no sell control is offered at all. The sell steps further down
+  // are kept intact for the day deposit verification and a payout rail exist.
+  if (mode === 'sell') {
+    return (
+      <AnimatePresence>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-background/90 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+          >
+            <div className="bg-gradient-to-r from-primary/20 to-secondary/20 border-b border-border p-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-secondary flex items-center justify-center shadow-lg shadow-primary/30">
+                    <ShieldCheck className="w-5 h-5 text-primary-foreground" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-lg tracking-tight">HSMCPay — Sell HSMC</div>
+                    <div className="text-xs text-muted-foreground">Currently unavailable</div>
+                  </div>
+                </div>
+                <button onClick={() => { reset(); onClose(); }} className="p-2 hover:bg-muted rounded-lg transition-colors" aria-label="Close HSMCPay">
+                  <X className="w-5 h-5 text-muted-foreground" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4 text-center">
+              <div className="w-14 h-14 mx-auto rounded-full bg-amber-500/15 flex items-center justify-center">
+                <AlertTriangle className="w-7 h-7 text-amber-400" />
+              </div>
+              <h3 className="font-semibold text-lg">Selling HSMC is not available yet</h3>
+              <p className="text-sm text-muted-foreground" data-testid="sell-disabled-notice">{SELL_DISABLED_NOTICE}</p>
+              <p className="text-xs text-muted-foreground">Buying HSMC with a card is unaffected.</p>
+              <Button variant="hero" className="w-full" onClick={() => { reset(); onClose(); }}>Close</Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      </AnimatePresence>
+    );
+  }
 
   return (
     <AnimatePresence>
@@ -646,7 +711,12 @@ export const HSMCPay = ({ isOpen, onClose, mode = 'buy' }: HSMCPayProps) => {
                 </div>
                 <div className="text-left space-y-2 p-4 bg-muted/20 rounded-xl text-xs">
                   <div className="flex justify-between gap-4"><span className="text-muted-foreground">{mode === 'sell' ? 'Payout ID' : 'Payment ID'}</span><span className="font-mono truncate">{result.paymentId}</span></div>
-                  <div className="flex justify-between gap-4"><span className="text-muted-foreground">Tx Ref</span><span className="font-mono truncate">{result.txHash}</span></div>
+                  {result.reference && (
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Stripe reference</span>
+                      <span className="font-mono truncate">{result.reference}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between"><span className="text-muted-foreground">Status</span><span className="text-secondary font-semibold">{mode === 'sell' ? 'Processing' : 'Confirmed'}</span></div>
                 </div>
                 <Button variant="hero" className="w-full" onClick={() => { reset(); onClose(); }}>Done</Button>

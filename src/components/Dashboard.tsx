@@ -133,14 +133,19 @@ export const Dashboard = () => {
               <CreditCard className="w-3.5 h-3.5" />
               Buy HSMC
             </Button>
+            {/* SELL is disabled by the server (410 Gone) until on-chain deposit
+                verification and a real payout rail to the user exist. The button
+                stays visible but cannot be clicked, and explains why on hover. */}
             <Button
               variant="outline"
               size="sm"
               className="gap-2"
-              onClick={() => { setHsmcPayMode('sell'); setHsmcPayOpen(true); }}
+              disabled
+              title="Selling HSMC is disabled — HSMCPay does not yet verify your on-chain deposit and has no payout rail that pays you."
+              aria-disabled="true"
             >
               <ArrowDownCircle className="w-3.5 h-3.5" />
-              Sell HSMC
+              Sell HSMC — unavailable
             </Button>
             <Button variant="outline" size="sm" onClick={exportData} className="gap-2 text-xs">
               <Download className="w-3.5 h-3.5" />
