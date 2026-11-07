@@ -116,7 +116,7 @@ describe("Stripe / HSMCPay API (Mock Mode)", () => {
   });
 
   describe("POST /stripe/payout", () => {
-    it("handles payout request", async () => {
+    it("refuses the sell flow with 410 Gone", async () => {
       const res = await fetch(`${BASE_URL}/stripe/payout`, {
         method: "POST",
         headers: {
@@ -130,8 +130,10 @@ describe("Stripe / HSMCPay API (Mock Mode)", () => {
         }),
       });
 
+      expect(res.status).toBe(410);
       const body = await res.json();
-      expect(body).toBeTruthy();
+      expect(body.code).toBe("hsmcpay_sell_disabled");
+      expect(body.error).toContain("payout rail");
     });
   });
 });

@@ -41,7 +41,14 @@ export async function startServer(): Promise<string> {
       JWT_SECRET: "test-jwt-secret-for-integration-tests",
       // Do not persist auto-generated secrets into the repo .env during tests
       HSMC_DISABLE_AUTOGEN: "true",
-      // Leave HSMC_API_KEY empty so IS_DEV_MODE = true
+      // Leave HSMC_API_KEY empty so IS_DEV_MODE = true.
+      // Both values are passed explicitly because Bun auto-loads the repo's
+      // local .env, which sets NODE_ENV/HSMC_API_KEY for a real deployment —
+      // with those in effect every non-public route answers 401 and these
+      // dev-mode integration tests cannot run. Production-mode behaviour is
+      // covered separately by tests/helpers/api-server-prod.ts.
+      NODE_ENV: "test",
+      HSMC_API_KEY: "",
     };
 
     serverProcess = spawn("bun", ["run", API_SERVER_PATH], {

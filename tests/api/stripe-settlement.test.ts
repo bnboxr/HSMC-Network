@@ -73,18 +73,23 @@ describe("Stripe settlement (live-only mode — no simulation)", () => {
       expect([404, 503]).toContain(res.status);
     });
 
-    it("payout initiate returns 503", async () => {
+    it("payout initiate returns 410 — sell flow disabled", async () => {
       const res = await post("/stripe/payout", {
         action: "initiate",
         amount_usd: 100,
         user_wallet: "hsmc1qtestpayoutwallet0000000000000000000000000",
       });
-      expect(res.status).toBe(503);
+      // The sell kill-switch runs before the Stripe configuration check, so the
+      // answer is 410 Gone (sell disabled), not 503 (Stripe not configured).
+      expect(res.status).toBe(410);
       const body = await res.json();
-      expect(body.error).toBe("Stripe not configured — set STRIPE_SECRET_KEY");
+      expect(body.code).toBe("hsmcpay_sell_disabled");
+      expect(body.error).toContain("disabled");
     });
 
-    it("payout webhook returns 503", async () => {
+    // The payout webhook still fails closed on configuration (503) before the
+    // sell kill-switch: signature verification must never be skipped.
+    it("payout webhook returns 503 without Stripe configured", async () => {
       const res = await post("/stripe/payout/webhook", {
         type: "payout.paid",
         data: { object: { id: "po_1", metadata: { payout_session_id: "po_live_x" } } },
@@ -155,20 +160,25 @@ describe("Stripe settlement (live-only mode — no simulation)", () => {
       expect(body.buyback.pending_hsmc).toBeGreaterThan(0);
     });
 
-    it("executes the pending buyback", async () => {
-      const res = await post("/treasury/buyback", {});
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.success).toBe(true);
-      expect(Number(body.buyback_hsmc)).toBeGreaterThan(0);
-
-      // Executed total increases and pending decreases after the buyback.
-      const res2 = await fetch(`${BASE_URL}/treasury/balance`, {
+    it("refuses the buyback — no on-chain buyback exists (410)", async () => {
+      const before = await (await fetch(`${BASE_URL}/treasury/balance`, {
         headers: { "User-Agent": "hsmc-test/1.0" },
-      });
-      const body2 = await res2.json();
-      expect(body2.buyback.executed_hsmc).toBeGreaterThan(0);
-      expect(body2.buyback.pending_hsmc).toBeLessThan(2.4);
+      })).json();
+
+      const res = await post("/treasury/buyback", {});
+      expect(res.status).toBe(410);
+      const body = await res.json();
+      expect(body.code).toBe("treasury_buyback_disabled");
+      expect(body.error).toContain("disabled");
+      // No fabricated burn transaction hash is handed back.
+      expect(body).not.toHaveProperty("tx_hash");
+
+      // Nothing was recorded: the executed buyback total is unchanged.
+      const after = await (await fetch(`${BASE_URL}/treasury/balance`, {
+        headers: { "User-Agent": "hsmc-test/1.0" },
+      })).json();
+      expect(after.buyback.executed_hsmc).toBe(before.buyback.executed_hsmc);
+      expect(after.buyback.pending_hsmc).toBe(before.buyback.pending_hsmc);
     });
   });
 });
