@@ -810,14 +810,47 @@ pub async fn get_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::V
     }))
 }
 
+/// Canonical supply report for a chain height.
+///
+/// `total_supply` is the consensus hard cap (`hsmc_core::MAX_SUPPLY`, 500,000,000 HSMC).
+/// It is NOT a hardcoded legacy constant — the cap lives in `hsmc-core/src/block.rs` and is
+/// the same constant the supply-cap verification relies on.
+///
+/// `mined_supply` is derived from the halving schedule (50 HSMC per block, halving every
+/// 210,000 blocks), whose geometric asymptote is ~21,000,000 HSMC. With a 0 premine the
+/// mined amount is the entire emitted supply at any height.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SupplyReport {
+    pub total_supply: f64,
+    pub mined_supply: f64,
+    pub remaining_supply: f64,
+    pub circulating_percent: f64,
+}
+
+pub fn supply_report(height: u64) -> SupplyReport {
+    let total_supply = hsmc_core::MAX_SUPPLY;
+    let mined_supply = hsmc_core::mined_supply(height).min(total_supply);
+    SupplyReport {
+        total_supply,
+        mined_supply,
+        remaining_supply: (total_supply - mined_supply).max(0.0),
+        circulating_percent: if total_supply > 0.0 {
+            (mined_supply / total_supply) * 100.0
+        } else {
+            0.0
+        },
+    }
+}
+
 pub async fn get_supply(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let chain  = state.chain.read().await;
     let height = chain.height();
-    let mined: f64 = (0..=height).map(|h| hsmc_core::block_reward(h)).sum();
-    let total = 1_000_000_000_000.0f64; // 1 TRILLION HSMC
+    let report = supply_report(height);
+    let mined = report.mined_supply;
+    let total = report.total_supply;
     let halvings = height / 210_000;
     let next_halving = (halvings + 1) * 210_000;
-    let circulating_pct = (mined / total) * 100.0;
+    let circulating_pct = report.circulating_percent;
 
     // Burned/locked estimate — confirmed blocks only store tx hashes, so bridge
     // locks are measured from UTXOs held by bridge addresses.
@@ -2143,4 +2176,86 @@ fn hex_to_fixed64(hex_str: &str) -> Result<[u8; 64], String> {
     let mut sig = [0u8; 64];
     sig.copy_from_slice(&bytes);
     Ok(sig)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TESTS — supply reporting must match the real economics
+// ═══════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod supply_report_tests {
+    use super::supply_report;
+    use hsmc_core::{HALVING_INTERVAL, INITIAL_REWARD, MAX_SUPPLY};
+
+    /// The old handler hardcoded 1e12 (a legacy trillion-token figure) as total supply.
+    /// The reported cap must be the consensus constant, and never the old value.
+    #[test]
+    fn reported_total_supply_is_the_hard_cap_not_one_trillion() {
+        for height in [0u64, 1, 210_000, 5_000_000, 100_000_000] {
+            let report = supply_report(height);
+            assert_eq!(
+                report.total_supply, MAX_SUPPLY,
+                "cap must equal consensus MAX_SUPPLY"
+            );
+            assert_eq!(report.total_supply, 500_000_000.0, "hard cap is 500M HSMC");
+            assert!(
+                report.total_supply <= 500_000_000.0,
+                "reported cap must be <= 500M"
+            );
+            assert!(
+                (report.total_supply - 1_000_000_000_000.0).abs() > 1.0,
+                "reported cap must not be the old 1-trillion constant"
+            );
+        }
+    }
+
+    /// Mined supply comes from the halving schedule, not from a constant.
+    #[test]
+    fn mined_supply_follows_the_halving_schedule() {
+        assert_eq!(supply_report(0).mined_supply, INITIAL_REWARD); // 50 HSMC
+        assert_eq!(
+            supply_report(HALVING_INTERVAL - 1).mined_supply,
+            INITIAL_REWARD * HALVING_INTERVAL as f64
+        ); // 10,500,000 HSMC after epoch 0
+        assert_eq!(
+            supply_report(2 * HALVING_INTERVAL - 1).mined_supply,
+            15_750_000.0
+        ); // + 5,250,000 HSMC in epoch 1
+    }
+
+    /// The geometric series asymptotes at ~21M HSMC — far below the 500M cap.
+    #[test]
+    fn mined_supply_asymptote_is_about_21_million() {
+        let report = supply_report(10_000_000);
+        assert!(
+            (report.mined_supply - 21_000_000.0).abs() < 1_000.0,
+            "asymptote should be ~21M, got {}",
+            report.mined_supply
+        );
+        assert!(report.mined_supply < report.total_supply);
+        assert!(report.circulating_percent < 100.0);
+    }
+
+    /// Invariants that must hold at any height, including absurd ones.
+    #[test]
+    fn supply_invariants_hold_at_every_height() {
+        for height in [
+            0u64,
+            1,
+            209_999,
+            210_000,
+            419_999,
+            u32::MAX as u64,
+            u64::MAX / 4,
+        ] {
+            let report = supply_report(height);
+            assert!(report.total_supply <= 500_000_000.0);
+            assert!(report.mined_supply <= report.total_supply);
+            assert!(report.remaining_supply >= 0.0);
+            assert!(
+                (report.mined_supply + report.remaining_supply - report.total_supply).abs() < 1e-6
+            );
+            assert!((0.0..=100.0).contains(&report.circulating_percent));
+        }
+    }
 }

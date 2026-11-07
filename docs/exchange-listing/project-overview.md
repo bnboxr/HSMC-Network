@@ -77,14 +77,14 @@ HSMC is developed by a distributed team of blockchain engineers, cryptographers,
 
 | Resource | URL |
 |----------|-----|
-| Website | https://hsmc.network |
+| Website | TBD |
 | GitHub | https://github.com/bnboxr/HSMC-Network |
-| Whitepaper | https://hsmc.network/whitepaper |
-| Explorer | https://hsmc.network/explorer |
-| Documentation | https://hsmc.network/docs |
+| Whitepaper | TBD |
+| Explorer | TBD |
+| Documentation | TBD |
 
 ---
 
 ## Contact
 
-For listing inquiries, please contact: **listings@hsmc.network**
+For listing inquiries, please contact: **TBD (no project mailbox is registered yet)**

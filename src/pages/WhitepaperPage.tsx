@@ -10,13 +10,16 @@ import Navbar from '@/components/Navbar';
 import hsmcLogo from '@/assets/hsmc-logo.png';
 import { SEO } from '@/components/SEO';
 
-// Aligned with real on-chain supply: 1,000,000,000,000 HSMC (1 trillion)
+// Hard cap is enforced on-chain: MAX_SUPPLY = 500,000,000 HSMC (rust-node/hsmc-core/src/block.rs).
+// 0 premine — every HSMC in existence is mined. The split below is a planned distribution of the
+// cap and is NOT yet enacted on-chain; effective mined supply follows the halving schedule
+// (50 HSMC/block, halving every 210,000 blocks) and asymptotes at ~21,000,000 HSMC.
 const TOKENOMICS = [
-  { label: 'Mining Rewards', percent: 40, color: 'bg-primary', amount: '400,000,000,000' },
-  { label: 'Ecosystem Fund', percent: 20, color: 'bg-secondary', amount: '200,000,000,000' },
-  { label: 'Team & Advisors', percent: 15, color: 'bg-accent', amount: '150,000,000,000' },
-  { label: 'Public Sale', percent: 15, color: 'bg-primary/60', amount: '150,000,000,000' },
-  { label: 'Reserve', percent: 10, color: 'bg-muted-foreground/60', amount: '100,000,000,000' },
+  { label: 'Mining Rewards (planned)', percent: 40, color: 'bg-primary', amount: '200,000,000' },
+  { label: 'Ecosystem Fund (planned)', percent: 20, color: 'bg-secondary', amount: '100,000,000' },
+  { label: 'Team & Advisors (planned)', percent: 15, color: 'bg-accent', amount: '75,000,000' },
+  { label: 'Public Sale (planned)', percent: 15, color: 'bg-primary/60', amount: '75,000,000' },
+  { label: 'Reserve (planned)', percent: 10, color: 'bg-muted-foreground/60', amount: '50,000,000' },
 ];
 
 const ROADMAP = [
@@ -45,7 +48,7 @@ const ROADMAP = [
 const SPECS = [
   { label: 'Consensus', value: 'SHA-256d Proof-of-Work', icon: Cpu },
   { label: 'Block Time', value: '~120 seconds', icon: Activity },
-  { label: 'Total Supply', value: '1,000,000,000,000 HSMC', icon: Coins },
+  { label: 'Max Supply (hard cap)', value: '500,000,000 HSMC', icon: Coins },
   { label: 'Block Reward', value: '50 HSMC (halving every 210,000 blocks)', icon: TrendingUp },
   { label: 'Privacy Protocol', value: 'RingCT v2 + Stealth Addresses + Bulletproofs', icon: Shield },
   { label: 'Ring Size', value: '11–16 (configurable)', icon: Key },
@@ -131,7 +134,7 @@ export default function WhitepaperPage() {
 
     addLine('HSMC NETWORK', 22, true, [255, 255, 255]);
     addLine('WHITEPAPER v1.0 — March 2026', 11, false, [200, 180, 255]);
-    addLine('hsmc.network  |  Chain ID: 7777', 9, false, [160, 140, 220]);
+    addLine('hsmc.network  |  Chain ID: 8888', 9, false, [160, 140, 220]);
     y += 6;
 
     addSection('ABSTRACT');
@@ -141,24 +144,29 @@ export default function WhitepaperPage() {
     [
       ['Consensus', 'SHA-256d Proof-of-Work'],
       ['Block Time', '~120 seconds'],
-      ['Total Supply', '1,000,000,000,000 HSMC'],
+      ['Max Supply (hard cap)', '500,000,000 HSMC'],
+      ['Effective Mined Supply', '~21,000,000 HSMC (halving asymptote)'],
+      ['Premine', '0 — fair launch via PoW'],
       ['Block Reward', '50 HSMC (halving every 210,000 blocks)'],
       ['Privacy Protocol', 'RingCT v2 + Stealth Addresses + Bulletproofs'],
       ['Ring Size', '11–16 (configurable per transaction)'],
       ['P2P Network', 'Dandelion++ (IP masking)'],
       ['Algorithm', 'SHA-256d PoW + ECDSA P-256 signatures'],
-      ['Chain ID', '7777'],
+      ['Chain ID', '8888'],
     ].forEach(([k, v]) => {
       addLine(`  ${k}: ${v}`, 9, false, [180, 220, 180]);
     });
 
-    addSection('TOKEN ALLOCATION (1,000,000,000,000 HSMC — 1 TRILLION)');
+    addSection('SUPPLY & PLANNED ALLOCATION (500,000,000 HSMC HARD CAP)');
+    addLine('  Hard cap: 500,000,000 HSMC (MAX_SUPPLY, enforced by consensus). Premine: 0 — fair launch via PoW.', 9);
+    addLine('  Effective mined supply: ~21,000,000 HSMC (asymptote of the halving series, not the cap).', 9);
+    addLine('  The percentages below are a planned distribution of the cap and are NOT yet enacted on-chain.', 9);
     [
-      ['Mining Rewards', '40%', '400,000,000,000 HSMC — distributed over ~200 years via halving'],
-      ['Ecosystem Fund', '20%', '200,000,000,000 HSMC — grants, partnerships, developer bounties'],
-      ['Team & Advisors', '15%', '150,000,000,000 HSMC — 2-year vesting, 6-month cliff'],
-      ['Public Sale', '15%', '150,000,000,000 HSMC — ICO / DEX listing'],
-      ['Reserve', '10%', '100,000,000,000 HSMC — emergency fund & CEX listings'],
+      ['Mining Rewards', '40%', '200,000,000 HSMC — planned, distributed via the halving schedule'],
+      ['Ecosystem Fund', '20%', '100,000,000 HSMC — planned: grants, partnerships, developer bounties'],
+      ['Team & Advisors', '15%', '75,000,000 HSMC — planned: 2-year vesting, 6-month cliff'],
+      ['Public Sale', '15%', '75,000,000 HSMC — planned, not yet held'],
+      ['Reserve', '10%', '50,000,000 HSMC — planned: emergency fund & CEX listings'],
     ].forEach(([cat, pct, desc]) => {
       addLine(`  ${pct}  ${cat}`, 9, true, [200, 160, 255]);
       addLine(`        ${desc}`, 8, false, [160, 160, 200]);
@@ -346,8 +354,8 @@ export default function WhitepaperPage() {
         <div className="container mx-auto px-4 py-6">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-4xl mx-auto">
             {[
-              { label: 'Total Supply', value: '1T HSMC' },
-              { label: 'Chain ID', value: '7777' },
+              { label: 'Max Supply', value: '500M HSMC' },
+              { label: 'Chain ID', value: '8888' },
               { label: 'Block Time', value: '~120s' },
               { label: 'Privacy', value: 'RingCT v2' },
             ].map((s) => (
@@ -479,12 +487,12 @@ export default function WhitepaperPage() {
             <div className="max-w-3xl mx-auto glass-panel p-8 border border-primary/20">
               <div className="flex items-center justify-between mb-8">
                 <div>
-                  <div className="text-4xl font-black gradient-text">1,000,000,000,000</div>
-                  <div className="text-muted-foreground text-sm mt-1">Total HSMC Supply (1 Trillion)</div>
+                  <div className="text-4xl font-black gradient-text">500,000,000</div>
+                  <div className="text-muted-foreground text-sm mt-1">HSMC Hard Cap · ~21,000,000 Mined</div>
                 </div>
                 <div className="text-right">
-                  <div className="text-2xl font-bold text-secondary">~200 Years</div>
-                  <div className="text-muted-foreground text-sm mt-1">Mining Distribution</div>
+                  <div className="text-2xl font-bold text-secondary">0 Premine</div>
+                  <div className="text-muted-foreground text-sm mt-1">Fair Launch via PoW</div>
                 </div>
               </div>
               <div className="space-y-4">

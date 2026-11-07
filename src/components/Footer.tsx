@@ -23,7 +23,7 @@ const footerLinks = {
     { name: 'Bridge Docs', href: '/whitepaper#bridge', external: false },
   ],
   community: [
-    { name: 'GitHub', href: 'https://github.com/XMC-OXR', external: true },
+    { name: 'GitHub', href: 'https://github.com/bnboxr', external: true },
     { name: 'Email', href: 'mailto:contact@hsmc.io', external: true },
   ],
   company: [
@@ -35,7 +35,7 @@ const footerLinks = {
 };
 
 const socialLinks = [
-  { icon: Github, href: 'https://github.com/XMC-OXR', label: 'GitHub' },
+  { icon: Github, href: 'https://github.com/bnboxr', label: 'GitHub' },
   { icon: Mail, href: 'mailto:contact@hsmc.io', label: 'Email' },
 ];
 

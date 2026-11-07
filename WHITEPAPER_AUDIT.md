@@ -13,7 +13,7 @@ Legend: ✅ implemented & real · 🟡 partial / mock-adjacent · ❌ claimed in
 | Proof-of-Work with RandomX-like memory-hard hashing | `rust-node/hsmc-crypto/src/pow.rs` implements a Keccak-based PoW, NOT RandomX. Difficulty adjust is `Math.max(1, floor(dbDifficulty/2_000_000))` — a scaled placeholder. | 🟡 |
 | Stratum V2 mining protocol | `rust-node/hsmc-stratum/*` present, but only Stratum V1 handshake wired end-to-end. Noise/AEAD channel encryption of V2 is NOT implemented. | 🟡 |
 | Blocks produced organically only when miners submit valid shares | ✅ `blockchain-engine` edge function no longer auto-mints; `check_block_miner_is_real` trigger enforces the miner address exists. | ✅ |
-| 1 Trillion HSMC total supply, launch price $0.045 with $1 floor for testing | Values are enforced in `token_metrics` + `sync_price_from_pools()`. | ✅ |
+| 500,000,000 HSMC hard cap (`MAX_SUPPLY` in `rust-node/hsmc-core/src/block.rs`), 0 premine, ~21,000,000 effective mined supply from the halving schedule; launch price $0.045 with $1 floor for testing | The 500M cap is enforced by consensus (`block.rs:42`); the launch price / $1 floor test values live in `token_metrics` + `sync_price_from_pools()`. The legacy `token_metrics.total_supply` row still carried a 1-trillion-token value until this pass. | 🟡 |
 
 ---
 
