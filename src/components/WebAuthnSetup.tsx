@@ -68,8 +68,11 @@ const WebAuthnSetup = ({ userId }: WebAuthnSetupProps) => {
   const getChallenge = async (): Promise<string> => {
     const res = await fetch(`${API_BASE}/auth/webauthn/challenge`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
+      headers: {
+        'Content-Type': 'application/json',
+        ...(getSessionToken() ? { Authorization: `Bearer ${getSessionToken()}` } : {}),
+      },
+      body: JSON.stringify({}),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'Failed to get challenge' }));
@@ -138,7 +141,10 @@ const WebAuthnSetup = ({ userId }: WebAuthnSetupProps) => {
       // 3. Send to server
       const registerRes = await fetch(`${API_BASE}/auth/webauthn/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getSessionToken() ? { Authorization: `Bearer ${getSessionToken()}` } : {}),
+        },
         body: JSON.stringify({
           credential: {
             id: credential.id,
@@ -149,7 +155,6 @@ const WebAuthnSetup = ({ userId }: WebAuthnSetupProps) => {
             },
             type: credential.type,
           },
-          userId,
           deviceName,
         }),
       });
@@ -183,9 +188,11 @@ const WebAuthnSetup = ({ userId }: WebAuthnSetupProps) => {
     try {
       const res = await fetch(`${API_BASE}/auth/webauthn/unregister`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getSessionToken() ? { Authorization: `Bearer ${getSessionToken()}` } : {}),
+        },
         body: JSON.stringify({
-          userId,
           credentialId: credentialId || undefined,
         }),
       });

@@ -54,7 +54,8 @@ const WebAuthnLogin = ({ onSuccess, className }: WebAuthnLoginProps) => {
     const res = await fetch(`${API_BASE}/auth/webauthn/challenge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: 'login' }),
+      // Public login flow (no session JWT) — server issues a login-purpose challenge
+      body: JSON.stringify({}),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'Failed to get challenge' }));

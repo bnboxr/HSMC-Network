@@ -598,7 +598,13 @@ function checkApiKey(req: Request): boolean {
 // NOTE: /node-proxy is intentionally NOT in PUBLIC_PATHS. It is reachable
 // anonymously only in dev mode (checkApiKey short-circuits on IS_DEV_MODE); in
 // production it requires x-api-key like every other non-public route (sec review G6).
-const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/register", "/auth/webauthn/challenge", "/stripe/webhook"]);
+// SECURITY P0-2: /auth/webauthn/login must stay public (it IS authentication).
+// /auth/webauthn/challenge stays listed so the biometric LOGIN flow can obtain a
+// challenge without a session — but its handler enforces auth: a valid JWT is
+// required to mint a REGISTRATION challenge (bound to the JWT subject) and a
+// userId from the body is never accepted. /auth/webauthn/register is no longer
+// public; register and unregister also require a valid JWT inside the handler.
+const PUBLIC_PATHS = new Set(["/health", "/", "/auth/login", "/auth/register", "/auth/webauthn/login", "/auth/webauthn/challenge", "/stripe/webhook"]);
 
 function isPublicPath(path: string): boolean {
   return PUBLIC_PATHS.has(path) || path === "/explorer/stats" || path === "/explorer/blocks" || path === "/explorer/transactions" || path === "/explorer/search" || path.startsWith("/explorer/block/") || path.startsWith("/explorer/transaction/");
@@ -2593,10 +2599,21 @@ function handleTreasuryTransactions(req: Request): Response {
 
 // ── WebAuthn Challenge Store ─────────────────────────────────────────────────
 const CHALLENGE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const challengeStore = new Map<string, { challenge: string; userId: string; createdAt: number }>();
+// SECURITY P0-2: challenges are one-time-use, expire after 5 minutes, and carry
+// the userId (and optionally credentialId) they were issued for, plus a purpose
+// flag so a login challenge can never be replayed into registration.
+type WebAuthnChallengePurpose = "register" | "login";
+interface WebAuthnChallengeEntry {
+  challenge: string;
+  userId: string | null;
+  credentialId: string | null;
+  purpose: WebAuthnChallengePurpose;
+  createdAt: number;
+}
+const challengeStore = new Map<string, WebAuthnChallengeEntry>();
 
-function storeChallenge(userId: string, challenge: string): void {
-  challengeStore.set(challenge, { challenge, userId, createdAt: Date.now() });
+function storeChallenge(userId: string | null, challenge: string, purpose: WebAuthnChallengePurpose, credentialId?: string): void {
+  challengeStore.set(challenge, { challenge, userId, credentialId: credentialId || null, purpose, createdAt: Date.now() });
   // Clean expired challenges periodically
   if (challengeStore.size > 1000) {
     const now = Date.now();
@@ -2606,7 +2623,8 @@ function storeChallenge(userId: string, challenge: string): void {
   }
 }
 
-function consumeChallenge(challenge: string): { userId: string } | null {
+/** One-time challenge consumption. Returns null when unknown or expired. */
+function consumeChallenge(challenge: string): Pick<WebAuthnChallengeEntry, "userId" | "credentialId" | "purpose"> | null {
   const entry = challengeStore.get(challenge);
   if (!entry) return null;
   if (Date.now() - entry.createdAt > CHALLENGE_TTL_MS) {
@@ -2614,7 +2632,61 @@ function consumeChallenge(challenge: string): { userId: string } | null {
     return null;
   }
   challengeStore.delete(challenge);
-  return { userId: entry.userId };
+  return { userId: entry.userId, credentialId: entry.credentialId, purpose: entry.purpose };
+}
+
+// SECURITY P0-2: allow-list of origins the SPA is served from. clientDataJSON
+// origins outside this list are rejected (phishing-origin mitigation). Both
+// production frontends are covered; the SPA presents rp.id = window.location
+// .hostname, so the RP ID is the hostname of the verified origin.
+const WEBAUTHN_ALLOWED_ORIGINS: ReadonlySet<string> = new Set([
+  "https://hsmc-network.ctonew.app",
+  "https://8af12238bf3efd5d279c4782f1645517.ctonew.app",
+]);
+
+/** Constant-time-ish byte comparison for rpIdHash checks. */
+function bufsEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/**
+ * SECURITY P0-2: verify WebAuthn clientData. Returns the parsed clientData on
+ * success or null otherwise. Enforces: (1) operation type matches
+ * (webauthn.create / webauthn.get), (2) origin is on the allow-list, and
+ * (3) the rpIdHash embedded in authenticatorData equals SHA-256 of the RP ID
+ * hostname derived from that origin.
+ */
+async function verifyWebAuthnClientData(
+  clientDataJSON: Uint8Array,
+  expectedType: "webauthn.create" | "webauthn.get",
+  authenticatorData: Uint8Array
+): Promise<{ challenge: string; origin: string; type: string } | null> {
+  let clientData: { challenge?: string; type?: string; origin?: string };
+  try {
+    clientData = JSON.parse(new TextDecoder().decode(clientDataJSON));
+  } catch {
+    return null;
+  }
+  if (!clientData || clientData.type !== expectedType || typeof clientData.challenge !== "string" || typeof clientData.origin !== "string") {
+    return null;
+  }
+  if (!WEBAUTHN_ALLOWED_ORIGINS.has(clientData.origin)) return null;
+  if (authenticatorData.length < 32) return null;
+  const rpIdHash = authenticatorData.subarray(0, 32);
+  let host: string;
+  try {
+    host = new URL(clientData.origin).hostname;
+  } catch {
+    return null;
+  }
+  const expectedHash = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(host))
+  );
+  if (!bufsEqual(rpIdHash, expectedHash)) return null;
+  return { challenge: clientData.challenge, origin: clientData.origin, type: clientData.type };
 }
 
 // ── Minimal CBOR Parser (for WebAuthn attestationObject) ─────────────────────
@@ -2755,33 +2827,60 @@ function parseCosePublicKey(authData: Uint8Array): ParsedPublicKey | null {
 }
 
 // ── Convert raw P-256 public key (x || y, 64 bytes) to SPKI DER ────────────
+// SECURITY P0-2 (D2): SubjectPublicKeyInfo needs a real BIT STRING (tag 0x03,
+// length 0x42, one unused-bits byte 0x00). The previous version wrote the BIT
+// STRING *contents* only, producing an 89-byte blob that Web Crypto's
+// importKey("spki", ...) rejects — which broke every biometric login. The
+// correct encoding is 91 bytes:
+//   30 59  30 13  06 07 2A 86 48 CE 3D 02 01  06 08 2A 86 48 CE 3D 03 01 07
+//   03 42 00  04 || X || Y
+const P256_SPKI_PREFIX = new Uint8Array([
+  0x30, 0x59, // SEQUENCE, 89 content bytes
+  0x30, 0x13, // SEQUENCE, 19 content bytes (AlgorithmIdentifier)
+  0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, // OID 1.2.840.10045.2.1  (ecPublicKey)
+  0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, // OID 1.2.840.10045.3.1.7 (prime256v1)
+  0x03, 0x42, 0x00, // BIT STRING, 66 content bytes, 0 unused bits
+  0x04, // uncompressed point marker
+]);
+
+/** Left-pad (or trim leading zeros from) a P-256 coordinate to exactly 32 bytes. */
+function normalizeP256Coord(v: Uint8Array): Uint8Array {
+  const out = new Uint8Array(32);
+  if (v.length >= 32) out.set(v.subarray(v.length - 32), 0);
+  else out.set(v, 32 - v.length);
+  return out;
+}
+
 function rawP256ToSpki(x: Uint8Array, y: Uint8Array): Uint8Array {
-  // Uncompressed point: 04 || x || y
-  const point = new Uint8Array(65);
-  point[0] = 0x04;
-  point.set(x, 1);
-  point.set(y, 33);
-
-  // SPKI DER for P-256: SEQUENCE { SEQUENCE { OID 1.2.840.10045.2.1 (ecPublicKey), OID 1.2.840.10045.3.1.7 (P-256) }, BIT STRING uncompressed point }
-  const ecPublicKeyOid = new Uint8Array([0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]); // 1.2.840.10045.2.1
-  const p256Oid = new Uint8Array([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]); // 1.2.840.10045.3.1.7
-  const algorithmSeq = new Uint8Array(ecPublicKeyOid.length + p256Oid.length + 2);
-  algorithmSeq[0] = 0x30; algorithmSeq[1] = ecPublicKeyOid.length + p256Oid.length;
-  algorithmSeq.set(ecPublicKeyOid, 2);
-  algorithmSeq.set(p256Oid, 2 + ecPublicKeyOid.length);
-
-  // BIT STRING with 1 unused bit byte
-  const bitString = new Uint8Array(point.length + 1);
-  bitString[0] = 0x00; // 0 unused bits
-  bitString.set(point, 1);
-
-  const totalLen = algorithmSeq.length + bitString.length;
-  const spki = new Uint8Array(totalLen + 2);
-  spki[0] = 0x30; spki[1] = totalLen;
-  spki.set(algorithmSeq, 2);
-  spki.set(bitString, 2 + algorithmSeq.length);
-
+  const spki = new Uint8Array(P256_SPKI_PREFIX.length + 64); // 91 bytes
+  spki.set(P256_SPKI_PREFIX, 0);
+  spki.set(normalizeP256Coord(x), P256_SPKI_PREFIX.length);
+  spki.set(normalizeP256Coord(y), P256_SPKI_PREFIX.length + 32);
   return spki;
+}
+
+// The malformed 89-byte form emitted by the pre-fix rawP256ToSpki: the BIT
+// STRING contents written without their 0x03 0x42 header (note 30 57 / 00 04).
+const LEGACY_P256_SPKI_PREFIX = new Uint8Array([
+  0x30, 0x57,
+  0x30, 0x13,
+  0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
+  0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,
+  0x00, 0x04,
+]);
+
+/**
+ * Rebuild a legacy 89-byte (malformed) P-256 SPKI into correct 91-byte DER,
+ * using the very same EC point. Returns null when the input is anything other
+ * than the legacy form, so well-formed keys are never rewritten.
+ */
+function repairLegacyP256Spki(der: Uint8Array): Uint8Array | null {
+  if (der.length !== LEGACY_P256_SPKI_PREFIX.length + 64) return null; // 25 + 64 = 89
+  for (let i = 0; i < LEGACY_P256_SPKI_PREFIX.length; i++) {
+    if (der[i] !== LEGACY_P256_SPKI_PREFIX[i]) return null;
+  }
+  const off = LEGACY_P256_SPKI_PREFIX.length; // X at off..off+32, Y at off+32..off+64
+  return rawP256ToSpki(der.subarray(off, off + 32), der.subarray(off + 32, off + 64));
 }
 
 // ── DER ECDSA signature to raw (r||s) for Web Crypto ────────────────────────
@@ -2835,8 +2934,9 @@ async function handleWebAuthnRegister(req: Request): Promise<Response> {
       response?: { attestationObject?: string; clientDataJSON?: string };
       type?: string;
     };
-    userId?: string;
     deviceName?: string;
+    // SECURITY P0-2: NO userId field anymore — the credential owner is always
+    // the JWT subject and a body-supplied userId is ignored.
   };
   try {
     body = await req.json();
@@ -2845,21 +2945,23 @@ async function handleWebAuthnRegister(req: Request): Promise<Response> {
   }
 
   const cred = body.credential;
-  const userId = body.userId;
   const deviceName = body.deviceName || "Unknown Device";
 
+  // SECURITY P0-2: a valid session JWT is required and the credential is ALWAYS
+  // bound to the JWT subject — a userId from the request body is ignored.
+  const ownerUserId = await extractJWTUser(req);
+  if (!ownerUserId) {
+    return errorResponse("Unauthorized - a valid session JWT is required to register a biometric credential", 401);
+  }
   if (!cred || !cred.id || !cred.response?.attestationObject || !cred.response?.clientDataJSON) {
     return errorResponse("credential.id, attestationObject, and clientDataJSON are required", 400);
-  }
-  if (!userId) {
-    return errorResponse("userId is required", 400);
   }
   if (cred.type !== "public-key") {
     return errorResponse("credential.type must be 'public-key'", 400);
   }
 
-  // Verify user exists
-  const user = db.query("SELECT id FROM users WHERE id = ?").get(userId) as { id: string } | null;
+  // Verify the authenticated user exists
+  const user = db.query("SELECT id FROM users WHERE id = ?").get(ownerUserId) as { id: string } | null;
   if (!user) {
     return errorResponse("User not found", 404);
   }
@@ -2887,8 +2989,21 @@ async function handleWebAuthnRegister(req: Request): Promise<Response> {
 
   const authData = authDataField.value;
 
-  // Verify rpIdHash (first 32 bytes of authData)
-  // In production we'd verify against the RP ID, but we accept any valid authData
+  // SECURITY P0-2: verify clientData provenance — origin allow-list, operation
+  // type webauthn.create, and rpIdHash must equal SHA-256 of the RP ID hostname
+  // of the verified origin — BEFORE accepting the credential. This blocks a
+  // phishing origin from registering credentials against victim accounts.
+  let clientDataJSON: Uint8Array;
+  try {
+    const clientDataB64 = cred.response.clientDataJSON.replace(/-/g, "+").replace(/_/g, "/");
+    clientDataJSON = new Uint8Array(Buffer.from(clientDataB64, "base64"));
+  } catch {
+    return errorResponse("Invalid clientDataJSON base64 encoding", 400);
+  }
+  const clientData = await verifyWebAuthnClientData(clientDataJSON, "webauthn.create", authData);
+  if (!clientData) {
+    return errorResponse("Rejected WebAuthn clientData: origin not allowed, wrong operation type, or rpIdHash mismatch", 400);
+  }
 
   // Parse public key from authData
   const parsedKey = parseCosePublicKey(authData);
@@ -2900,52 +3015,45 @@ async function handleWebAuthnRegister(req: Request): Promise<Response> {
   const spki = rawP256ToSpki(parsedKey.x, parsedKey.y);
   const publicKeyBase64 = Buffer.from(spki).toString("base64");
 
-  // Decode clientDataJSON to verify challenge
-  const clientDataB64 = cred.response.clientDataJSON.replace(/-/g, "+").replace(/_/g, "/");
-  let clientDataJson: string;
-  try {
-    clientDataJson = Buffer.from(clientDataB64, "base64").toString("utf-8");
-  } catch {
-    return errorResponse("Invalid clientDataJSON base64 encoding", 400);
-  }
-
-  let clientData: { challenge?: string; type?: string; origin?: string };
-  try {
-    clientData = JSON.parse(clientDataJson);
-  } catch {
-    return errorResponse("Invalid clientDataJSON format", 400);
-  }
-
-  // Verify challenge (anti-replay)
-  if (!clientData.challenge) {
-    return errorResponse("Missing challenge in clientDataJSON", 400);
-  }
-
+  // Verify challenge (anti-replay): one-time use, must be a REGISTER challenge,
+  // and must have been issued to the SAME authenticated user (JWT subject).
   const consumed = consumeChallenge(clientData.challenge);
   if (!consumed) {
     return errorResponse("Invalid or expired challenge", 400);
   }
-
-  if (consumed.userId !== userId) {
-    return errorResponse("Challenge does not match user", 400);
+  if (consumed.purpose !== "register") {
+    return errorResponse("Challenge was not issued for credential registration", 400);
+  }
+  if (!consumed.userId || consumed.userId !== ownerUserId) {
+    return errorResponse("Challenge does not match the authenticated user", 400);
   }
 
   // Store credential
   const now = new Date().toISOString();
   const credentialId = cred.id;
 
-  // Check for duplicate
-  const existing = db.query("SELECT id FROM webauthn_credentials WHERE id = ?").get(credentialId) as { id: string } | null;
+  // SECURITY P0-2 (D1): the duplicate lookup AND the update are scoped to the
+  // authenticated subject. A credential id that already belongs to ANOTHER
+  // account is refused outright (409) and its row is left completely untouched
+  // — otherwise an authenticated attacker could park their own public key on a
+  // victim's credential row and then log in as the victim with it. Re-registering
+  // a credential the caller already owns (device re-enrolment) still updates it.
+  const existing = db.query(
+    "SELECT id, user_id FROM webauthn_credentials WHERE id = ?"
+  ).get(credentialId) as { id: string; user_id: string } | null;
+  if (existing && existing.user_id !== ownerUserId) {
+    return errorResponse("Credential id is already registered to another account", 409);
+  }
   if (existing) {
-    // Update existing
+    // Legitimate same-owner re-registration — refresh the stored key material.
     db.run(
-      "UPDATE webauthn_credentials SET public_key = ?, device_name = ?, last_used_at = ? WHERE id = ?",
-      publicKeyBase64, deviceName, now, credentialId
+      "UPDATE webauthn_credentials SET public_key = ?, device_name = ?, last_used_at = ? WHERE id = ? AND user_id = ?",
+      publicKeyBase64, deviceName, now, credentialId, ownerUserId
     );
   } else {
     db.run(
       "INSERT INTO webauthn_credentials (id, user_id, public_key, created_at, last_used_at, device_name) VALUES (?, ?, ?, ?, ?, ?)",
-      credentialId, userId, publicKeyBase64, now, now, deviceName
+      credentialId, ownerUserId, publicKeyBase64, now, now, deviceName
     );
   }
 
@@ -2995,27 +3103,47 @@ async function handleWebAuthnLogin(req: Request): Promise<Response> {
     return errorResponse("Invalid base64url encoding in credential fields", 400);
   }
 
-  // Verify challenge
-  let clientData: { challenge?: string; type?: string };
-  try {
-    clientData = JSON.parse(new TextDecoder().decode(clientDataJSON));
-  } catch {
-    return errorResponse("Invalid clientDataJSON format", 400);
+  // SECURITY P0-2: verify clientData provenance — origin allow-list, operation
+  // type webauthn.get, and rpIdHash must equal SHA-256 of the RP ID hostname of
+  // the verified origin. A phishing origin cannot replay a captured assertion.
+  const clientData = await verifyWebAuthnClientData(clientDataJSON, "webauthn.get", authenticatorData);
+  if (!clientData) {
+    return errorResponse("Rejected WebAuthn clientData: origin not allowed, wrong operation type, or rpIdHash mismatch", 401);
   }
 
-  if (!clientData.challenge) {
-    return errorResponse("Missing challenge in clientDataJSON", 400);
-  }
-
+  // Verify challenge (anti-replay): one-time use, and must be a LOGIN challenge.
   const consumed = consumeChallenge(clientData.challenge);
   if (!consumed) {
     return errorResponse("Invalid or expired challenge", 400);
   }
+  if (consumed.purpose !== "login") {
+    return errorResponse("Challenge was not issued for login", 401);
+  }
 
-  // Find credential in DB
-  const storedCred = db.query(
-    "SELECT * FROM webauthn_credentials WHERE id = ?"
-  ).get(cred.id) as { id: string; user_id: string; public_key: string } | null;
+  // Honor a client-supplied userHandle (the id the credential was registered
+  // under) as an additional user_id constraint when present.
+  let claimedUserId = consumed.userId || null;
+  if (cred.response.userHandle) {
+    try {
+      claimedUserId = new TextDecoder().decode(decodeB64u(cred.response.userHandle)) || claimedUserId;
+    } catch {
+      // ignore malformed userHandle — fall back to the challenge binding
+    }
+  }
+
+  // Find credential in DB — SECURITY P0-2: bound by user_id whenever the
+  // challenge or userHandle carried one, so a credential can never be used to
+  // authenticate as an account other than the one it was registered to.
+  let storedCred: { id: string; user_id: string; public_key: string } | null;
+  if (claimedUserId) {
+    storedCred = db.query(
+      "SELECT * FROM webauthn_credentials WHERE id = ? AND user_id = ?"
+    ).get(cred.id, claimedUserId) as { id: string; user_id: string; public_key: string } | null;
+  } else {
+    storedCred = db.query(
+      "SELECT * FROM webauthn_credentials WHERE id = ?"
+    ).get(cred.id) as { id: string; user_id: string; public_key: string } | null;
+  }
 
   if (!storedCred) {
     return errorResponse("Credential not found. Register first.", 404);
@@ -3028,6 +3156,13 @@ async function handleWebAuthnLogin(req: Request): Promise<Response> {
   } catch {
     return errorResponse("Stored public key is invalid", 500);
   }
+
+  // SECURITY P0-2 (D2): rows written before the SPKI fix store the legacy
+  // 89-byte malformed DER. Rebuild the correct 91-byte SubjectPublicKeyInfo
+  // from the same EC point so existing enrolments keep working; the repaired
+  // value is persisted once the assertion has actually verified.
+  const repairedSpki = repairLegacyP256Spki(publicKeySpki);
+  const verificationSpki = repairedSpki ?? publicKeySpki;
 
   // Verify signature: signed data = authenticatorData || SHA-256(clientDataJSON)
   const clientDataHash = new Uint8Array(
@@ -3048,7 +3183,7 @@ async function handleWebAuthnLogin(req: Request): Promise<Response> {
   try {
     cryptoKey = await crypto.subtle.importKey(
       "spki",
-      publicKeySpki,
+      verificationSpki,
       { name: "ECDSA", namedCurve: "P-256" },
       false,
       ["verify"]
@@ -3074,9 +3209,20 @@ async function handleWebAuthnLogin(req: Request): Promise<Response> {
     return errorResponse("Invalid signature", 401);
   }
 
-  // Update last_used_at
+  // Update last_used_at (scoped to the owner we just authenticated against),
+  // and migrate a legacy malformed SPKI to the correct DER in place.
   const now = new Date().toISOString();
-  db.run("UPDATE webauthn_credentials SET last_used_at = ? WHERE id = ?", now, cred.id);
+  if (repairedSpki) {
+    db.run(
+      "UPDATE webauthn_credentials SET last_used_at = ?, public_key = ? WHERE id = ? AND user_id = ?",
+      now, Buffer.from(repairedSpki).toString("base64"), cred.id, storedCred.user_id
+    );
+  } else {
+    db.run(
+      "UPDATE webauthn_credentials SET last_used_at = ? WHERE id = ? AND user_id = ?",
+      now, cred.id, storedCred.user_id
+    );
+  }
 
   // Get user info and issue JWT
   const user = db.query("SELECT id, email, created_at FROM users WHERE id = ?").get(storedCred.user_id) as {
@@ -3101,49 +3247,82 @@ async function handleWebAuthnLogin(req: Request): Promise<Response> {
 
 /** POST /auth/webauthn/unregister — remove biometric credential */
 async function handleWebAuthnUnregister(req: Request): Promise<Response> {
-  let body: { userId?: string; credentialId?: string };
+  // SECURITY P0-2: a valid session JWT is required, and credentials can only be
+  // deleted for the caller's OWN account (JWT subject). Other users' credential
+  // ids are rejected, and a userId from the body is ignored.
+  const ownerUserId = await extractJWTUser(req);
+  if (!ownerUserId) {
+    return errorResponse("Unauthorized - a valid session JWT is required", 401);
+  }
+  let body: { credentialId?: string };
   try {
     body = await req.json();
   } catch {
     return errorResponse("Invalid JSON body", 400);
   }
-
-  const { userId, credentialId } = body;
-
+  const { credentialId } = body;
   if (credentialId) {
-    // Delete a specific credential
+    // Delete a specific credential — must be owned by the caller
     const cred = db.query(
       "SELECT id FROM webauthn_credentials WHERE id = ? AND user_id = ?"
-    ).get(credentialId, userId) as { id: string } | null;
+    ).get(credentialId, ownerUserId) as { id: string } | null;
     if (!cred) {
       return errorResponse("Credential not found", 404);
     }
     db.run("DELETE FROM webauthn_credentials WHERE id = ?", credentialId);
-  } else if (userId) {
-    // Delete all credentials for user
-    db.run("DELETE FROM webauthn_credentials WHERE user_id = ?", userId);
   } else {
-    return errorResponse("userId or credentialId is required", 400);
+    // No credentialId: delete all credentials for the authenticated user
+    db.run("DELETE FROM webauthn_credentials WHERE user_id = ?", ownerUserId);
   }
-
   return jsonResponse({ success: true });
 }
 
 /** POST /auth/webauthn/challenge — generate a challenge for registration/login */
 async function handleWebAuthnChallenge(req: Request): Promise<Response> {
-  let body: { userId?: string };
+  // SECURITY P0-2: a userId is NEVER accepted from the request body.
+  //  - With a valid session JWT: REGISTER challenge, bound to the JWT subject.
+  //  - Without a JWT (biometric login, which is public by definition): LOGIN
+  //    challenge, optionally bound to an existing credential when one is
+  //    supplied. A login challenge can only be consumed by /auth/webauthn/login
+  //    (one-time use, purpose-checked) and is useless for registration or for
+  //    any account change — those require a JWT.
+  const ownerUserId = await extractJWTUser(req);
+  let body: { credentialId?: string };
   try {
     body = await req.json();
   } catch {
     body = {};
   }
 
-  const userId = body.userId || "anonymous";
+  let userId: string | null;
+  let purpose: WebAuthnChallengePurpose;
+  let credentialId: string | undefined;
+  if (ownerUserId) {
+    userId = ownerUserId;
+    purpose = "register";
+  } else if (body.credentialId) {
+    const credOwner = db.query("SELECT user_id FROM webauthn_credentials WHERE id = ?").get(body.credentialId) as { user_id: string } | null;
+    if (!credOwner) {
+      return errorResponse("Unknown credential - register it while logged in before using biometric login", 404);
+    }
+    userId = credOwner.user_id;
+    credentialId = body.credentialId;
+    purpose = "login";
+  } else {
+    // SECURITY P0-2 (D2-b): an unbound login challenge carries NO user binding.
+    // It used to carry the literal sentinel "anonymous", which then became the
+    // claimed user id in /auth/webauthn/login and made every UI biometric login
+    // fail with 404 (the SPA posts an empty body, so it never sends a
+    // credentialId). The account is resolved from the credential row's owner
+    // after the signature verifies — safe now that register refuses to write a
+    // row owned by another account (D1).
+    userId = null;
+    purpose = "login";
+  }
+
   const challengeBytes = crypto.getRandomValues(new Uint8Array(32));
   const challenge = Buffer.from(challengeBytes).toString("base64url");
-
-  storeChallenge(userId, challenge);
-
+  storeChallenge(userId, challenge, purpose, credentialId);
   return jsonResponse({ challenge });
 }
 
