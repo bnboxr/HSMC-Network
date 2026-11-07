@@ -2827,33 +2827,60 @@ function parseCosePublicKey(authData: Uint8Array): ParsedPublicKey | null {
 }
 
 // ── Convert raw P-256 public key (x || y, 64 bytes) to SPKI DER ────────────
+// SECURITY P0-2 (D2): SubjectPublicKeyInfo needs a real BIT STRING (tag 0x03,
+// length 0x42, one unused-bits byte 0x00). The previous version wrote the BIT
+// STRING *contents* only, producing an 89-byte blob that Web Crypto's
+// importKey("spki", ...) rejects — which broke every biometric login. The
+// correct encoding is 91 bytes:
+//   30 59  30 13  06 07 2A 86 48 CE 3D 02 01  06 08 2A 86 48 CE 3D 03 01 07
+//   03 42 00  04 || X || Y
+const P256_SPKI_PREFIX = new Uint8Array([
+  0x30, 0x59, // SEQUENCE, 89 content bytes
+  0x30, 0x13, // SEQUENCE, 19 content bytes (AlgorithmIdentifier)
+  0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, // OID 1.2.840.10045.2.1  (ecPublicKey)
+  0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, // OID 1.2.840.10045.3.1.7 (prime256v1)
+  0x03, 0x42, 0x00, // BIT STRING, 66 content bytes, 0 unused bits
+  0x04, // uncompressed point marker
+]);
+
+/** Left-pad (or trim leading zeros from) a P-256 coordinate to exactly 32 bytes. */
+function normalizeP256Coord(v: Uint8Array): Uint8Array {
+  const out = new Uint8Array(32);
+  if (v.length >= 32) out.set(v.subarray(v.length - 32), 0);
+  else out.set(v, 32 - v.length);
+  return out;
+}
+
 function rawP256ToSpki(x: Uint8Array, y: Uint8Array): Uint8Array {
-  // Uncompressed point: 04 || x || y
-  const point = new Uint8Array(65);
-  point[0] = 0x04;
-  point.set(x, 1);
-  point.set(y, 33);
-
-  // SPKI DER for P-256: SEQUENCE { SEQUENCE { OID 1.2.840.10045.2.1 (ecPublicKey), OID 1.2.840.10045.3.1.7 (P-256) }, BIT STRING uncompressed point }
-  const ecPublicKeyOid = new Uint8Array([0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]); // 1.2.840.10045.2.1
-  const p256Oid = new Uint8Array([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]); // 1.2.840.10045.3.1.7
-  const algorithmSeq = new Uint8Array(ecPublicKeyOid.length + p256Oid.length + 2);
-  algorithmSeq[0] = 0x30; algorithmSeq[1] = ecPublicKeyOid.length + p256Oid.length;
-  algorithmSeq.set(ecPublicKeyOid, 2);
-  algorithmSeq.set(p256Oid, 2 + ecPublicKeyOid.length);
-
-  // BIT STRING with 1 unused bit byte
-  const bitString = new Uint8Array(point.length + 1);
-  bitString[0] = 0x00; // 0 unused bits
-  bitString.set(point, 1);
-
-  const totalLen = algorithmSeq.length + bitString.length;
-  const spki = new Uint8Array(totalLen + 2);
-  spki[0] = 0x30; spki[1] = totalLen;
-  spki.set(algorithmSeq, 2);
-  spki.set(bitString, 2 + algorithmSeq.length);
-
+  const spki = new Uint8Array(P256_SPKI_PREFIX.length + 64); // 91 bytes
+  spki.set(P256_SPKI_PREFIX, 0);
+  spki.set(normalizeP256Coord(x), P256_SPKI_PREFIX.length);
+  spki.set(normalizeP256Coord(y), P256_SPKI_PREFIX.length + 32);
   return spki;
+}
+
+// The malformed 89-byte form emitted by the pre-fix rawP256ToSpki: the BIT
+// STRING contents written without their 0x03 0x42 header (note 30 57 / 00 04).
+const LEGACY_P256_SPKI_PREFIX = new Uint8Array([
+  0x30, 0x57,
+  0x30, 0x13,
+  0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
+  0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,
+  0x00, 0x04,
+]);
+
+/**
+ * Rebuild a legacy 89-byte (malformed) P-256 SPKI into correct 91-byte DER,
+ * using the very same EC point. Returns null when the input is anything other
+ * than the legacy form, so well-formed keys are never rewritten.
+ */
+function repairLegacyP256Spki(der: Uint8Array): Uint8Array | null {
+  if (der.length !== LEGACY_P256_SPKI_PREFIX.length + 64) return null; // 25 + 64 = 89
+  for (let i = 0; i < LEGACY_P256_SPKI_PREFIX.length; i++) {
+    if (der[i] !== LEGACY_P256_SPKI_PREFIX[i]) return null;
+  }
+  const off = LEGACY_P256_SPKI_PREFIX.length; // X at off..off+32, Y at off+32..off+64
+  return rawP256ToSpki(der.subarray(off, off + 32), der.subarray(off + 32, off + 64));
 }
 
 // ── DER ECDSA signature to raw (r||s) for Web Crypto ────────────────────────
@@ -3005,13 +3032,23 @@ async function handleWebAuthnRegister(req: Request): Promise<Response> {
   const now = new Date().toISOString();
   const credentialId = cred.id;
 
-  // Check for duplicate
-  const existing = db.query("SELECT id FROM webauthn_credentials WHERE id = ?").get(credentialId) as { id: string } | null;
+  // SECURITY P0-2 (D1): the duplicate lookup AND the update are scoped to the
+  // authenticated subject. A credential id that already belongs to ANOTHER
+  // account is refused outright (409) and its row is left completely untouched
+  // — otherwise an authenticated attacker could park their own public key on a
+  // victim's credential row and then log in as the victim with it. Re-registering
+  // a credential the caller already owns (device re-enrolment) still updates it.
+  const existing = db.query(
+    "SELECT id, user_id FROM webauthn_credentials WHERE id = ?"
+  ).get(credentialId) as { id: string; user_id: string } | null;
+  if (existing && existing.user_id !== ownerUserId) {
+    return errorResponse("Credential id is already registered to another account", 409);
+  }
   if (existing) {
-    // Update existing
+    // Legitimate same-owner re-registration — refresh the stored key material.
     db.run(
-      "UPDATE webauthn_credentials SET public_key = ?, device_name = ?, last_used_at = ? WHERE id = ?",
-      publicKeyBase64, deviceName, now, credentialId
+      "UPDATE webauthn_credentials SET public_key = ?, device_name = ?, last_used_at = ? WHERE id = ? AND user_id = ?",
+      publicKeyBase64, deviceName, now, credentialId, ownerUserId
     );
   } else {
     db.run(
@@ -3120,6 +3157,13 @@ async function handleWebAuthnLogin(req: Request): Promise<Response> {
     return errorResponse("Stored public key is invalid", 500);
   }
 
+  // SECURITY P0-2 (D2): rows written before the SPKI fix store the legacy
+  // 89-byte malformed DER. Rebuild the correct 91-byte SubjectPublicKeyInfo
+  // from the same EC point so existing enrolments keep working; the repaired
+  // value is persisted once the assertion has actually verified.
+  const repairedSpki = repairLegacyP256Spki(publicKeySpki);
+  const verificationSpki = repairedSpki ?? publicKeySpki;
+
   // Verify signature: signed data = authenticatorData || SHA-256(clientDataJSON)
   const clientDataHash = new Uint8Array(
     await crypto.subtle.digest("SHA-256", clientDataJSON)
@@ -3139,7 +3183,7 @@ async function handleWebAuthnLogin(req: Request): Promise<Response> {
   try {
     cryptoKey = await crypto.subtle.importKey(
       "spki",
-      publicKeySpki,
+      verificationSpki,
       { name: "ECDSA", namedCurve: "P-256" },
       false,
       ["verify"]
@@ -3165,9 +3209,20 @@ async function handleWebAuthnLogin(req: Request): Promise<Response> {
     return errorResponse("Invalid signature", 401);
   }
 
-  // Update last_used_at
+  // Update last_used_at (scoped to the owner we just authenticated against),
+  // and migrate a legacy malformed SPKI to the correct DER in place.
   const now = new Date().toISOString();
-  db.run("UPDATE webauthn_credentials SET last_used_at = ? WHERE id = ?", now, cred.id);
+  if (repairedSpki) {
+    db.run(
+      "UPDATE webauthn_credentials SET last_used_at = ?, public_key = ? WHERE id = ? AND user_id = ?",
+      now, Buffer.from(repairedSpki).toString("base64"), cred.id, storedCred.user_id
+    );
+  } else {
+    db.run(
+      "UPDATE webauthn_credentials SET last_used_at = ? WHERE id = ? AND user_id = ?",
+      now, cred.id, storedCred.user_id
+    );
+  }
 
   // Get user info and issue JWT
   const user = db.query("SELECT id, email, created_at FROM users WHERE id = ?").get(storedCred.user_id) as {
@@ -3239,7 +3294,7 @@ async function handleWebAuthnChallenge(req: Request): Promise<Response> {
     body = {};
   }
 
-  let userId: string;
+  let userId: string | null;
   let purpose: WebAuthnChallengePurpose;
   let credentialId: string | undefined;
   if (ownerUserId) {
@@ -3254,7 +3309,14 @@ async function handleWebAuthnChallenge(req: Request): Promise<Response> {
     credentialId = body.credentialId;
     purpose = "login";
   } else {
-    userId = "anonymous";
+    // SECURITY P0-2 (D2-b): an unbound login challenge carries NO user binding.
+    // It used to carry the literal sentinel "anonymous", which then became the
+    // claimed user id in /auth/webauthn/login and made every UI biometric login
+    // fail with 404 (the SPA posts an empty body, so it never sends a
+    // credentialId). The account is resolved from the credential row's owner
+    // after the signature verifies — safe now that register refuses to write a
+    // row owned by another account (D1).
+    userId = null;
     purpose = "login";
   }
 
